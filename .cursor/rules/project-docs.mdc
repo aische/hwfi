@@ -1,0 +1,32 @@
+---
+description: Project documentation workflow — when to read and update docs
+alwaysApply: true
+---
+
+# Documentation workflow
+
+## At session start
+
+When the user asks to implement, continue, or review work:
+
+1. Read `docs/STATUS.md` and `docs/TASKS.md`
+2. Read `docs/spec.md` only if the task needs requirements
+3. Read `docs/idea.md` only if scope or goals are unclear
+
+## During implementation
+
+- Code and tests are the source of truth for behavior
+- Do not update docs after every file edit
+- Use session todos for in-chat progress; use `docs/TASKS.md` for durable backlog
+
+## Before finishing meaningful work
+
+1. Rewrite `docs/STATUS.md` (keep under 80 lines)
+2. Update `docs/TASKS.md` (active items only; move done items toward archive)
+3. Append to `docs/log/YYYY-MM.md` only for decisions, blockers resolved, or milestones
+
+## Do not
+
+- Log user prompts verbatim
+- Duplicate git history in log files
+- Leave long lists of completed tasks in `TASKS.md` — archive to `docs/log/archive/tasks-YYYY-MM.md`
