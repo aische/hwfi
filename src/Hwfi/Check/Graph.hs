@@ -28,7 +28,15 @@ import Data.Text.Encoding (encodeUtf8)
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
 import Hwfi.Ast.Name (QName, isBareQName, renderQName, renderSlug)
 import Hwfi.Ast.Project (Declaration (..))
-import Hwfi.Ast.Step (Arg (..), Binder (..), Statement (..), StepStmt (..))
+import Hwfi.Ast.Step
+  ( Arg (..),
+    Binder (..),
+    IfStmt (..),
+    LoopKind (..),
+    LoopStmt (..),
+    Statement (..),
+    StepStmt (..),
+  )
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Workflow (..))
 import Hwfi.Check.Builtins (builtinIdentity, isBuiltin)
@@ -45,10 +53,23 @@ declStatements = \case
   _ -> []
 
 -- | All multi-segment call targets of a declaration, deduplicated in source
--- order. Includes builtins; excludes bare first-class refs.
+-- order. Includes builtins; excludes bare first-class refs. Recurses into
+-- control-flow blocks (§13) so a call inside an @if@\/@foreach@\/@par@ still
+-- participates in the call graph and fingerprint recursion.
 directCallees :: Declaration -> [QName]
 directCallees d =
-  nub [stepTarget s | SStep s <- declStatements d, not (isBareQName (stepTarget s))]
+  nub [t | t <- callTargets (declStatements d), not (isBareQName t)]
+
+-- | Every step call target reachable in a statement list, recursing through
+-- control-flow blocks (spec §13).
+callTargets :: [Statement] -> [QName]
+callTargets = concatMap go
+  where
+    go = \case
+      SStep s -> [stepTarget s]
+      SReturn _ _ -> []
+      SIf s -> callTargets (ifThen s) <> maybe [] callTargets (ifElse s)
+      SLoop s -> callTargets (loopBody s)
 
 -- | The direct callees that resolve to /project/ declarations (used for cycle
 -- detection; builtins are always leaves).
@@ -160,6 +181,40 @@ encodeStmt = \case
       <> encodeArgs (stepArgs s)
       <> ")"
   SReturn args _ -> "return{" <> encodeArgs args <> "}"
+  SIf s ->
+    "if "
+      <> encodeBinder (ifBinder s)
+      <> " @"
+      <> ifId s
+      <> " cond="
+      <> encodeExpr (ifCond s)
+      <> " then{"
+      <> encodeStmts (ifThen s)
+      <> "}"
+      <> maybe "" (\b -> " else{" <> encodeStmts b <> "}") (ifElse s)
+  SLoop s ->
+    "loop:"
+      <> encodeLoopKind (loopKind s)
+      <> " "
+      <> encodeBinder (loopBinder s)
+      <> " @"
+      <> loopId s
+      <> " var="
+      <> loopVar s
+      <> " in="
+      <> encodeExpr (loopList s)
+      <> " body{"
+      <> encodeStmts (loopBody s)
+      <> "}"
+
+encodeStmts :: [Statement] -> Text
+encodeStmts = T.intercalate ";" . map encodeStmt
+
+encodeLoopKind :: LoopKind -> Text
+encodeLoopKind = \case
+  LoopSeq -> "seq"
+  LoopPar Nothing -> "par"
+  LoopPar (Just n) -> "par(" <> T.pack (show n) <> ")"
 
 encodeBinder :: Binder -> Text
 encodeBinder = \case

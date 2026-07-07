@@ -1,0 +1,12 @@
+{
+  "name": "control-flow",
+  "version": "0.1.0",
+  "entrypoint": "workflows/main",
+  "env": [],
+  "exec": {
+    "allow": ["sh"],
+    "env": ["PATH"],
+    "timeout_ms": 10000,
+    "max_output_bytes": 65536
+  }
+}

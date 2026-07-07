@@ -28,7 +28,7 @@ import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
 import Hwfi.Check.Builtins (Callee (..), introspectQName, isAgentBuiltin, llmAgentObjectQName)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
-import Hwfi.Check.Expr (Env (..), checkExpr)
+import Hwfi.Check.Expr (Env (..), checkExpr, inferExpr)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
 import Hwfi.Source (Pos (..), Span (..))
 import Hwfi.Type
@@ -82,7 +82,7 @@ checkBody ::
   [Section] ->
   ([TypeError], [(StepStmt, Bool, Type)])
 checkBody ctx qname sig statements sections =
-  (bsErrors final <> returnErrs, reverse (bsSteps final))
+  (dupErrs <> bsErrors final <> returnErrs, reverse (bsSteps final))
   where
     path = declPath qname
     initialRoots =
@@ -92,13 +92,231 @@ checkBody ctx qname sig statements sections =
         ]
     initial = BodyState initialRoots [] [] [] Nothing
 
-    steps = [s | SStep s <- statements]
+    -- @return@ is a top-level construct (§5.6.5); the sequence that builds the
+    -- binding environment and the implicit-return result excludes it. A
+    -- @return@ nested inside a control-flow block is caught by 'checkStmt'.
+    seqStmts = filter (not . isReturn) statements
     returns = [(args, sp) | SReturn args sp <- statements]
 
-    final = foldl' (checkStep ctx path sections) initial steps
+    final = checkSeq ctx path sections initial seqStmts
 
     finalEnv = mkEnv ctx path sections (bsRoots final)
     returnErrs = checkReturnRule finalEnv path sig returns (bsLastResult final)
+
+    dupErrs = duplicateIdErrors path statements
+
+isReturn :: Statement -> Bool
+isReturn = \case
+  SReturn _ _ -> True
+  _ -> False
+
+-- | Every step/control-flow id must be unique within a declaration (§13, M8):
+-- ids share one namespace, so the executor can key per-step data and the
+-- step-key scope path (per-iteration\/per-branch) stays unambiguous. Loop
+-- bodies contribute their body ids once (a single static step, many dynamic
+-- iterations), so uniqueness is a purely static property.
+duplicateIdErrors :: FilePath -> [Statement] -> [TypeError]
+duplicateIdErrors path statements = go [] idPositions
+  where
+    idPositions =
+      [(i, spanStart (statementSpan s)) | s <- flattenStatements statements, Just i <- [statementId s]]
+    go _ [] = []
+    go seen ((i, p) : rest)
+      | i `elem` seen =
+          typeError
+            path
+            p
+            DuplicateBind
+            ("duplicate step/control-flow id '" <> i <> "'; ids must be unique within a declaration (§13)")
+            : go seen rest
+      | otherwise = go (i : seen) rest
+
+-- | All statements in a declaration body, flattened depth-first through
+-- control-flow blocks.
+flattenStatements :: [Statement] -> [Statement]
+flattenStatements = concatMap (\s -> s : flattenStatements (concat (blockStatements s)))
+
+-- Statement-sequence checking (§5.6, §13) -----------------------------------
+
+-- | Check a sequence of statements, threading the binding environment forward.
+checkSeq :: CheckCtx -> FilePath -> [Section] -> BodyState -> [Statement] -> BodyState
+checkSeq ctx path sections = foldl' (checkStmt ctx path sections)
+
+-- | Check one statement, dispatching on its kind.
+checkStmt :: CheckCtx -> FilePath -> [Section] -> BodyState -> Statement -> BodyState
+checkStmt ctx path sections st = \case
+  SStep s -> checkStep ctx path sections st s
+  SIf s -> checkIf ctx path sections st s
+  SLoop s -> checkLoop ctx path sections st s
+  SReturn _ sp ->
+    st
+      { bsErrors =
+          bsErrors st
+            <> [ typeError
+                   path
+                   (spanStart sp)
+                   ReturnRule
+                   "a 'return' block is only allowed at the top level of a workflow body, not inside a control-flow block (§13)"
+               ],
+        bsLastResult = Nothing
+      }
+
+-- | Check a nested block in a /child/ scope (§13). Enclosing binds and roots
+-- are visible inside the block, but inner binds do not escape: only the
+-- construct's own bind name (handled by the caller) is added to the outer
+-- scope. Returns the block's accumulated errors, its (flat) nested steps, and
+-- its /tail/ result type (the value the block yields, §5.6.5).
+checkChild ::
+  CheckCtx ->
+  FilePath ->
+  [Section] ->
+  BodyState ->
+  -- | Extra roots visible only inside the block (e.g. a loop variable).
+  Map Ident Type ->
+  -- | Extra bound names (for no-shadowing) visible only inside the block.
+  [Ident] ->
+  [Statement] ->
+  ([TypeError], [(StepStmt, Bool, Type)], Maybe Type)
+checkChild ctx path sections parent extraRoots extraBound stmts =
+  (bsErrors res, bsSteps res, bsLastResult res)
+  where
+    child =
+      parent
+        { bsRoots = Map.union extraRoots (bsRoots parent),
+          bsBound = extraBound <> bsBound parent,
+          bsErrors = [],
+          bsSteps = [],
+          bsLastResult = Nothing
+        }
+    res = checkSeq ctx path sections child stmts
+
+-- | Check an @if@\/@else@ statement (§13). The condition must be @Bool@. An
+-- @if@ that binds a value requires an @else@ branch whose tail type
+-- structurally equals the @then@ branch's tail type; the bound value has that
+-- type. A discarding @if@ (@_ \<- if …@) needs no @else@ and imposes no branch
+-- type constraint.
+checkIf :: CheckCtx -> FilePath -> [Section] -> BodyState -> IfStmt -> BodyState
+checkIf ctx path sections st s =
+  st
+    { bsErrors = bsErrors st <> condErrs <> thenErrs <> elseErrs <> branchErrs <> bindErrs,
+      bsSteps = thenSteps <> elseSteps <> bsSteps st,
+      bsRoots = roots',
+      bsBound = bound',
+      bsLastResult = resultType
+    }
+  where
+    env = mkEnv ctx path sections (bsRoots st)
+    pos = spanStart (ifSpan s)
+
+    condErrs = fromLeft [] (checkExpr env pos TyBool (ifCond s))
+
+    (thenErrs, thenSteps, thenTail) = checkChild ctx path sections st Map.empty [] (ifThen s)
+    (elseErrs, elseSteps, elseTail) = case ifElse s of
+      Just blk -> checkChild ctx path sections st Map.empty [] blk
+      Nothing -> ([], [], Nothing)
+
+    (resultType, branchErrs) = case ifBinder s of
+      BindDiscard -> (Nothing, [])
+      BindName _ -> case ifElse s of
+        Nothing ->
+          ( Nothing,
+            [ typeError
+                path
+                pos
+                ReturnRule
+                "an 'if' that binds a value requires an 'else' branch (§13)"
+            ]
+          )
+        Just _ -> case (thenTail, elseTail) of
+          (Just t1, Just t2)
+            | structEq t1 t2 -> (Just t1, [])
+            | otherwise ->
+                ( Nothing,
+                  [ typeError
+                      path
+                      pos
+                      TypeMismatch
+                      ( "the 'if' branches yield different types: 'then' is "
+                          <> renderType t1
+                          <> ", 'else' is "
+                          <> renderType t2
+                          <> " (§13)"
+                      )
+                  ]
+                )
+          _ ->
+            ( Nothing,
+              [ typeError
+                  path
+                  pos
+                  ReturnRule
+                  "each branch of a value-binding 'if' must end in a value-producing statement (§13)"
+              ]
+            )
+
+    (roots', bound', bindErrs) = bindResult path pos (ifBinder s) resultType st
+
+-- | Check a @foreach@\/@par@ loop (§13). The iterated expression must be a
+-- @List<T>@; the loop variable is bound to @T@ inside the body. The loop's
+-- value is @List<U>@ where @U@ is the body's tail type (map semantics); a
+-- discarding loop imposes no body-value constraint.
+checkLoop :: CheckCtx -> FilePath -> [Section] -> BodyState -> LoopStmt -> BodyState
+checkLoop ctx path sections st s =
+  st
+    { bsErrors = bsErrors st <> listErrs <> varShadowErrs <> bodyErrs <> resErrs <> bindErrs,
+      bsSteps = bodySteps <> bsSteps st,
+      bsRoots = roots',
+      bsBound = bound',
+      bsLastResult = resultType
+    }
+  where
+    env = mkEnv ctx path sections (bsRoots st)
+    pos = spanStart (loopSpan s)
+    kindLabel = case loopKind s of
+      LoopSeq -> "foreach"
+      LoopPar _ -> "par"
+
+    (elemTy, listErrs) = case inferExpr env pos (loopList s) of
+      Right (TyList e) -> (Just e, [])
+      Right other ->
+        ( Nothing,
+          [ typeError
+              path
+              pos
+              TypeMismatch
+              ("'" <> kindLabel <> "' iterates a List<_>, but the expression has type " <> renderType other <> " (§13)")
+          ]
+        )
+      Left es -> (Nothing, es)
+
+    varShadowErrs =
+      [ typeError
+          path
+          pos
+          DuplicateBind
+          ("loop variable '" <> loopVar s <> "' shadows an existing binding (no shadowing, §3.4)")
+      | loopVar s `elem` (Map.keys (bsRoots st) <> bsBound st)
+      ]
+
+    childRoots = maybe Map.empty (Map.singleton (loopVar s)) elemTy
+    (bodyErrs, bodySteps, bodyTail) =
+      checkChild ctx path sections st childRoots [loopVar s] (loopBody s)
+
+    (resultType, resErrs) = case loopBinder s of
+      BindDiscard -> (Nothing, [])
+      BindName _ -> case bodyTail of
+        Just t -> (Just (TyList t), [])
+        Nothing ->
+          ( Nothing,
+            [ typeError
+                path
+                pos
+                ReturnRule
+                ("the body of a value-binding '" <> kindLabel <> "' must end in a value-producing statement (§13)")
+            ]
+          )
+
+    (roots', bound', bindErrs) = bindResult path pos (loopBinder s) resultType st
 
 mkEnv :: CheckCtx -> FilePath -> [Section] -> Map Ident Type -> Env
 mkEnv ctx path sections roots =

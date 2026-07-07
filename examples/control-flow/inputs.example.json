@@ -1,0 +1,4 @@
+{
+  "scripts": ["a.sh", "b.sh", "c.sh"],
+  "strict": true
+}

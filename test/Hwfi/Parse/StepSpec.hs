@@ -46,5 +46,46 @@ spec = describe "step DSL parser (spec §3.1, §3.4)" $ do
     case parseB (Pos 1 1) "a <- foo/bar(x = ${inputs.p})" of
       Right [SStep s] -> map argValue (stepArgs s) `shouldBe` [ERef (RefPath "inputs" [AField "p"])]
       other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses an if/else with a default id from the binder (§13)" $ do
+    let src = T.unlines ["x <- if ${c} {", "  a <- foo/bar()", "} else {", "  b <- baz/qux()", "}"]
+    case parseB (Pos 1 1) src of
+      Right [SIf s] -> do
+        ifBinder s `shouldBe` BindName "x"
+        ifId s `shouldBe` "x"
+        ifCond s `shouldBe` ERef (RefPath "c" [])
+        length (ifThen s) `shouldBe` 1
+        fmap length (ifElse s) `shouldBe` Just 1
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses an if with no else branch" $ do
+    let src = T.unlines ["_ <- if ${c} {", "  a <- foo/bar()", "} @guard"]
+    case parseB (Pos 1 1) src of
+      Right [SIf s] -> do
+        ifBinder s `shouldBe` BindDiscard
+        ifId s `shouldBe` "guard"
+        ifElse s `shouldBe` Nothing
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses a foreach loop binding the element variable (§13)" $ do
+    let src = T.unlines ["rs <- foreach item in ${inputs.xs} {", "  r <- proc/one(v = ${item})", "}"]
+    case parseB (Pos 1 1) src of
+      Right [SLoop s] -> do
+        loopKind s `shouldBe` LoopSeq
+        loopVar s `shouldBe` "item"
+        loopList s `shouldBe` ERef (RefPath "inputs" [AField "xs"])
+        loopId s `shouldBe` "rs"
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses a par loop with an explicit concurrency bound (§13)" $ do
+    let src = T.unlines ["rs <- par(max = 4) item in ${inputs.xs} {", "  r <- proc/one(v = ${item})", "} @fan"]
+    case parseB (Pos 1 1) src of
+      Right [SLoop s] -> do
+        loopKind s `shouldBe` LoopPar (Just 4)
+        loopId s `shouldBe` "fan"
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "requires an explicit @id for a discarding control-flow statement" $
+    parseB (Pos 1 1) (T.unlines ["_ <- foreach x in ${xs} {", "  a <- foo/bar()", "}"]) `shouldSatisfy` isLeft
   where
     isLeft = either (const True) (const False)

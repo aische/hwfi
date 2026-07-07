@@ -5,24 +5,14 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M8: control flow (`if`/`foreach`/`par`, spec §13)
+## Now — carried-over optional items
 
-M1–M7 are complete. The engine parses, type-checks, runs, persists,
-resumes, pretty-prints, drives an agentic tool-use loop (`builtin/llm-agent`),
-and can now **modify the workspace and run allowlisted commands** (mutation +
-`exec` builtins). The next milestone adds **control flow** so workflows can
-branch and iterate. Decision: build these on the reified state machine that
-already backs the M6 agent loop rather than a bespoke evaluator, so caching,
-tracing, and resume semantics (§8.1/§8.2) stay uniform.
+M1–M8 are complete. The engine parses, type-checks, runs, persists, resumes,
+pretty-prints, drives an agentic tool-use loop, modifies the workspace and runs
+allowlisted commands, and now **branches and iterates** (`if`/`foreach`/`par`).
+No milestone is currently in flight; the remaining near-term items are
+performance/hardening, not new surface area:
 
-Ordered so each item is independently testable:
-
-- [ ] 8.1 `if`/`else` conditional step (§13): parser + AST, checker (branch
-      typing, cacheability), executor + trace events.
-- [ ] 8.2 `foreach` iteration over a `List<_>` (§13): binding semantics,
-      per-iteration step-keys for resume, trace nesting.
-- [ ] 8.3 `par` concurrent fan-out (§13): bounded concurrency, deterministic
-      result ordering, trace interleaving, resume.
 - [ ] 8.g (Optional, carried over) serialise agent machine state to skip the
       replay re-walk on resume (§8.2.1) — performance only.
 
@@ -89,3 +79,15 @@ _Move items here temporarily, then archive to
       `file-io`/`exec` trace events + `hwfi show`; `examples/coding`
       (scripted + agentic); 188 tests (A22–A26 incl. durable-workspace
       resume and an end-to-end agent coding loop). (2026-07-07)
+- [x] M8 control flow (8.1–8.3): `Statement` extended with `SIf`/`SLoop`
+      (`Hwfi.Ast.Step`); `if`/`else`, `foreach`, `par(max = N)` parsing +
+      reserved words; recursive checker (branch typing + mandatory `else`,
+      `List<T>` iteration binding, `List<U>` loop result, no-shadow, flat
+      per-declaration id namespace); callee/fingerprint/exec-policy recursion
+      through blocks; `if-branch`/`loop-start`/`loop-iter`/`loop-end` trace
+      events + `MVar`-serialised tracer for `par`; executor `execIf`/`execLoop`
+      (sequential `foreach`, bounded order-preserving `par`) with a scope
+      prefix folded into step-keys for per-iteration resume; value-producing
+      block semantics; `examples/control-flow`; 207 tests incl.
+      `Hwfi.Runtime.ControlFlowSpec` (execution, ordering, `par` concurrency,
+      resume durability, checker rejections). (2026-07-08)

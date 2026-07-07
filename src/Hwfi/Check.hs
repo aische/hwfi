@@ -27,7 +27,7 @@ import Data.Text qualified as T
 import Hwfi.Ast.Expr (Expr (..), StringPart (..))
 import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
 import Hwfi.Ast.Project
-import Hwfi.Ast.Step (Arg (..), Statement (..), StepStmt (..), stepTarget)
+import Hwfi.Ast.Step (Arg (..), IfStmt (..), LoopStmt (..), Statement (..), StepStmt (..), stepTarget)
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Type (TypeExpr)
@@ -192,9 +192,21 @@ execErrors manifest (q, d) =
     err pos = typeError (declPath q) pos ExecPolicyViolation
     lookupArg name s = lookup name [(argName a, a) | a <- stepArgs s]
 
--- | The @builtin/exec@ steps of a declaration's body.
+-- | The @builtin/exec@ steps of a declaration's body, including those nested
+-- inside control-flow blocks (§13), so the fail-closed policy check (§7.5)
+-- cannot be bypassed by placing an @exec@ call inside an @if@\/@foreach@\/@par@.
 execSteps :: Declaration -> [StepStmt]
-execSteps d = [s | SStep s <- declStatements d, stepTarget s == execQName]
+execSteps d = [s | s <- allStepStmts (declStatements d), stepTarget s == execQName]
+
+-- | Every step call in a statement list, recursing through control-flow blocks.
+allStepStmts :: [Statement] -> [StepStmt]
+allStepStmts = concatMap go
+  where
+    go = \case
+      SStep s -> [s]
+      SReturn _ _ -> []
+      SIf s -> allStepStmts (ifThen s) <> maybe [] allStepStmts (ifElse s)
+      SLoop s -> allStepStmts (loopBody s)
 
 declStatements :: Declaration -> [Statement]
 declStatements = \case

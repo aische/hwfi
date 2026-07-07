@@ -1,40 +1,44 @@
 # Status
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 ## Current focus
 
-**M7 (mutation + `exec` tools) is complete.** Workflows and agents can now
-modify the sandboxed workspace and run allowlisted commands, so coding
-workflows are possible. Navigation (`read-file-slice`/`find-files`/`grep`),
-mutation (`edit-file`/`move-file`/`copy-file`/`remove-file`/`make-dir`/
-`remove-dir`), and `builtin/exec` are native builtins over
-`Hwfi.Runtime.Workspace` — one sandbox, one trace stream, one cache scheme.
-Next is **M8** (control flow: `if`/`foreach`/`par`).
+**M8 (control flow: `if`/`foreach`/`par`) is complete.** Workflow and tool
+bodies are no longer flat statement lists: they can branch and iterate.
+Control-flow constructs are **value-producing** and use the same
+`binder <- rhs @id` shape as step calls, so caching, tracing, and resume
+(§8.1/§8.2) stay uniform. Next candidate work is the carried-over optional
+items (agent state serialisation §8.2.1, OS-level `exec` isolation §7.5,
+`Bytes` file I/O) or a general control-flow/CEK unification (still deferred).
 
 ## Done recently
 
-- `Hwfi.Runtime.Glob`: pure, unit-tested glob matcher (`**`/`*`/`?`) for
-  `find-files` (§6.2), ported from `llm-simple`'s pure matcher.
-- `Hwfi.Runtime.Workspace`: `readFileSlice`, `findFiles`, `grepFiles`
-  (regex via `regex-tdfa`), and the mutation ops — all through the existing
-  sandbox guard (A22), with an `expect` guard on `edit-file` (A23).
-- `Hwfi.Runtime.Exec`: `typed-process` child in the workspace root; argv-only
-  (no shell), allowlist + `env` allowlist + timeout + output cap from
-  `project.json.exec`; non-zero/timed-out exit returned as a *value* (A24).
-- `Hwfi.Project.Manifest`: `ExecPolicy` parsing (fail-closed default).
-- `Hwfi.Runtime.Trace`: `FileOp` enum extended (read-slice/find/grep/edit/
-  move/copy/remove/mkdir/rmdir) + new `Exec` event, JSON round-trip and
-  `hwfi show` rendering (§8.3.2).
-- `Hwfi.Check`: `execErrors` pass rejects un-allowlisted / policy-less
-  `builtin/exec` at check time (A24); mutation/exec builtins are advertisable
-  agent tools (§7.5).
-- `examples/coding`: scripted `workflows/render` (edit → exec) and agentic
-  `workflows/fix` (llm-agent repairs a broken `sh -n` build).
-- 188 tests (was 152): Glob/Exec unit specs, Workspace navigation+mutation
-  specs (A22/A23), Check exec-policy fixtures (A24), an executor durable-
-  workspace resume test (A25), and an end-to-end agent coding loop over a
-  fake gateway + real builtins (A26).
+- `Hwfi.Ast.Step`: `Statement` extended with `SIf`/`SLoop` (`IfStmt`,
+  `LoopStmt`, `LoopKind = LoopSeq | LoopPar (Maybe Int)`); `statementId`,
+  `blockStatements` helpers.
+- `Hwfi.Parse.{Step,Lexer}`: `if`/`else`, `foreach`, `par(max = N)` with
+  brace-delimited blocks; `if`/`else`/`foreach`/`par`/`in` reserved.
+- `Hwfi.Check.Decl`: recursive body checking (`checkSeq`/`checkStmt`/`checkIf`/
+  `checkLoop`) — `cond : Bool`, mandatory `else` + structurally-equal arms for
+  value-binding `if`, `List<T>` iteration binding `v : T`, `List<U>` loop
+  result, no-shadowing, and a **flat per-declaration id namespace** (step
+  binders, loop vars, construct `@id`s must all be unique).
+- `Hwfi.Check.Graph` + `Hwfi.Check`: `directCallees`, fingerprint `encodeStmt`,
+  and the `builtin/exec` policy pass all recurse into control-flow blocks.
+- `Hwfi.Runtime.Trace`: `IfBranch`/`LoopStart`/`LoopIter`/`LoopEnd` events
+  (JSON round-trip + `hwfi show` render); tracer now holds an `MVar` mutex so
+  concurrent `par` iterations serialise `emit` (consistent `seq` + file order).
+- `Hwfi.Runtime.Executor`: `execIf`/`execLoop`; sequential `foreach` and
+  bounded, order-preserving `par` (`pooledForConcurrentlyN`, default 4, aborts
+  on lowest-index failure). A **scope prefix** (`check#2/c`, `mode?then/s`) is
+  threaded into `stepKeyFor` so dynamically-distinct occurrences of a static
+  step get distinct cache keys — per-iteration resume correctness.
+- `examples/control-flow`: scripted `par` syntax-check + `foreach` manifest +
+  `if`/`else` summary; `check`/`run` verified.
+- 207 tests (was 188): parser cases (StepSpec), trace round-trip (TraceSpec),
+  and a new `Hwfi.Runtime.ControlFlowSpec` (foreach/par/if execution, ordered
+  results, `par` concurrency, resume durability, and checker rejections).
 
 ## Blockers
 
@@ -42,19 +46,22 @@ Next is **M8** (control flow: `if`/`foreach`/`par`).
 
 ## Notes / decisions
 
-- `grep` uses `regex-tdfa` (pure Haskell, POSIX ERE) to avoid a new C
-  dependency; not literal RE2, but adequate for common patterns (§6.2).
-- Exec allowlist violations are surfaced as recoverable *sandbox* errors in
-  the agent loop (the model can retry with an allowed program), while a
-  direct scripted step aborts. Only internal errors are fatal in the loop.
-- Durable-workspace invariant (§8.2): mutation and `exec` steps are cacheable;
-  on resume a completed one is served from cache and its side effect is **not**
-  re-applied. Verified end-to-end (A25) and per tool call in the agent loop.
-- The general control-flow unification (CEK-style) is still deferred; the M6
-  agent loop remains the single reified state machine, reused by M8.
+- Control flow is value-producing: a block's value is its last statement's
+  value (empty block → empty record). This keeps the linear binding model
+  uniform and makes conditional/loop results first-class.
+- Step ids are globally unique **within a declaration**, including across `if`
+  branches, so `then`/`else` arms cannot reuse a binder name (checked, A-dup).
+- `par` result ordering is by input index (not completion); the first error is
+  the lowest-index one. Iterations write to distinct cache keys/paths, so
+  concurrent cache writes are safe; only the tracer's `emit` is serialised.
+- Scope is threaded into sub-workflow calls too (call-site-prefixed keys):
+  favours per-iteration resume correctness over cross-call cache sharing.
+- Durable-workspace invariant (§8.2) holds through loops/branches: a completed
+  iteration's step is served from cache on resume and its side effect is not
+  re-applied (verified in ControlFlowSpec).
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M8: control flow (`if`/`foreach`/`par`)**,
-plus the carried-over optional items (agent state serialisation §8.2.1,
-OS-level `exec` isolation §7.5, `Bytes`-typed file I/O).
+See [TASKS.md](TASKS.md) → carried-over optional items (agent state
+serialisation §8.2.1, OS-level `exec` isolation §7.5, `Bytes`-typed file I/O)
+and the M9+ backlog.

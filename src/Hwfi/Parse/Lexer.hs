@@ -77,9 +77,11 @@ symbol = L.symbol sc
 symbolN :: Text -> Parser Text
 symbolN = L.symbol scn
 
--- | Reserved keywords that cannot be used as identifiers (§3.4).
+-- | Reserved keywords that cannot be used as identifiers (§3.4, plus the M8
+-- control-flow keywords, §13).
 reservedWords :: [Text]
-reservedWords = ["return", "true", "false", "null", "_"]
+reservedWords =
+  ["return", "true", "false", "null", "_", "if", "else", "foreach", "par", "in"]
 
 -- | Whether a word is reserved.
 isReserved :: Text -> Bool

@@ -35,6 +35,12 @@ sampleEvents =
     q (AgentToolResult wf "agent" 0 1 "tools/search" (object ["hits" .= (2 :: Int)]) False),
     q (AgentToolResult wf "agent" 1 0 "submit" (String "bad args") True),
     q (AgentRoundEnd wf "agent" 1 True),
+    q (IfBranch wf "choose" "then"),
+    q (IfBranch wf "choose" "none"),
+    q (LoopStart wf "loop" "foreach" 3),
+    q (LoopIter wf "loop" 2),
+    q (LoopEnd wf "loop" 3),
+    q (LoopStart wf "fan" "par" 0),
     q (Resumed "run-1" 12),
     q (RunEnd "run-1" Completed)
   ]

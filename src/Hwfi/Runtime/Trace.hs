@@ -32,6 +32,7 @@ module Hwfi.Runtime.Trace
   )
 where
 
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Data.Aeson (Value (..), encode, object, (.:), (.=))
 import Data.Aeson.Types (Parser, parseMaybe, withObject)
 import Data.ByteString.Lazy qualified as BSL
@@ -139,6 +140,16 @@ data EventBody
   | -- | @agent-round-end@ (§8.3.2): qname, step id, round, whether the model
     -- terminated the loop this round.
     AgentRoundEnd QName Ident Int Bool
+  | -- | @if-branch@ (§13, M8): qname, if-id, the branch taken
+    -- (@"then"@\/@"else"@\/@"none"@).
+    IfBranch QName Ident Text
+  | -- | @loop-start@ (§13, M8): qname, loop-id, kind (@"foreach"@\/@"par"@),
+    -- iteration count.
+    LoopStart QName Ident Text Int
+  | -- | @loop-iter@ (§13, M8): qname, loop-id, 0-based iteration index.
+    LoopIter QName Ident Int
+  | -- | @loop-end@ (§13, M8): qname, loop-id, iteration count.
+    LoopEnd QName Ident Int
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int
   | -- | @run-end@: run id, terminal status.
@@ -250,6 +261,31 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "round" .= round_,
           "finished" .= finished
         ]
+      IfBranch q sid branch ->
+        [ "tag" .= ("if-branch" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "branch" .= branch
+        ]
+      LoopStart q sid kind count ->
+        [ "tag" .= ("loop-start" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "kind" .= kind,
+          "count" .= count
+        ]
+      LoopIter q sid ix ->
+        [ "tag" .= ("loop-iter" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "index" .= ix
+        ]
+      LoopEnd q sid count ->
+        [ "tag" .= ("loop-end" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "count" .= count
+        ]
       Resumed runId fromSeq ->
         [ "tag" .= ("resumed" :: Text),
           "run_id" .= runId,
@@ -329,6 +365,14 @@ parseEvent = withObject "TraceEvent" $ \o -> do
           <*> o .: "recoverable_error"
       "agent-round-end" ->
         AgentRoundEnd <$> qn o <*> o .: "step_id" <*> o .: "round" <*> o .: "finished"
+      "if-branch" ->
+        IfBranch <$> qn o <*> o .: "step_id" <*> o .: "branch"
+      "loop-start" ->
+        LoopStart <$> qn o <*> o .: "step_id" <*> o .: "kind" <*> o .: "count"
+      "loop-iter" ->
+        LoopIter <$> qn o <*> o .: "step_id" <*> o .: "index"
+      "loop-end" ->
+        LoopEnd <$> qn o <*> o .: "step_id" <*> o .: "count"
       "resumed" ->
         Resumed <$> o .: "run_id" <*> o .: "from_seq"
       "run-end" ->
@@ -383,6 +427,14 @@ renderEvent (TraceEvent s at body) =
           <> (if recoverable then "  [recoverable]" else "")
       AgentRoundEnd q sid round_ finished ->
         "agent-round " <> step q sid <> "  round=" <> T.pack (show round_) <> (if finished then " end [final]" else " end")
+      IfBranch q sid branch ->
+        "if-branch   " <> step q sid <> "  -> " <> branch
+      LoopStart q sid kind count ->
+        "loop-start  " <> step q sid <> "  " <> kind <> "  count=" <> T.pack (show count)
+      LoopIter q sid ix ->
+        "loop-iter   " <> step q sid <> "  #" <> T.pack (show ix)
+      LoopEnd q sid count ->
+        "loop-end    " <> step q sid <> "  count=" <> T.pack (show count)
       Resumed runId fromSeq ->
         "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
       RunEnd runId status ->
@@ -393,14 +445,20 @@ renderEvent (TraceEvent s at body) =
 -- next @seq@ and the events so far in reverse chronological order. When a sink
 -- is present, 'emit' also appends the event's JSON line to @trace.jsonl@ and
 -- flushes, so a crash mid-run leaves a durable prefix to resume from (§8.2).
-data Tracer = Tracer (IORef (Int, [TraceEvent])) (Maybe Handle)
+--
+-- The 'MVar' serialises the whole of 'emit' so that concurrent @par@
+-- iterations (§13, M8) cannot interleave @seq@ assignment with the file write:
+-- the persisted line order always matches @seq@ order, which resume relies on
+-- to reconstruct @ctx.trace@ identically (§8.3.5).
+data Tracer = Tracer (MVar ()) (IORef (Int, [TraceEvent])) (Maybe Handle)
 
 -- | Create a fresh in-memory tracer starting at @seq = 0@ (spec §8.3.1). Used
 -- by tests and callers that do not persist.
 newTracer :: IO Tracer
 newTracer = do
+  lock <- newMVar ()
   ref <- newIORef (0, [])
-  pure (Tracer ref Nothing)
+  pure (Tracer lock ref Nothing)
 
 -- | Create a tracer that appends every emitted event to @h@, seeded with the
 -- events already persisted (in chronological order) and the next @seq@ to
@@ -408,13 +466,16 @@ newTracer = do
 -- @trace.jsonl@ and @last-seq + 1@ (spec §8.2, §8.3.5).
 newPersistentTracer :: Handle -> [TraceEvent] -> Int -> IO Tracer
 newPersistentTracer h preload nextSeq = do
+  lock <- newMVar ()
   ref <- newIORef (nextSeq, reverse preload)
-  pure (Tracer ref (Just h))
+  pure (Tracer lock ref (Just h))
 
 -- | Append an event, assigning it the next @seq@ and the current timestamp,
--- and persisting it to the sink (if any) before returning.
+-- and persisting it to the sink (if any) before returning. The critical
+-- section is held under the tracer mutex so concurrent emitters produce a
+-- consistent, in-order trace (§13, M8).
 emit :: Tracer -> EventBody -> IO TraceEvent
-emit (Tracer ref sink) body = do
+emit (Tracer lock ref sink) body = withMVar lock $ \_ -> do
   now <- getCurrentTime
   let at = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%3QZ" now)
   ev <-
@@ -431,7 +492,7 @@ emit (Tracer ref sink) body = do
 -- | All events so far, in chronological order (spec §8.3.5: @ctx.trace@ is the
 -- ordered parse of the trace as persisted so far).
 snapshotEvents :: Tracer -> IO [TraceEvent]
-snapshotEvents (Tracer ref _) = reverse . snd <$> readIORef ref
+snapshotEvents (Tracer _ ref _) = reverse . snd <$> readIORef ref
 
 -- | The events so far as a JSON array, one object per event.
 snapshotJson :: Tracer -> IO Value
@@ -439,4 +500,4 @@ snapshotJson t = Array . V.fromList . map eventToJson <$> snapshotEvents t
 
 -- | The @seq@ that will be assigned to the next emitted event.
 currentSeq :: Tracer -> IO Int
-currentSeq (Tracer ref _) = fst <$> readIORef ref
+currentSeq (Tracer _ ref _) = fst <$> readIORef ref

@@ -128,6 +128,7 @@ test-suite hwfi-test
         Hwfi.Parse.TypeSpec
         Hwfi.Project.ManifestSpec
         Hwfi.Runtime.AgentSpec
+        Hwfi.Runtime.ControlFlowSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.ExecSpec
         Hwfi.Runtime.ExecutorSpec

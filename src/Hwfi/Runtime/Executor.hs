@@ -43,7 +43,15 @@ import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurren
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
 import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameFromText, qnameSegments, renderQName)
 import Hwfi.Ast.Project (Declaration (..))
-import Hwfi.Ast.Step (Arg (..), Binder (..), Statement (..), StepStmt (..))
+import Hwfi.Ast.Step
+  ( Arg (..),
+    Binder (..),
+    IfStmt (..),
+    LoopKind (..),
+    LoopStmt (..),
+    Statement (..),
+    StepStmt (..),
+  )
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
 import Hwfi.Check.Builtins
@@ -123,6 +131,7 @@ import Hwfi.TypedProject
     lookupTyped,
   )
 import System.IO (hClose)
+import UnliftIO.Async (pooledForConcurrentlyN)
 import UnliftIO.Exception (bracket)
 import Data.Maybe (fromMaybe)
 
@@ -302,18 +311,32 @@ runWorkflow rt q inputs =
       Nothing -> pure (Left (internalError (renderQName q <> " is not executable")))
       Just (stmts, sections) ->
         let typedSteps = Map.fromList [(stepId (tsStmt ts), ts) | ts <- tdSteps td]
-         in execStatements rt typedSteps q sections (Map.singleton "inputs" (VRecord inputs)) Nothing stmts
+         in -- A workflow body starts a fresh step-key scope (§8.1): a
+            -- sub-workflow call resets the control-flow scope prefix at the
+            -- call boundary, so its internal steps stay content-addressed by
+            -- the sub-workflow and its arguments, independent of the caller's
+            -- iteration\/branch context (§13, M8).
+            execStatements rt typedSteps q sections "" (Map.singleton "inputs" (VRecord inputs)) Nothing stmts
+
+-- | The default @par@ concurrency bound when @par(max = N)@ is not given
+-- (§13, M8).
+defaultParallelism :: Int
+defaultParallelism = 4
 
 execStatements ::
   Runtime ->
   Map Ident TypedStep ->
   QName ->
   [Section] ->
+  -- | The current step-key scope prefix (§8.1): empty at a body's top level,
+  -- extended per control-flow branch\/iteration so nested step-keys stay
+  -- distinct across branches and loop iterations (§13, M8).
+  Text ->
   Map Ident RValue ->
   Maybe RValue ->
   [Statement] ->
   IO (Either RuntimeError RValue)
-execStatements rt typedSteps q sections bindings lastResult = \case
+execStatements rt typedSteps q sections scope bindings lastResult = \case
   [] -> pure (Right (fromMaybe (VRecord Map.empty) lastResult))
   (SReturn args _ : _) -> do
     ctx <- buildCtx rt q "return"
@@ -321,12 +344,155 @@ execStatements rt typedSteps q sections bindings lastResult = \case
     case evalArgs env args of
       Left e -> failStep rt (StepRef q "return") e
       Right fields -> pure (Right (VRecord (Map.fromList fields)))
-  (SStep s : rest) -> do
-    r <- execStep rt typedSteps q sections bindings s
+  (stmt : rest) -> do
+    r <- execStmt rt typedSteps q sections scope bindings stmt
     case r of
       Left e -> pure (Left e)
       Right (bindings', result) ->
-        execStatements rt typedSteps q sections bindings' (Just result) rest
+        execStatements rt typedSteps q sections scope bindings' (Just result) rest
+
+-- | Execute one statement, returning the updated bindings and its result value.
+-- @return@ is handled by 'execStatements' (it terminates the sequence) and so
+-- never reaches here.
+execStmt ::
+  Runtime ->
+  Map Ident TypedStep ->
+  QName ->
+  [Section] ->
+  Text ->
+  Map Ident RValue ->
+  Statement ->
+  IO (Either RuntimeError (Map Ident RValue, RValue))
+execStmt rt typedSteps q sections scope bindings = \case
+  SStep s -> execStep rt typedSteps q sections scope bindings s
+  SIf s -> execIf rt typedSteps q sections scope bindings s
+  SLoop s -> execLoop rt typedSteps q sections scope bindings s
+  SReturn _ _ -> pure (Left (internalError "unexpected 'return' in statement position"))
+
+-- | Run a control-flow block (an @if@ branch or a loop body) in a child
+-- binding scope: it sees the enclosing bindings but its own binds do not
+-- escape (only the construct's value is returned to the caller). The block's
+-- value is its final statement's result (§5.6.5, §13).
+runBlock ::
+  Runtime ->
+  Map Ident TypedStep ->
+  QName ->
+  [Section] ->
+  Text ->
+  Map Ident RValue ->
+  [Statement] ->
+  IO (Either RuntimeError RValue)
+runBlock rt typedSteps q sections scope childBindings =
+  execStatements rt typedSteps q sections scope childBindings Nothing
+
+-- Control flow (§13, M8) -----------------------------------------------------
+
+-- | Execute an @if@\/@else@ statement (§13). The condition is evaluated with
+-- the ambient @ctx@; the taken branch runs in a child scope whose step-key
+-- prefix records the branch, so its steps never collide with the other
+-- branch's on resume (§8.1). The statement's value is the taken branch's value
+-- (an empty record when a discarding @if@ takes an absent @else@).
+execIf ::
+  Runtime ->
+  Map Ident TypedStep ->
+  QName ->
+  [Section] ->
+  Text ->
+  Map Ident RValue ->
+  IfStmt ->
+  IO (Either RuntimeError (Map Ident RValue, RValue))
+execIf rt typedSteps q sections scope bindings s = do
+  ctx <- buildCtx rt q (ifId s)
+  let stepRef = StepRef q (ifId s)
+      env = mkEvalEnv rt sections (Map.insert "ctx" ctx bindings)
+  case evalExpr env (ifCond s) of
+    Left e -> Left <$> failWith rt stepRef e
+    Right (VBool True) -> do
+      _ <- emit (rtTracer rt) (IfBranch q (ifId s) "then")
+      runBranch "then" (ifThen s)
+    Right (VBool False) -> case ifElse s of
+      Just blk -> do
+        _ <- emit (rtTracer rt) (IfBranch q (ifId s) "else")
+        runBranch "else" blk
+      Nothing -> do
+        _ <- emit (rtTracer rt) (IfBranch q (ifId s) "none")
+        let v = VRecord Map.empty
+        pure (Right (bindResult (ifBinder s) v bindings, v))
+    Right _ -> Left <$> failWith rt stepRef (evalError "'if' condition did not evaluate to a Bool")
+  where
+    runBranch branch blk = do
+      r <- runBlock rt typedSteps q sections (ifScope scope (ifId s) branch) bindings blk
+      pure (fmap (\v -> (bindResult (ifBinder s) v bindings, v)) r)
+
+-- | Execute a @foreach@\/@par@ loop (§13). The scrutinee list is evaluated
+-- once; each element runs the body in a child scope binding the loop variable,
+-- with a per-iteration step-key prefix (so a resumed run distinguishes and
+-- does not re-apply already-completed iterations, §8.2). The value is the list
+-- of per-iteration body values (map semantics), always in input order. @par@
+-- runs iterations with bounded concurrency but still returns results in input
+-- order and aborts with the lowest-index error, so it is deterministic.
+execLoop ::
+  Runtime ->
+  Map Ident TypedStep ->
+  QName ->
+  [Section] ->
+  Text ->
+  Map Ident RValue ->
+  LoopStmt ->
+  IO (Either RuntimeError (Map Ident RValue, RValue))
+execLoop rt typedSteps q sections scope bindings s = do
+  ctx <- buildCtx rt q (loopId s)
+  let stepRef = StepRef q (loopId s)
+      env = mkEvalEnv rt sections (Map.insert "ctx" ctx bindings)
+  case evalExpr env (loopList s) of
+    Left e -> Left <$> failWith rt stepRef e
+    Right (VList xs) -> do
+      _ <- emit (rtTracer rt) (LoopStart q (loopId s) kindLabel (length xs))
+      res <- case loopKind s of
+        LoopSeq -> runSeq xs
+        LoopPar mMax -> runPar mMax xs
+      case res of
+        Left e -> pure (Left e)
+        Right vs -> do
+          _ <- emit (rtTracer rt) (LoopEnd q (loopId s) (length xs))
+          let v = VList vs
+          pure (Right (bindResult (loopBinder s) v bindings, v))
+    Right _ ->
+      Left <$> failWith rt stepRef (evalError ("'" <> kindLabel <> "' expected a list to iterate over"))
+  where
+    kindLabel = case loopKind s of
+      LoopSeq -> "foreach"
+      LoopPar _ -> "par"
+
+    runIter :: Int -> RValue -> IO (Either RuntimeError RValue)
+    runIter i x = do
+      _ <- emit (rtTracer rt) (LoopIter q (loopId s) i)
+      let childBindings = Map.insert (loopVar s) x bindings
+      runBlock rt typedSteps q sections (iterScope scope (loopId s) i) childBindings (loopBody s)
+
+    runSeq = go 0 []
+      where
+        go _ acc [] = pure (Right (reverse acc))
+        go i acc (x : rest) = do
+          r <- runIter i x
+          case r of
+            Left e -> pure (Left e)
+            Right v -> go (i + 1) (v : acc) rest
+
+    runPar mMax xs = do
+      let n = max 1 (fromMaybe defaultParallelism mMax)
+      results <- pooledForConcurrentlyN n (zip [0 ..] xs) (\(i, x) -> runIter i x)
+      case [e | Left e <- results] of
+        (e : _) -> pure (Left e)
+        [] -> pure (Right [v | Right v <- results])
+
+-- | The step-key scope prefix for a taken @if@ branch (§8.1, §13).
+ifScope :: Text -> Ident -> Text -> Text
+ifScope scope sid branch = scope <> sid <> "?" <> branch <> "/"
+
+-- | The step-key scope prefix for a loop iteration (§8.1, §13).
+iterScope :: Text -> Ident -> Int -> Text
+iterScope scope sid i = scope <> sid <> "#" <> T.pack (show i) <> "/"
 
 -- | Execute a single step, honouring the step cache (§8.1, §8.2):
 --
@@ -340,10 +506,11 @@ execStep ::
   Map Ident TypedStep ->
   QName ->
   [Section] ->
+  Text ->
   Map Ident RValue ->
   StepStmt ->
   IO (Either RuntimeError (Map Ident RValue, RValue))
-execStep rt typedSteps q sections bindings s = do
+execStep rt typedSteps q sections scope bindings s = do
   let sid = stepId s
       stepRef = StepRef q sid
       target = stepTarget s
@@ -358,7 +525,7 @@ execStep rt typedSteps q sections bindings s = do
       let argMap = Map.fromList argPairs
           mKey =
             if cacheable
-              then Just (stepKeyFor rt env bindings mts q sid target argMap s)
+              then Just (stepKeyFor rt scope env bindings mts q sid target argMap s)
               else Nothing
       hit <- cacheHit rt resultTy mKey
       case hit of
@@ -371,7 +538,7 @@ execStep rt typedSteps q sections bindings s = do
               then -- The agent step is a non-cacheable black box, but its
               -- intra-step model\/tool cache is namespaced under an
               -- agent step-key computed the same way (§8.1, §8.2.1).
-                runAgentStep rt bindings stepRef target argMap (stepKeyFor rt env bindings mts q sid target argMap s)
+                runAgentStep rt bindings stepRef target argMap (stepKeyFor rt scope env bindings mts q sid target argMap s)
               else dispatch rt stepRef bindings target argMap
           case dr of
             Left e -> Left <$> failWith rt stepRef e
@@ -399,6 +566,10 @@ cacheHit rt resultTy mKey
 -- projection, and callee fingerprint.
 stepKeyFor ::
   Runtime ->
+  -- | The control-flow scope prefix (§13, M8), folded into the step id so a
+  -- step's key is distinct per branch\/iteration. Empty at a body's top level,
+  -- keeping top-level keys identical to the pre-control-flow engine.
+  Text ->
   EvalEnv ->
   Map Ident RValue ->
   Maybe TypedStep ->
@@ -408,8 +579,8 @@ stepKeyFor ::
   Map Ident RValue ->
   StepStmt ->
   Text
-stepKeyFor rt env bindings mts q sid target argMap s =
-  computeStepKey refFp q sid argMap ctxProj calleeFp
+stepKeyFor rt scope env bindings mts q sid target argMap s =
+  computeStepKey refFp q (scope <> sid) argMap ctxProj calleeFp
   where
     tp = rtProject rt
     refFp qn = fpText <$> fingerprintOfQName tp qn
