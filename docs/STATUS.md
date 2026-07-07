@@ -13,10 +13,16 @@ backlog. Next actionable work is **M1: project skeleton** — cabal init,
 - Concretised `docs/spec.md`: project layout, markdown workflow syntax,
   v1 type system, built-in tools, workspace sandboxing, content-addressed
   step-key persistence and resume semantics, CLI surface, acceptance
-  criteria A1–A6
+  criteria
+- Second pass on spec: replaced JSON step blocks with a small DSL
+  (`bind <- qname(args)`); added `@self#heading` markdown-section refs;
+  added ambient typed `Context` (`workspace`, `run`, `self`, `inputs`,
+  `trace`, `env`); added `Secret<T>` with trace redaction; added
+  `builtin/introspect` escape hatch; refined step-key hashing to split
+  stable vs. volatile ctx access and mark trace-reading steps
+  non-cacheable; factored type checker as a pure function so v1.1 dynamic
+  workflow evaluation can reuse it. Acceptance criteria now A1–A9.
 - Rewrote `docs/TASKS.md` into milestones M1–M6 with cross-cutting items
-- Flagged open questions inline in the spec (markdown parser choice,
-  frontmatter grammar, expression sub-language, command name, run dir name)
 
 ## Blockers
 
