@@ -11,6 +11,7 @@ module Hwfi.Check.Builtins
     lookupBuiltin,
     isBuiltin,
     introspectQName,
+    execQName,
     llmAgentQName,
     llmAgentObjectQName,
     isAgentBuiltin,
@@ -39,6 +40,11 @@ data Callee = Callee
 introspectQName :: QName
 introspectQName = qnameFromText "builtin/introspect"
 
+-- | The @builtin/exec@ qname (§6.3). Calls are rejected at @hwfi check@ unless
+-- an @exec@ policy allowlists the requested program (§7.5, A24).
+execQName :: QName
+execQName = qnameFromText "builtin/exec"
+
 -- | The @builtin/llm-agent@ qname (§6.1): the free-text agentic loop.
 llmAgentQName :: QName
 llmAgentQName = qnameFromText "builtin/llm-agent"
@@ -66,6 +72,38 @@ builtinCallees =
     [ builtin "builtin/read-file" [("path", TyFileRef)] [("text", TyString)],
       builtin "builtin/write-file" [("path", TyFileRef), ("text", TyString)] [],
       builtin "builtin/list-dir" [("path", TyFileRef)] [("entries", TyList TyString)],
+      -- Read/navigation builtins (§6.2).
+      builtin
+        "builtin/read-file-slice"
+        [("path", TyFileRef), ("offset", TyInt), ("limit", TyInt)]
+        [("text", TyString), ("next_offset", TyInt), ("eof", TyBool)],
+      builtin
+        "builtin/find-files"
+        [("path", TyFileRef), ("glob", TyString)]
+        [("paths", TyList TyString)],
+      builtin
+        "builtin/grep"
+        [("pattern", TyString), ("path", TyFileRef)]
+        [("matches", TyList (TyRecord [("file", TyString), ("line", TyInt), ("text", TyString)]))],
+      -- Mutation builtins (§6.2).
+      builtin
+        "builtin/edit-file"
+        [("path", TyFileRef), ("find", TyString), ("replace", TyString), ("expect", TyInt)]
+        [("replacements", TyInt)],
+      builtin "builtin/move-file" [("from", TyFileRef), ("to", TyFileRef)] [],
+      builtin "builtin/copy-file" [("from", TyFileRef), ("to", TyFileRef)] [],
+      builtin "builtin/remove-file" [("path", TyFileRef)] [],
+      builtin "builtin/make-dir" [("path", TyFileRef)] [],
+      builtin "builtin/remove-dir" [("path", TyFileRef)] [],
+      -- Command execution (§6.3, §7.5).
+      builtin
+        "builtin/exec"
+        [("program", TyString), ("args", TyList TyString), ("stdin", TyString), ("timeout_ms", TyInt)]
+        [ ("exit_code", TyInt),
+          ("stdout", TyString),
+          ("stderr", TyString),
+          ("timed_out", TyBool)
+        ],
       builtin
         "builtin/llm-generate"
         [("system", TyString), ("prompt", TyString), ("model", TyString)]

@@ -29,11 +29,27 @@ import Hwfi.Compat
     llmHooks,
     noHooks,
   )
-import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError)
+import Hwfi.Project.Manifest (ExecPolicy)
+import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sandboxError)
+import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
-import Hwfi.Runtime.Workspace (Workspace, listDir, readTextFile, writeTextFile)
+import Hwfi.Runtime.Workspace
+  ( Workspace,
+    copyFile,
+    editFile,
+    findFiles,
+    grepFiles,
+    listDir,
+    makeDir,
+    moveFile,
+    readFileSlice,
+    readTextFile,
+    removeDir,
+    removeFile,
+    writeTextFile,
+  )
 import LLM (defaultDebugHooks)
 
 -- | Everything a builtin needs from the surrounding run.
@@ -42,6 +58,8 @@ data BuiltinEnv = BuiltinEnv
     beModels :: ModelStore,
     beTracer :: Tracer,
     beStep :: StepRef,
+    -- | The opt-in @exec@ policy (§7.5). 'Nothing' disables @builtin/exec@.
+    beExecPolicy :: Maybe ExecPolicy,
     -- | Produce the @builtin/introspect@ dump for the current step (§6). Built
     -- by the executor because it needs the live bindings and trace.
     beIntrospect :: IO Value
@@ -53,6 +71,16 @@ runBuiltin env q args = case renderQName q of
   "builtin/read-file" -> readFileTool env args
   "builtin/write-file" -> writeFileTool env args
   "builtin/list-dir" -> listDirTool env args
+  "builtin/read-file-slice" -> readFileSliceTool env args
+  "builtin/find-files" -> findFilesTool env args
+  "builtin/grep" -> grepTool env args
+  "builtin/edit-file" -> editFileTool env args
+  "builtin/move-file" -> moveFileTool env args
+  "builtin/copy-file" -> copyFileTool env args
+  "builtin/remove-file" -> removeFileTool env args
+  "builtin/make-dir" -> makeDirTool env args
+  "builtin/remove-dir" -> removeDirTool env args
+  "builtin/exec" -> execTool env args
   "builtin/llm-generate" -> llmGenerateTool env args
   "builtin/llm-chat" -> llmChatTool env args
   "builtin/llm-gen-object" -> llmGenObjectTool env args
@@ -88,6 +116,141 @@ listDirTool env args = orFail (argText args "path") $ \path -> do
     Right entries -> do
       emitFileIo env OpList path 0
       pure (Right (record [("entries", VList (map VString entries))]))
+
+-- Navigation (§6.2) ----------------------------------------------------------
+
+readFileSliceTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+readFileSliceTool env args =
+  orFail ((,,) <$> argText args "path" <*> argInt args "offset" <*> argInt args "limit") $
+    \(path, offset, limit) -> do
+      result <- readFileSlice (beWorkspace env) path offset limit
+      case result of
+        Left e -> pure (Left e)
+        Right (text, next, eof, bytes) -> do
+          emitFileIo env OpReadSlice path bytes
+          pure
+            ( Right
+                ( record
+                    [ ("text", VString text),
+                      ("next_offset", VInt (fromIntegral next)),
+                      ("eof", VBool eof)
+                    ]
+                )
+            )
+
+findFilesTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+findFilesTool env args =
+  orFail ((,) <$> argText args "path" <*> argText args "glob") $ \(path, glob) -> do
+    result <- findFiles (beWorkspace env) path glob
+    case result of
+      Left e -> pure (Left e)
+      Right paths -> do
+        emitFileIo env OpFind path 0
+        pure (Right (record [("paths", VList (map VString paths))]))
+
+grepTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+grepTool env args =
+  orFail ((,) <$> argText args "pattern" <*> argText args "path") $ \(pattern, path) -> do
+    result <- grepFiles (beWorkspace env) pattern path
+    case result of
+      Left e -> pure (Left e)
+      Right matches -> do
+        emitFileIo env OpGrep path 0
+        pure (Right (record [("matches", VList (map matchRecord matches))]))
+  where
+    matchRecord (file, line, text) =
+      record [("file", VString file), ("line", VInt (fromIntegral line)), ("text", VString text)]
+
+-- Mutation (§6.2) ------------------------------------------------------------
+
+editFileTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+editFileTool env args =
+  orFail
+    ( (,,,)
+        <$> argText args "path"
+        <*> argText args "find"
+        <*> argText args "replace"
+        <*> argInt args "expect"
+    )
+    $ \(path, find_, replace_, expect) -> do
+      result <- editFile (beWorkspace env) path find_ replace_ expect
+      case result of
+        Left e -> pure (Left e)
+        Right (n, bytes) -> do
+          emitFileIo env OpEdit path bytes
+          pure (Right (record [("replacements", VInt (fromIntegral n))]))
+
+moveFileTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+moveFileTool env args =
+  orFail ((,) <$> argText args "from" <*> argText args "to") $ \(from, to) ->
+    unitMutation env OpMove from (moveFile (beWorkspace env) from to)
+
+copyFileTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+copyFileTool env args =
+  orFail ((,) <$> argText args "from" <*> argText args "to") $ \(from, to) ->
+    unitMutation env OpCopy from (copyFile (beWorkspace env) from to)
+
+removeFileTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+removeFileTool env args =
+  orFail (argText args "path") $ \path ->
+    unitMutation env OpRemove path (removeFile (beWorkspace env) path)
+
+makeDirTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+makeDirTool env args =
+  orFail (argText args "path") $ \path ->
+    unitMutation env OpMakeDir path (makeDir (beWorkspace env) path)
+
+removeDirTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+removeDirTool env args =
+  orFail (argText args "path") $ \path ->
+    unitMutation env OpRemoveDir path (removeDir (beWorkspace env) path)
+
+-- | Run a mutation returning an empty record, emitting its @file-io@ event
+-- (with @path@ the primary/source path, §8.3.2) only on success.
+unitMutation :: BuiltinEnv -> FileOp -> Text -> IO (Either RuntimeError ()) -> IO (Either RuntimeError RValue)
+unitMutation env op path act = do
+  result <- act
+  case result of
+    Left e -> pure (Left e)
+    Right () -> do
+      emitFileIo env op path 0
+      pure (Right (record []))
+
+-- Command execution (§6.3, §7.5) ---------------------------------------------
+
+execTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+execTool env args =
+  orFail prep $ \execArgs -> case beExecPolicy env of
+    Nothing ->
+      pure
+        ( Left
+            ( sandboxError
+                "builtin/exec is disabled: project.json declares no 'exec' policy (§7.5)"
+            )
+        )
+    Just policy -> do
+      result <- runExec (beWorkspace env) policy execArgs
+      case result of
+        Left e -> pure (Left e)
+        Right outcome -> do
+          emitExec env (eaProgram execArgs) (eaArgs execArgs) outcome
+          pure
+            ( Right
+                ( record
+                    [ ("exit_code", VInt (fromIntegral (eoExitCode outcome))),
+                      ("stdout", VString (eoStdout outcome)),
+                      ("stderr", VString (eoStderr outcome)),
+                      ("timed_out", VBool (eoTimedOut outcome))
+                    ]
+                )
+            )
+  where
+    prep = do
+      program <- argText args "program"
+      argv <- argStrList args "args"
+      stdin <- argText args "stdin"
+      timeoutMs <- argInt args "timeout_ms"
+      pure (ExecArgs program argv stdin timeoutMs)
 
 -- LLM tools ------------------------------------------------------------------
 
@@ -188,6 +351,23 @@ emitFileIo :: BuiltinEnv -> FileOp -> Text -> Int -> IO ()
 emitFileIo env op path bytes =
   emit_ env (FileIo (srQName (beStep env)) (srStepId (beStep env)) op path bytes)
 
+-- | Emit the @exec@ trace event (§8.3.2). The argv is recorded verbatim (it is
+-- @List<String>@, never @Secret<_>@).
+emitExec :: BuiltinEnv -> Text -> [Text] -> ExecOutcome -> IO ()
+emitExec env program argv outcome =
+  emit_
+    env
+    ( Exec
+        (srQName (beStep env))
+        (srStepId (beStep env))
+        program
+        (valueToJson (VList (map VString argv)))
+        (eoExitCode outcome)
+        (eoTimedOut outcome)
+        (eoStdoutBytes outcome)
+        (eoStderrBytes outcome)
+    )
+
 emitLlm :: BuiltinEnv -> Text -> Text -> Text -> ChatResponse -> IO ()
 emitLlm env model system prompt resp =
   emitLlmUsage env model system prompt resp.respText usage
@@ -229,6 +409,13 @@ argText args name = lookupArg args name >>= asText name
 argList :: Map Ident RValue -> Ident -> Either RuntimeError [RValue]
 argList args name = lookupArg args name >>= asList name
 
+-- | Extract a @List<String>@ argument as @[Text]@ (spec §6.3 @exec.args@).
+argStrList :: Map Ident RValue -> Ident -> Either RuntimeError [Text]
+argStrList args name = argList args name >>= traverse (asText name)
+
+argInt :: Map Ident RValue -> Ident -> Either RuntimeError Int
+argInt args name = lookupArg args name >>= asInt name
+
 argJson :: Map Ident RValue -> Ident -> Either RuntimeError Value
 argJson args name = valueToJson <$> lookupArg args name
 
@@ -245,6 +432,10 @@ asText name v = Left (evalError ("argument '" <> name <> "' is not text: " <> T.
 asList :: Ident -> RValue -> Either RuntimeError [RValue]
 asList _ (VList xs) = Right xs
 asList name v = Left (evalError ("argument '" <> name <> "' is not a list: " <> T.pack (show v)))
+
+asInt :: Ident -> RValue -> Either RuntimeError Int
+asInt _ (VInt n) = Right (fromInteger n)
+asInt name v = Left (evalError ("argument '" <> name <> "' is not an integer: " <> T.pack (show v)))
 
 fieldText :: RValue -> Ident -> Either RuntimeError Text
 fieldText (VRecord m) name = case Map.lookup name m of

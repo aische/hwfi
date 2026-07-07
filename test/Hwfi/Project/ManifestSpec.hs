@@ -25,9 +25,44 @@ spec = do
               { name = "example",
                 version = "0.1.0",
                 entrypoint = "workflows/main",
-                envWhitelist = ["HOME", "USER"]
+                envWhitelist = ["HOME", "USER"],
+                execPolicy = Nothing
               }
           )
+
+    it "parses an exec policy with defaults for omitted fields (§2, §7.5)" $ do
+      let json =
+            BS.pack $
+              unlines
+                [ "{",
+                  "  \"name\": \"example\",",
+                  "  \"version\": \"0.1.0\",",
+                  "  \"entrypoint\": \"workflows/main\",",
+                  "  \"exec\": { \"allow\": [\"git\", \"cabal\"], \"env\": [\"PATH\"] }",
+                  "}"
+                ]
+      fmap execPolicy (eitherDecodeStrict' json)
+        `shouldBe` Right
+          ( Just
+              ExecPolicy
+                { execAllow = ["git", "cabal"],
+                  execEnv = ["PATH"],
+                  execTimeoutMs = defaultExecTimeoutMs,
+                  execMaxOutputBytes = defaultExecMaxOutputBytes
+                }
+          )
+
+    it "leaves execPolicy Nothing when no exec block is present (fail-closed)" $ do
+      let json =
+            BS.pack $
+              unlines
+                [ "{",
+                  "  \"name\": \"example\",",
+                  "  \"version\": \"0.1.0\",",
+                  "  \"entrypoint\": \"workflows/main\"",
+                  "}"
+                ]
+      fmap execPolicy (eitherDecodeStrict' json) `shouldBe` Right Nothing
 
     it "defaults env to [] when omitted" $ do
       let json =

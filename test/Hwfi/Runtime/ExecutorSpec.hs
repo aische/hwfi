@@ -112,6 +112,63 @@ writeResumeProject dir subWriteExpr = do
           "```"
         ]
 
+-- durable-workspace fixture: a mutation + exec step (A25, §8.2) --------------
+
+writeExecProject :: FilePath -> IO ()
+writeExecProject dir = do
+  createDirectoryIfMissing True (dir </> "workflows")
+  TIO.writeFile (dir </> "project.json") projectJson
+  TIO.writeFile (dir </> "model-catalog.json") "[]\n"
+  TIO.writeFile (dir </> "workflows" </> "main.md") mainMd
+  where
+    projectJson =
+      T.unlines
+        [ "{",
+          "  \"name\": \"exec-resume\",",
+          "  \"version\": \"0.1.0\",",
+          "  \"entrypoint\": \"workflows/main\",",
+          "  \"env\": [],",
+          "  \"exec\": { \"allow\": [\"sh\"], \"env\": [\"PATH\"] }",
+          "}"
+        ]
+    mainMd =
+      T.unlines
+        [ "---",
+          "name: workflows/main",
+          "inputs:",
+          "  src: FileRef",
+          "outputs:",
+          "  code: Int",
+          "imports:",
+          "  - builtin/edit-file",
+          "  - builtin/exec",
+          "  - builtin/write-file",
+          "---",
+          "",
+          "## flow",
+          "",
+          "```step",
+          "_ <- builtin/edit-file(path = ${inputs.src}, find = \"foo\", replace = \"bar\", expect = 1) @edit",
+          "r <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo tick >> counter.txt\"], stdin = \"\", timeout_ms = 0) @exec",
+          "_ <- builtin/write-file(path = \"volatile.txt\", text = \"trace: ${ctx.trace}\") @volatile",
+          "return { code = ${r.exit_code} }",
+          "```"
+        ]
+
+-- | Run the durable-workspace fixture to completion, abort it, then resume.
+runExecThenResume :: FilePath -> FilePath -> IO (RunResult, RunResult, FilePath)
+runExecThenResume proj ws = do
+  writeExecProject proj
+  TIO.writeFile (ws </> "input.txt") "foo"
+  workspace <- newWorkspace ws
+  tp1 <- loadChecked proj
+  r1 <- expectRun =<< performRun tp1 workspace Map.empty Map.empty proj "run-1" mainQ resumeInputs
+  Right store <- openRunStore (workspaceRoot workspace) "run-1"
+  updateRunPhase store PhaseAborted
+  tp2 <- loadChecked proj
+  r2 <- expectRun =<< performResume tp2 workspace Map.empty Map.empty "run-1"
+  pure (r1, r2, ws)
+
 -- | Run the resume fixture to completion, mark it resumable (aborted), then
 -- resume — optionally after editing the sub-workflow's write expression.
 runThenResume ::
@@ -215,6 +272,36 @@ spec = do
         traceDump <- readFileT (ws </> "volatile.txt")
         traceDump `shouldSatisfy` T.isInfixOf "step-end"
         traceDump `shouldSatisfy` T.isInfixOf "cached.txt"
+
+  describe "Durable-workspace resume (§8.2, A25)" $ do
+    it "runs a mutation + exec workflow and returns the exit code" $
+      withResumeDirs $ \proj ws -> do
+        (r1, _, _) <- runExecThenResume proj ws
+        rrOutcome r1
+          `shouldBe` Right (VRecord (Map.fromList [("code", VInt 0)]))
+
+    it "applies the edit and the exec side effect exactly once across resume" $
+      withResumeDirs $ \proj ws -> do
+        (_, _, _) <- runExecThenResume proj ws
+        -- The edit ran once (foo -> bar); it is not re-applied on resume, which
+        -- would fail (no 'foo' left) if the durable-workspace invariant broke.
+        readFileT (ws </> "input.txt") `shouldReturn` "bar"
+        -- The exec appended one line; a re-run on resume would append a second.
+        readFileT (ws </> "counter.txt") `shouldReturn` "tick\n"
+
+    it "serves cached mutation and exec steps from cache on resume (§8.2)" $
+      withResumeDirs $ \proj ws -> do
+        (_, r2, _) <- runExecThenResume proj ws
+        let evs = rrEvents r2
+        stepStarts "edit" evs `shouldBe` 1
+        stepStarts "exec" evs `shouldBe` 1
+        -- The volatile step reads ctx.trace, so it re-runs on resume.
+        stepStarts "volatile" evs `shouldBe` 2
+
+    it "records the exec exactly once in the resumed trace (no re-emit)" $
+      withResumeDirs $ \proj ws -> do
+        (_, r2, _) <- runExecThenResume proj ws
+        length [() | TraceEvent _ _ (Exec {}) <- rrEvents r2] `shouldBe` 1
 
   describe "Code-edit invalidation (§8.1, A13)" $
     it "recomputes a step whose callee fingerprint changed" $

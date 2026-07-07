@@ -44,8 +44,21 @@ import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Runtime.Error (ErrorKind, errorKindFromText, errorKindText)
 import System.IO (Handle, hFlush)
 
--- | The @op@ discriminator of a 'FileIo' event (§8.3.2).
-data FileOp = OpRead | OpWrite | OpList
+-- | The @op@ discriminator of a 'FileIo' event (§8.3.2). Covers the M4 read
+-- (@read@\/@write@\/@list@) and the M7 navigation\/mutation ops (§6.2).
+data FileOp
+  = OpRead
+  | OpWrite
+  | OpList
+  | OpReadSlice
+  | OpFind
+  | OpGrep
+  | OpEdit
+  | OpMove
+  | OpCopy
+  | OpRemove
+  | OpMakeDir
+  | OpRemoveDir
   deriving stock (Eq, Show)
 
 fileOpText :: FileOp -> Text
@@ -53,6 +66,15 @@ fileOpText = \case
   OpRead -> "read"
   OpWrite -> "write"
   OpList -> "list"
+  OpReadSlice -> "read-slice"
+  OpFind -> "find"
+  OpGrep -> "grep"
+  OpEdit -> "edit"
+  OpMove -> "move"
+  OpCopy -> "copy"
+  OpRemove -> "remove"
+  OpMakeDir -> "make-dir"
+  OpRemoveDir -> "remove-dir"
 
 -- | Parse a 'FileOp' from its wire spelling; defaults to 'OpList' on an
 -- unrecognised value (its @bytes@ is 0 and it has no side effects).
@@ -60,6 +82,15 @@ fileOpFromText :: Text -> FileOp
 fileOpFromText = \case
   "read" -> OpRead
   "write" -> OpWrite
+  "read-slice" -> OpReadSlice
+  "find" -> OpFind
+  "grep" -> OpGrep
+  "edit" -> OpEdit
+  "move" -> OpMove
+  "copy" -> OpCopy
+  "remove" -> OpRemove
+  "make-dir" -> OpMakeDir
+  "remove-dir" -> OpRemoveDir
   _ -> OpList
 
 -- | The terminal @status@ of a logical run (§8.3.2, §8.3.3).
@@ -91,6 +122,9 @@ data EventBody
     LlmCall QName Ident Text Text Text Text Int Int
   | -- | @file-io@: qname, step id, op, workspace-relative path, byte count.
     FileIo QName Ident FileOp Text Int
+  | -- | @exec@ (§8.3.2): qname, step id, allowlisted program basename, argv
+    -- (redacted), exit code, timed-out flag, captured stdout\/stderr byte sizes.
+    Exec QName Ident Text Value Int Bool Int Int
   | -- | @error@: qname, step id, message, kind.
     ErrorEvent QName Ident Text ErrorKind
   | -- | @agent-round-start@ (§8.3.2): qname, step id, 0-based round index.
@@ -165,6 +199,17 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "op" .= fileOpText op,
           "path" .= path,
           "bytes" .= bytes
+        ]
+      Exec q sid program args exitCode timedOut outBytes errBytes ->
+        [ "tag" .= ("exec" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "program" .= program,
+          "args" .= args,
+          "exit_code" .= exitCode,
+          "timed_out" .= timedOut,
+          "stdout_bytes" .= outBytes,
+          "stderr_bytes" .= errBytes
         ]
       ErrorEvent q sid message kind ->
         [ "tag" .= ("error" :: Text),
@@ -251,6 +296,16 @@ parseEvent = withObject "TraceEvent" $ \o -> do
           <*> o .: "tokens_out"
       "file-io" ->
         FileIo <$> qn o <*> o .: "step_id" <*> (fileOpFromText <$> o .: "op") <*> o .: "path" <*> o .: "bytes"
+      "exec" ->
+        Exec
+          <$> qn o
+          <*> o .: "step_id"
+          <*> o .: "program"
+          <*> o .: "args"
+          <*> o .: "exit_code"
+          <*> o .: "timed_out"
+          <*> o .: "stdout_bytes"
+          <*> o .: "stderr_bytes"
       "error" ->
         ErrorEvent <$> qn o <*> o .: "step_id" <*> o .: "message" <*> (errorKindFromText <$> o .: "kind")
       "agent-round-start" ->
@@ -301,6 +356,14 @@ renderEvent (TraceEvent s at body) =
         "llm-call    " <> step q sid <> "  model=" <> model <> "  tokens=" <> T.pack (show tin) <> "/" <> T.pack (show tout)
       FileIo q sid op path bytes ->
         "file-io     " <> step q sid <> "  " <> fileOpText op <> " " <> path <> " (" <> T.pack (show bytes) <> "B)"
+      Exec q sid program _ exitCode timedOut _ _ ->
+        "exec        "
+          <> step q sid
+          <> "  "
+          <> program
+          <> "  exit="
+          <> T.pack (show exitCode)
+          <> (if timedOut then " [timed-out]" else "")
       ErrorEvent q sid msg _ ->
         "error       " <> step q sid <> "  " <> msg
       AgentRoundStart q sid round_ ->

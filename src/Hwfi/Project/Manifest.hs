@@ -1,6 +1,9 @@
--- | The @project.json@ manifest. See spec §2 and §5.7.
+-- | The @project.json@ manifest. See spec §2, §5.7, and §7.5.
 module Hwfi.Project.Manifest
   ( ProjectManifest (..),
+    ExecPolicy (..),
+    defaultExecTimeoutMs,
+    defaultExecMaxOutputBytes,
     loadManifest,
     validateEnvPresence,
   )
@@ -15,6 +18,40 @@ import System.Directory (doesFileExist)
 import System.Environment (getEnvironment)
 import System.FilePath ((</>))
 
+-- | The opt-in @exec@ policy governing @builtin/exec@ (spec §2, §6.3, §7.5).
+-- Absent by default, in which case @builtin/exec@ is disabled entirely and any
+-- call is rejected at @hwfi check@ (A24).
+data ExecPolicy = ExecPolicy
+  { -- | Whitelist of program /basenames/ (never paths) that @builtin/exec@ may
+    -- run. An empty list disables @exec@ (fail-closed, §7.5).
+    execAllow :: [Text],
+    -- | Process environment variable names passed through to spawned commands
+    -- (defaults to @[]@: the child otherwise gets an empty environment).
+    execEnv :: [Text],
+    -- | Default wall-clock timeout (ms) applied when a call omits its own.
+    execTimeoutMs :: Int,
+    -- | Cap on captured @stdout@\/@stderr@ per stream; output beyond it is
+    -- truncated and flagged.
+    execMaxOutputBytes :: Int
+  }
+  deriving stock (Eq, Show)
+
+-- | Default @exec.timeout_ms@ when the policy omits it (spec §2).
+defaultExecTimeoutMs :: Int
+defaultExecTimeoutMs = 120000
+
+-- | Default @exec.max_output_bytes@ when the policy omits it (spec §2).
+defaultExecMaxOutputBytes :: Int
+defaultExecMaxOutputBytes = 1048576
+
+instance FromJSON ExecPolicy where
+  parseJSON = withObject "ExecPolicy" $ \o ->
+    ExecPolicy
+      <$> o .:? "allow" .!= []
+      <*> o .:? "env" .!= []
+      <*> o .:? "timeout_ms" .!= defaultExecTimeoutMs
+      <*> o .:? "max_output_bytes" .!= defaultExecMaxOutputBytes
+
 -- | The parsed @project.json@ (v1 shape).
 data ProjectManifest = ProjectManifest
   { -- | Project name.
@@ -25,7 +62,9 @@ data ProjectManifest = ProjectManifest
     entrypoint :: Text,
     -- | Whitelist of process env vars readable via @ctx.env@ (defaults to
     -- @[]@). Provider API keys must /not/ be listed here (spec §7.2).
-    envWhitelist :: [Text]
+    envWhitelist :: [Text],
+    -- | The opt-in @exec@ policy (spec §7.5). 'Nothing' disables @builtin/exec@.
+    execPolicy :: Maybe ExecPolicy
   }
   deriving stock (Eq, Show)
 
@@ -36,6 +75,7 @@ instance FromJSON ProjectManifest where
       <*> o .: "version"
       <*> o .: "entrypoint"
       <*> o .:? "env" .!= []
+      <*> o .:? "exec"
 
 -- | Load and parse @\<project>/project.json@.
 loadManifest :: FilePath -> IO (Either Text ProjectManifest)

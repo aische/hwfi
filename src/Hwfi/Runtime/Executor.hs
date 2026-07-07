@@ -74,6 +74,7 @@ import Hwfi.Runtime.Error
     internalError,
   )
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
+import Hwfi.Project.Manifest (ProjectManifest (..))
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
@@ -571,6 +572,7 @@ builtinEnv rt stepRef bindings =
       beModels = rtModels rt,
       beTracer = rtTracer rt,
       beStep = stepRef,
+      beExecPolicy = execPolicy (tpManifest (rtProject rt)),
       beIntrospect = introspectDump rt stepRef bindings
     }
 

@@ -7,8 +7,10 @@ import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
+import Hwfi.Project.Manifest (ExecPolicy (..))
 import Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     AgentEnv (..),
@@ -20,10 +22,12 @@ import Hwfi.Runtime.Agent
     submitToolDef,
     submitToolName,
   )
-import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), internalError, reKind)
+import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
+import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
 import Hwfi.Runtime.RunStore (RunStore, createRunStore)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), Tracer, newTracer, snapshotEvents)
 import Hwfi.Runtime.Value (RValue (..))
+import Hwfi.Runtime.Workspace (Workspace, newWorkspace, readTextFile, writeTextFile)
 import Hwfi.Type (Type (..))
 import LLM.Core.Types
   ( ChatRequest (..),
@@ -31,11 +35,14 @@ import LLM.Core.Types
     ContentBlock (..),
     LLMError (..),
     LLMGateway (..),
+    ToolResult (..),
     Turn (..),
     mkToolCall,
   )
 import LLM.Core.Usage (PricingInfo (..), Usage (..))
 import LLM.Generate.ModelConfig (ModelConfig (..), ModelWithFallbacks (..))
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -116,6 +123,28 @@ spec = describe "Agent loop (§6.1)" $ do
             (textSpec explodingGateway)
         resumed `shouldBe` primed
 
+  describe "coding loop end-to-end (§6.2, §6.3, A26)" $
+    it "reacts to a failing exec by editing a file and re-running until it passes" $
+      withCodingEnv $ \store tracer ws -> do
+        -- The source lacks the token the build checks for, so the first build
+        -- fails; the agent must edit it and re-run.
+        _ <- writeTextFile ws "src.txt" "foo\n"
+        let benv =
+              BuiltinEnv
+                { beWorkspace = ws,
+                  beModels = Map.empty,
+                  beTracer = tracer,
+                  beStep = StepRef mainQ "agent",
+                  beExecPolicy = Just codingPolicy,
+                  beIntrospect = pure Null
+                }
+            dispatch q _sid args = runBuiltin benv q args
+        res <- runAgent (env store tracer False dispatch) codingSpec
+        res `shouldBe` Right (record [("text", VString "build passed"), ("rounds", VInt 4)])
+        -- The edit was actually applied to the sandboxed workspace.
+        edited <- readTextFile ws "src.txt"
+        fmap fst edited `shouldBe` Right "bar\n"
+
 -- Fixtures -------------------------------------------------------------------
 
 searchQ :: QName
@@ -149,6 +178,93 @@ textSpec gw =
 objectSpec :: LLMGateway -> AgentSpec
 objectSpec gw = (textSpec gw) {asSubmit = Just submitSpec}
 
+-- Coding-loop fixtures (A26) --------------------------------------------------
+
+execQ :: QName
+execQ = qnameFromText "builtin/exec"
+
+editQ :: QName
+editQ = qnameFromText "builtin/edit-file"
+
+execInputs :: [(Ident, Type)]
+execInputs = [("program", TyString), ("args", TyList TyString), ("stdin", TyString), ("timeout_ms", TyInt)]
+
+editInputs :: [(Ident, Type)]
+editInputs = [("path", TyFileRef), ("find", TyString), ("replace", TyString), ("expect", TyInt)]
+
+execTool :: AdvertisedTool
+execTool =
+  AdvertisedTool
+    { atQName = execQ,
+      atToolDef = advertisedToolDef execQ execInputs,
+      atInputs = execInputs,
+      atFingerprint = "exec-fp-v1"
+    }
+
+editTool :: AdvertisedTool
+editTool =
+  AdvertisedTool
+    { atQName = editQ,
+      atToolDef = advertisedToolDef editQ editInputs,
+      atInputs = editInputs,
+      atFingerprint = "edit-fp-v1"
+    }
+
+codingPolicy :: ExecPolicy
+codingPolicy =
+  ExecPolicy
+    { execAllow = ["sh"],
+      execEnv = ["PATH"],
+      execTimeoutMs = 5000,
+      execMaxOutputBytes = 65536
+    }
+
+codingSpec :: AgentSpec
+codingSpec =
+  (textSpec codingGateway)
+    { asPrompt = "Make the build pass.",
+      asTools = [editTool, execTool],
+      asMaxRounds = 8
+    }
+
+-- | A build command that succeeds only once @src.txt@ contains @bar@.
+buildCmd :: [Text]
+buildCmd = ["-c", "grep -q bar src.txt"]
+
+-- | The scripted coding agent: run the build; if it fails, edit the source and
+-- re-run; once it passes, answer with plain text. The decision is driven by the
+-- real @exit_code@ the executor fed back, so the loop genuinely reacts to it.
+codingGateway :: LLMGateway
+codingGateway = gatewayOf $ \req ->
+  pure . Right $
+    let results = [tr | ToolTurn trs <- req.reqConversation, tr <- trs]
+     in case reverse results of
+          [] -> execCall
+          (tr : _)
+            | tr.trName == sanitizeToolName execQ ->
+                if "\"exit_code\":0" `T.isInfixOf` tr.trContent
+                  then textResp "build passed"
+                  else editCall
+            | tr.trName == sanitizeToolName editQ -> execCall
+            | otherwise -> textResp "done"
+  where
+    execCall =
+      toolResp "c-exec" (sanitizeToolName execQ) $
+        object
+          [ "program" .= ("sh" :: Text),
+            "args" .= buildCmd,
+            "stdin" .= ("" :: Text),
+            "timeout_ms" .= (0 :: Int)
+          ]
+    editCall =
+      toolResp "c-edit" (sanitizeToolName editQ) $
+        object
+          [ "path" .= ("src.txt" :: Text),
+            "find" .= ("foo" :: Text),
+            "replace" .= ("bar" :: Text),
+            "expect" .= (1 :: Int)
+          ]
+
 submitSpec :: SubmitSpec
 submitSpec =
   SubmitSpec
@@ -173,6 +289,18 @@ withEnv k =
     store <- createRunStore dir "run-agent"
     tracer <- newTracer
     k store tracer
+
+-- | Like 'withEnv' but also provides a real sandboxed workspace so tool calls
+-- can genuinely mutate files and run commands (A26).
+withCodingEnv :: (RunStore -> Tracer -> Workspace -> IO a) -> IO a
+withCodingEnv k =
+  withSystemTempDirectory "hwfi-coding" $ \dir -> do
+    store <- createRunStore dir "run-agent"
+    tracer <- newTracer
+    let wsDir = dir </> "ws"
+    createDirectoryIfMissing True wsDir
+    ws <- newWorkspace wsDir
+    k store tracer ws
 
 env ::
   RunStore ->

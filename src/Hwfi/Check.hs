@@ -24,21 +24,22 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import Data.Text qualified as T
+import Hwfi.Ast.Expr (Expr (..), StringPart (..))
 import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
 import Hwfi.Ast.Project
-import Hwfi.Ast.Step (StepStmt, stepTarget)
+import Hwfi.Ast.Step (Arg (..), Statement (..), StepStmt (..), stepTarget)
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Type (TypeExpr)
 import Hwfi.Ast.Workflow (Signature (..), Workflow (..), emptySignature)
 import Hwfi.Check.Alias (resolveAliasDefs, resolveSigTypeExpr)
-import Hwfi.Check.Builtins (Callee (..), introspectQName, isBuiltin, lookupBuiltin)
+import Hwfi.Check.Builtins (Callee (..), execQName, introspectQName, isBuiltin, lookupBuiltin)
 import Hwfi.Check.Decl (CheckCtx (..), checkDeclBody)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), renderTypeErrors, typeError)
 import Hwfi.Check.Graph (computeFingerprints, detectImportCycles, directCallees, lookupCalleeFingerprint, projectCallees)
 import Data.Set qualified as Set
-import Hwfi.Project.Manifest (ProjectManifest (..))
-import Hwfi.Source (Diagnostic, Pos (..))
+import Hwfi.Project.Manifest (ExecPolicy (..), ProjectManifest (..))
+import Hwfi.Source (Diagnostic, Pos (..), spanStart)
 import Hwfi.TypedProject
 import Hwfi.Type (Type (..), isSecretEnvName)
 import Data.Either (fromRight)
@@ -79,7 +80,10 @@ checkProject proj
     bodyErrs = concat [e | (_, (e, _)) <- bodyResults]
     stepMap = Map.fromList [(q, steps) | (q, (_, steps)) <- bodyResults]
 
-    allErrs = aliasErrs <> sigErrs <> importErrs <> cycleErrs <> entrypointErrs <> bodyErrs
+    -- §6.3/§7.5/A24: fail-closed rejection of un-permitted builtin/exec calls.
+    execErrs = concatMap (execErrors manifest) (Map.toList decls)
+
+    allErrs = aliasErrs <> sigErrs <> importErrs <> cycleErrs <> entrypointErrs <> bodyErrs <> execErrs
 
     -- Phase 4 (success only): fingerprints and assembly.
     fps = computeFingerprints decls sigMap
@@ -154,6 +158,49 @@ entrypointError decls manifest =
       ]
   where
     entry = qnameFromText manifest.entrypoint
+
+-- Command-execution policy (§6.3, §7.5, A24) --------------------------------
+
+-- | Reject every @builtin/exec@ call not permitted by the @exec@ policy: no
+-- policy declared, an empty @allow@ list, or a /literal/ @program@ absent from
+-- @allow@. A dynamic (non-literal) program passes the static check and is
+-- enforced against the allowlist at runtime (§7.5).
+execErrors :: ProjectManifest -> (QName, Declaration) -> [TypeError]
+execErrors manifest (q, d) =
+  concatMap checkStep (execSteps d)
+  where
+    checkStep s =
+      let pos = spanStart (maybe (stepSpan s) argSpan (lookupArg "program" s))
+       in case manifest.execPolicy of
+            Nothing ->
+              [ err pos "builtin/exec is disabled: project.json declares no 'exec' policy (§7.5)"
+              ]
+            Just policy
+              | null (execAllow policy) ->
+                  [err pos "builtin/exec is disabled: project.json 'exec.allow' is empty (§7.5)"]
+              | otherwise -> case lookupArg "program" s of
+                  Just (Arg _ (EString [SLit prog]) _)
+                    | prog `notElem` execAllow policy ->
+                        [ err
+                            pos
+                            ( "program '"
+                                <> prog
+                                <> "' is not in project.json 'exec.allow' (§7.5, A24)"
+                            )
+                        ]
+                  _ -> []
+    err pos = typeError (declPath q) pos ExecPolicyViolation
+    lookupArg name s = lookup name [(argName a, a) | a <- stepArgs s]
+
+-- | The @builtin/exec@ steps of a declaration's body.
+execSteps :: Declaration -> [StepStmt]
+execSteps d = [s | SStep s <- declStatements d, stepTarget s == execQName]
+
+declStatements :: Declaration -> [Statement]
+declStatements = \case
+  DeclWorkflow w -> wfStatements w
+  DeclTool t -> toolStatements t
+  _ -> []
 
 -- Context assembly -----------------------------------------------------------
 

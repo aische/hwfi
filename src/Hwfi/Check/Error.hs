@@ -63,6 +63,10 @@ data TypeErrorKind
     BadQNameValue
   | -- | The project's @entrypoint@ does not name a declared workflow (§2).
     BadEntrypoint
+  | -- | A @builtin/exec@ call is not permitted by the @project.json@ @exec@
+    -- policy: no policy is declared, or the (literal) program is not in
+    -- @exec.allow@ (§6.3, §7.5, A24). A @sandbox@-category check error.
+    ExecPolicyViolation
   deriving stock (Eq, Show)
 
 -- | A type-check error.

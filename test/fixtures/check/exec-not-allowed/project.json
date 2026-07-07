@@ -1,0 +1,10 @@
+{
+  "name": "exec-not-allowed",
+  "version": "0.1.0",
+  "entrypoint": "workflows/main",
+  "env": [],
+  "exec": {
+    "allow": ["git"],
+    "env": ["PATH"]
+  }
+}

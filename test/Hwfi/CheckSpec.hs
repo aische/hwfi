@@ -114,6 +114,23 @@ spec = do
       res <- checkFixture "agent-introspect-tool"
       errKinds res `shouldContain` [ArgMismatch]
 
+    it "accepts an agent advertising mutation and exec tools (§7.5)" $ do
+      res <- checkFixture "agent-coding-tools"
+      res `shouldSatisfy` isRight
+
+  describe "checkProject — exec policy (§7.5, A24)" $ do
+    it "accepts a builtin/exec call whose literal program is allowlisted" $ do
+      res <- checkFixture "exec-ok"
+      res `shouldSatisfy` isRight
+
+    it "rejects a builtin/exec call whose literal program is not allowlisted" $ do
+      res <- checkFixture "exec-not-allowed"
+      errKinds res `shouldContain` [ExecPolicyViolation]
+
+    it "rejects a builtin/exec call when no exec policy is configured" $ do
+      res <- checkFixture "exec-no-policy"
+      errKinds res `shouldContain` [ExecPolicyViolation]
+
 -- Helpers --------------------------------------------------------------------
 
 declSteps :: String -> TypedProject -> [TypedStep]
