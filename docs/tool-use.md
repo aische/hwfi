@@ -1,10 +1,12 @@
 # LLM tool-use (agentic function calling)
 
 Status: **goal / not implemented.** This document describes a feature we
-want and an analysis of what it would take to build. It is a design note,
-not a spec change yet. The current spec explicitly lists the closest
-version of this ("dynamic workflow synthesis by agents") as deferred to
-v1.1+ (spec §13).
+want and an analysis of what it would take. It is a design note, not a spec
+change yet. The current spec lists the closest version of this ("dynamic
+workflow synthesis by agents") as deferred to v1.1+ (spec §13).
+
+A working reference for the design exists at `../llm-workflow`; §3 distills
+what to borrow from it and where hwfi must differ.
 
 ## 1. The goal
 
@@ -19,26 +21,16 @@ in a loop until it produces a final answer. Concretely:
 
 - A workflow step advertises a set of tools to the model.
 - Each advertised tool is backed by a **hwfi tool or sub-workflow** (or a
-  `builtin/*`). When the model emits a tool call, the engine dispatches it
-  through the existing executor, gets a typed result, and feeds it back to
-  the model as a tool message.
+  `builtin/*`). When the model emits a tool call, the engine runs that
+  tool/sub-workflow through the normal executor, gets a typed result, and
+  feeds it back to the model as a tool message.
 - The loop runs until the model stops calling tools (or a round cap is
   hit), and the step returns the model's final output.
 
-This is the standard agent loop. The important design constraint is that
-the tools the model can call are **the project's own declarations** — so a
-prompt-authored workflow can expose, say, `tools/search` and
-`workflows/extract` to a model and let the model decide when to use them.
-
-Two capabilities are in scope and are currently both **absent** (see the
-companion analysis that motivated this doc):
-
-1. **hwfi tools/workflows as LLM tools** — expose declared
-   tools/sub-workflows (and builtins) to the model as function-call
-   targets.
-2. **Reuse of `llm-simple`'s agent loop / FS tools** — decide whether to
-   drive the loop with `llm-simple`'s `LLM.Agent` machinery or write our
-   own on top of `LLM.Generate`.
+The design constraint that makes this interesting: the tools the model can
+call are **the project's own declarations**, so a prompt-authored workflow
+can expose e.g. `tools/search` and `workflows/extract` to a model and let
+the model decide when to use them.
 
 ## 2. Where we are now
 
@@ -59,51 +51,177 @@ genReq system messages =
     }
 ```
 
-`grTools :: [ToolDef]` is exactly the field that advertises callable
-functions to a provider. It is always `[]`.
+`grTools :: [ToolDef]` is the field that advertises callable functions to a
+provider. It is always `[]`.
 
 ### 2.2 The engine uses the non-agentic generation path
 
 The builtins call `LLM.Generate.generateTextWithFallbacks` /
 `genObjectUntyped`. That layer *surfaces* provider tool calls as a stream
 chunk (`StreamToolCallChunk`) but does **not** execute them. The
-tool-execution loop lives in a different module, `LLM.Agent`
-(`agentLoop` in `LLM/Agent/Generate.hs`), which `hwfi` does not import.
-
-So even if `grTools` were populated, nothing would dispatch the resulting
+tool-execution loop lives in `LLM.Agent`, which `hwfi` does not import. So
+even if `grTools` were populated, nothing would dispatch the resulting
 calls or feed results back.
 
-### 2.3 `llm-simple` already has the loop and a tool abstraction
+### 2.3 `llm-simple` already has a tool abstraction and a loop
 
-`llm-simple` ships everything needed for the provider side:
+`llm-simple` provides the provider side: `LLM.Agent.Generate.agentLoop`
+(round-based tool loop), `LLM.Agent.Types.Tool` (a `ToolDef` paired with an
+executor), and a suite of ready-made FS tools in `LLM.Tools.*` with an
+`FsConfig` sandbox. hwfi does **not** want to hand the model those FS tools
+directly — they bypass hwfi's sandboxed `Workspace`, its `file-io` trace
+events, and its `RValue` typing. The `Tool`/`ToolMap` abstraction is the
+right shape to plug into; the concrete FS tools are not what we expose.
 
-- `LLM.Agent.Generate.agentLoop` — the round-based tool loop: call the
-  model, read `getToolCalls resp`, if none finish, otherwise
-  `executeToolsWithAbort`, append an assistant turn + a `ToolTurn`, and
-  recurse up to `agMaxToolRounds`.
-- `LLM.Agent.Types.Tool` — a `ToolDef` (name, description, JSON-schema
-  parameters, readonly flag) paired with an executor
-  `toolExecute :: ToolContext -> Value -> IO result`.
-- `LLM.Tools.*` — a full suite of ready-made FS tools
-  (`readfileToolTyped`, `writefileToolTyped`, `grepToolTyped`,
-  `findFilesToolTyped`, `directoryTreeToolTyped`, …) plus an `FsConfig`
-  sandbox.
+## 3. Prior art: `../llm-workflow`
 
-The key insight is that `hwfi` does **not** want to hand the model
-`llm-simple`'s FS tools directly — those bypass hwfi's own sandboxed
-`Workspace`, its `file-io` trace events, and its `RValue` typing. Instead
-we want to synthesize `ToolDef`s from hwfi declarations and route execution
-back through `Hwfi.Runtime.Executor`. `llm-simple`'s `Tool`/`ToolMap`
-abstraction is the right shape to plug into; its concrete FS tools are not
-what we expose.
+`../llm-workflow` is a sibling library that already implements
+"tools that call workflows" on top of `llm-simple`. It is **not**
+persisted or resumable and leans on `unsafeCoerce`, so it is not a drop-in,
+but its *control-flow architecture* is directly applicable and resolves
+several of the open questions below. The transferable ideas:
 
-## 3. What it would take
+### 3.1 One evaluator for prompts, tools, and workflows
 
-The provider mechanics are the easy 20%. The hard 80% is making
+The whole thing is a single defunctionalized CEK-style machine
+(`src/LLM/Workflow/Workflow.hs`): a `Stack = Stack Usage (Step o) (Kont o r)`
+driven by `loop`/`eval`. "Run an LLM turn", "run a tool", "run a
+sub-workflow", "loop", "parallel + merge", "catch" are **all uniform
+steps** in the same machine — there is no separate recursive agent loop.
+
+```98:114:../llm-workflow/src/LLM/Workflow/Types.hs
+data Workflow i o where
+  WPrompt :: AgentWithModels -> Maybe CID -> Workflow PromptArgs Final
+  WObject :: (GeneratableObject a) => AgentWithModels -> Workflow PromptArgs a
+  WAgentSubmit :: ... -> Text -> AgentWithModels -> Maybe CID -> Workflow PromptArgs a
+  WSeq :: Workflow i x -> Workflow y o -> TranscriptPolicy x y -> Workflow i o
+  WPar :: Workflow i x -> Workflow i y -> MergePolicy x y o -> Workflow i o
+  WLift :: (i -> IO o) -> Workflow i o
+  WLiftW :: (i -> IO (Workflow i' o)) -> Workflow (i, i') o
+  WMap :: Workflow i o -> TranscriptPolicy o o' -> Workflow i o'
+  WLoop :: Int -> Workflow i o -> TranscriptPolicy o i -> [CID] -> Workflow i o
+  WLoopWhile :: ... -> Workflow i o
+  WCatch :: o -> Workflow i o -> Workflow i o
+```
+
+**Lesson for hwfi:** don't bolt an agent loop onto a separate code path.
+hwfi's next milestone is control flow (`if`/`foreach`/`par`, spec §13); the
+agent tool loop is the *same kind of thing* and should share one evaluator.
+This argues against my earlier "recursive loop inside a `builtin/llm-agent`
+with a dispatch callback" sketch — see §4.
+
+### 3.2 Tools return a *description* of what to run, not a side effect
+
+The pivotal abstraction is `ToolOutcome`. A tool executor does not run a
+workflow itself; it **returns a value telling the engine what to do**:
+
+```18:22:../llm-workflow/src/LLM/Workflow/Types.hs
+data ToolOutcome
+  = ToolReply Text
+  | ToolWorkflow (Workflow PromptArgs Text) PromptArgs
+  | ToolYield Value
+```
+
+When a tool call yields `ToolWorkflow wf args`, the machine pushes
+`RunWorkflow wf args` and, when it finishes, threads the result back as the
+tool result via the `KTool` continuation:
+
+```196:205:../llm-workflow/src/LLM/Workflow/Workflow.hs
+    RunTool pending _assistantTurn toolCall -> do
+      ...
+      result <- executeTool rt.rtHooks ctx tools toolCall
+      case result of
+        ToolWorkflow workflow args -> do
+          pure $ Stack uAcc (RunWorkflow workflow args) konts
+        ToolReply text -> do
+          pure $ Stack uAcc (RunReturn text) konts
+```
+
+**Lesson for hwfi:** this is a better answer than a synchronous
+"call back into `dispatch`" callback. A model tool call that targets a
+hwfi tool/workflow should become a **reified `RunWorkflow`-like step** that
+the executor runs under its own tracing/caching, with the sub-workflow's
+result fed back to the model. The engine stays in control of every effect;
+the tool layer only names what to run.
+
+### 3.3 Typed output via a mandatory "submit" tool
+
+Instead of provider JSON mode, an agent that must return structured data is
+given a synthetic `submit_<name>` tool whose parameters *are* the output
+schema, and it is required to call it to finish:
+
+```224:234:../llm-workflow/src/LLM/Workflow/Workflow.hs
+      WAgentSubmit @o name agentWithModels mbcid ->
+        let ...
+            submit = mkSomeSubmit (Proxy @o) name "Submit the final structured result."
+            pending = Pending { ..., submitTool = Just submit }
+```
+
+`mkSomeSubmit` builds a `ToolDef` from the type's `autodocodec` schema, and
+`ssDecode` validates the model's submit arguments back into the typed value
+(`src/LLM/Workflow/ToolUtils.hs`). Finishing *without* calling submit is a
+hard error (`submitRequiredError`).
+
+**Lesson for hwfi:** an agent step that must produce a typed record (per
+its `rsigOutputs`) can expose a mandatory submit tool synthesized from the
+same `Type -> JSON Schema` translation used for tool parameters (§4.2).
+This gives type-safe agent output without a second `genObject` round.
+
+### 3.4 Machine state is inspectable data (the resume lever)
+
+Because the loop is a value (`Stack`/`Kont`), "where am I in the agent
+loop" is data, not a Haskell call-stack position. `showKont`, `stackSize`,
+`lookupHistory`, `updateHistory`, and `unwindToCatch`
+(`src/LLM/Workflow/Utils.hs`) are all ordinary folds over the continuation.
+
+**Lesson for hwfi:** this is exactly what makes a *resumable* agent loop
+tractable (§5.2). If the machine state is serialized into the run dir,
+resume becomes "reload the stack and keep going" rather than "re-run the
+whole loop." Two caveats: (a) `llm-workflow` keeps the stack in memory
+only — it does not persist it — so this is architectural inspiration, not
+a solved persistence layer; (b) it relies on `unsafeCoerce` because its
+continuations are heterogeneously typed GADTs. hwfi is *better* positioned
+here: hwfi values are dynamically typed `RValue` with a separate `Type`, so
+a continuation stack over `RValue` is homogeneous and can be serialized
+without `unsafeCoerce`.
+
+### 3.5 First-class recoverable errors and dynamic workflows
+
+- `WCatch`/`KCatch` + `unwindToCatch` give a first-class error boundary:
+  on `RunThrow`, the machine unwinds to the nearest catch frame and
+  substitutes a fallback value. This is the recoverable-error boundary that
+  §5.4 says an agent loop needs, done as a continuation frame rather than a
+  special case.
+- `WLiftW :: (i -> IO (Workflow i' o))` computes a workflow at runtime —
+  i.e. dynamic workflow synthesis, matching spec §13's `builtin/eval-workflow`.
+
+### 3.6 Tool registry, readonly bit, and the same open questions
+
+Agents declare tools by name (`agTools :: [Text]`), resolved against a
+`ToolMap` (`getToolsFromMap`); `ensureAgentTool` injects the submit tool;
+`filterReadonlyTools`/`toolReadonly` drop mutating tools in a readonly run.
+The design note `../llm-workflow/notes/use-utools.md` works through exactly
+the questions we face: hard-fail on unknown tool names, name-collision
+policy, a dedicated error type (`GErrUnknownUTool`), and readonly gating.
+Its answers (fail hard; registered tool overrides legacy; readonly filters)
+are reasonable defaults for hwfi's type-check phase (§5.6).
+
+### 3.7 What `llm-workflow` does *not* solve for us
+
+It has **no persistence, no content-addressed step cache, and no resume** —
+those are hwfi's whole point (spec §8). It also builds workflows as
+hand-written Haskell GADT values, whereas hwfi workflows are
+markdown-defined, type-checked declarations. So we borrow the *evaluator
+shape and the `ToolOutcome` indirection*, not the code, and we still owe
+the hard work in §5.1–§5.2 ourselves.
+
+## 4. What it would take
+
+The provider mechanics are the easy part. The hard part is making
 LLM-chosen, nondeterministic tool calls coexist with hwfi's caching,
-resume, tracing, secret-redaction, and type guarantees. Breakdown below.
+resume, tracing, secret-redaction, and type guarantees.
 
-### 3.1 A new builtin: `builtin/llm-agent`
+### 4.1 Surface: a new builtin `builtin/llm-agent`
 
 Add a builtin alongside the existing LLM tools (spec §6). Rough signature:
 
@@ -117,10 +235,10 @@ builtin/llm-agent :
   -> { text: String, rounds: Int }
 ```
 
-The important argument is `tools`. The engine already has first-class
-`ToolRef`/`WorkflowRef` values (`Hwfi.Type.TyToolRef`/`TyWorkflowRef`,
-resolved to `VRef` at runtime), and `dispatch` in the executor already
-knows how to call a `VRef` target:
+The `tools` argument uses hwfi's existing first-class `ToolRef`/`WorkflowRef`
+values (`Hwfi.Type.TyToolRef`/`TyWorkflowRef`, resolved to `VRef` at
+runtime). The executor's `dispatch` already knows how to call a `VRef`
+target:
 
 ```414:422:src/Hwfi/Runtime/Executor.hs
 dispatch rt stepRef bindings target argMap
@@ -134,28 +252,22 @@ dispatch rt stepRef bindings target argMap
   | otherwise = dispatchResolved rt stepRef bindings target argMap
 ```
 
-So passing declared tools/workflows to the model as a list of refs fits the
-existing type system and dispatch path. This is the natural, type-safe way
-to say "the model may call these."
+So passing declared tools/workflows to the model as a list of refs is
+type-safe and reuses existing dispatch. This is the natural way to say
+"the model may call these."
 
-Because `runBuiltin` currently receives only a `BuiltinEnv` (workspace,
-models, tracer, step, introspect), the new builtin needs a way to re-enter
-the executor to run a chosen tool. That means either:
+Following §3.1–§3.2, the agent loop should **not** live in `Builtins.hs`
+behind a callback. `runBuiltin` only receives a `BuiltinEnv`; a
+model-chosen call needs the full `Runtime`. Implement the agent step in the
+executor, and model that a chosen tool call produces a reified
+"run this ref" step that the executor runs like any nested workflow (so its
+`step-start`/`step-end` events nest under the agent step, §8.3.3.6), rather
+than an opaque IO callback.
 
-- threading a `dispatch`-like callback into `BuiltinEnv` (a
-  `beCallRef :: QName -> Map Ident RValue -> IO (Either RuntimeError RValue)`),
-  or
-- implementing `builtin/llm-agent` directly in the executor rather than in
-  `Builtins.hs`, since only the executor holds the `Runtime`.
+### 4.2 Signature → JSON-schema translation
 
-The second is cleaner: the agent builtin is special because it calls back
-into workflow execution, so it belongs where `Runtime` lives.
-
-### 3.2 Signature → JSON-schema translation
-
-Each ref the model may call needs a `ToolDef` whose `toolParameters` is a
-JSON Schema describing that tool's inputs. We have the resolved input types
-already:
+Each callable ref needs a `ToolDef` whose `toolParameters` is a JSON Schema
+for that callee's inputs. We already have the resolved input types:
 
 ```31:36:src/Hwfi/TypedProject.hs
 data ResolvedSignature = ResolvedSignature
@@ -165,73 +277,58 @@ data ResolvedSignature = ResolvedSignature
   }
 ```
 
-We need a total function `Type -> JSON Schema` over the resolved type
-vocabulary (`Hwfi.Type.Type`): `TyString`, `TyInt`, `TyDouble`, `TyBool`,
-`TyJson`, `TyFileRef`, `TyList`, `TyRecord`, etc. Notes:
+Write a total `Type -> JSON Schema` over hwfi's resolved type vocabulary
+(`Hwfi.Type.Type`): `TyString`/`TyInt`/`TyDouble`/`TyBool` → primitives,
+`TyList` → array, `TyRecord` → object, `TyFileRef` → string (workspace
+path), `TyJson` → unconstrained. Rules:
 
-- `TyFileRef` → `string` (workspace-relative path).
-- `TyJson` → unconstrained (`{}`), or better, require the tool author to
-  narrow it.
-- `TySecret _` inputs **must not** be exposed to the model. A tool that
-  takes a secret cannot be an agent tool (the model can't be trusted to
-  supply a credential, and it would leak into the prompt). Reject at
-  type-check.
-- `TyWorkflowRef`/`TyToolRef` inputs likewise can't be model-supplied.
+- `TySecret _` inputs **must not** be exposed to the model (§5.5, A8);
+  reject a secret-taking callee as an agent tool at type-check.
+- `TyWorkflowRef`/`TyToolRef` inputs can't be model-supplied either.
 
-This mirrors what `llm-simple` does with `autodocodec`
-(`jsonSchemaVia`), but over hwfi's own `Type`, so we control the mapping
-and the redaction rules.
+The same translation drives the mandatory-submit tool of §3.3 when the
+agent step must return a typed `rsigOutputs` record.
 
-### 3.3 Model call → typed hwfi call
+### 4.3 Model call → typed hwfi call
 
-When the model emits a `ToolCall { tcName, tcArguments }`:
+When the model emits `ToolCall { tcName, tcArguments }`:
 
-1. Resolve `tcName` to one of the advertised refs (reject unknown names —
-   `llm-simple`'s loop already returns `"Unknown tool"` for misses, but we
-   want a typed error).
+1. Resolve `tcName` to one of the advertised refs; unknown names hard-fail
+   with a typed error (cf. `../llm-workflow/notes/use-utools.md`).
 2. Parse `tcArguments` (a JSON object) into a `Map Ident RValue` using the
-   callee's declared input types (`coerceFromJson`, which we already use to
+   callee's declared input types (`coerceFromJson`, already used to
    reconstruct inputs on resume). A parse/type failure becomes a tool
-   result the model can see and retry, **not** a run abort — this is a new
-   error-handling posture for the engine (see §4.4).
-3. `dispatch` through the executor. The callee runs as a normal nested
-   workflow/tool, producing its own `step-start`/`step-end` trace events
-   that nest under the agent step (§8.3.3.6).
+   result the model can see and retry — **not** a run abort (§5.4).
+3. Run the callee through the executor as a nested step (§4.1).
 4. Serialize the result `RValue` back to JSON as the tool message content.
 
-### 3.4 Driving the loop
+### 4.4 Driving the loop
 
-Two options:
+Two options, now informed by §3:
 
-**(a) Reuse `llm-simple`'s `LLM.Agent.agentLoop`.** Build a `ToolMap` whose
-`toolExecute` closes over the hwfi dispatch callback, and hand it an
-`Agent`. Pros: the round loop, abort handling, round cap, and turn
-bookkeeping are already written and tested. Cons: it emits its own
-`GenerateEvent`s (not hwfi `TraceEvent`s), its `ToolContext` model differs
-from ours, and we'd adapt `RuntimeArgs`/`Hooks`. We'd also import a much
-larger surface of `llm-simple` than the curated `Hwfi.Compat` currently
-allows (spec §10 keeps the dependency surface deliberately small).
+**(a) Reuse `llm-simple`'s `LLM.Agent.agentLoop`.** Fast to stand up, but it
+emits its own `GenerateEvent`s (not hwfi `TraceEvent`s), and it is a fixed
+recursive loop — it fights the reified-state design that resume needs.
 
-**(b) Write hwfi's own loop over `LLM.Generate`.** Reuse the streaming
-tool-call chunks and write a small loop that emits hwfi trace events and
-dispatches through the executor. More code, but the loop is short (~40
-lines, cf. `agentLoop`) and it keeps trace/caching/redaction fully under
-hwfi's control.
+**(b) Build hwfi's own evaluator** in the `../llm-workflow` style: a
+step/continuation machine over `RValue`, where an LLM turn, a tool call, and
+a sub-workflow are uniform steps, and a model tool call that targets a ref
+becomes a `RunWorkflow`-like step. More code, but it (i) keeps trace/cache/
+redaction under hwfi's control, (ii) unifies with the M6 control-flow work,
+and (iii) makes machine state serializable for resume (§5.2).
 
-Recommendation: **(b)**. The loop is trivial; the value is in hwfi owning
-tracing, caching keys, and redaction. Reusing `agentLoop` would fight the
-persistence model (§4) more than it saves.
+Recommendation: **(b)**, explicitly modelled on `../llm-workflow`'s
+evaluator but over hwfi's dynamically-typed `RValue` (avoiding the
+`unsafeCoerce` that `llm-workflow` needs for its GADT continuations).
 
-## 4. The hard problems
+## 5. The hard problems
 
-These are the reasons this is a milestone, not a patch.
-
-### 4.1 Determinism vs. the step cache
+### 5.1 Determinism vs. the step cache
 
 hwfi's caching and resume assume a **statically known call graph**. A
 step's identity is its step-key:
 
-```315:362:src/Hwfi/Runtime/Executor.hs
+```315:322:src/Hwfi/Runtime/Executor.hs
 -- | Execute a single step, honouring the step cache (§8.1, §8.2):
 --
 --   1. evaluate arguments (with the ambient @ctx@ injected);
@@ -241,26 +338,19 @@ step's identity is its step-key:
 --      cacheable) persist the result under its step-key.
 ```
 
-The step-key is `hash(qname, step-id, resolved args, stable ctx projection,
-callee fingerprint)` (§8.1). An agent step's *behaviour* — which tools it
-calls, in what order, with what args — is chosen by the model and is **not**
-a function of the resolved arguments. Two runs of the same agent step with
-identical inputs can legitimately produce different tool-call sequences.
+An agent step's behaviour — which tools it calls, in what order, with what
+args — is chosen by the model and is **not** a function of the resolved
+arguments. So an agent step cannot be a cacheable black box. Either mark
+`builtin/llm-agent` non-cacheable (like `builtin/introspect`, spec §6/§8.2),
+or design **intra-step caching**: give each model-chosen tool call its own
+sub-key and cache tool results individually while the loop as a whole is not
+cacheable. `classifyCacheable` needs a rule for the agent builtin either
+way.
 
-Consequences:
+### 5.2 Resume semantics
 
-- **An agent step cannot be cacheable as a black box.** Either mark
-  `builtin/llm-agent` non-cacheable (like `builtin/introspect`, which
-  "marks the calling step non-cacheable", spec §6 / §8.2), or design a
-  sub-step caching scheme where each model-triggered tool call gets its own
-  step-key and is individually cacheable while the loop itself is not.
-- The classifier `classifyCacheable` (consulted in `execStep`) needs a rule
-  for the agent builtin.
-
-### 4.2 Resume semantics
-
-Resume replays the trace and skips cacheable steps with a persisted result;
-non-cacheable steps always re-run:
+Resume replays the trace, skips cacheable steps with a persisted result, and
+re-runs non-cacheable steps:
 
 ```364:374:src/Hwfi/Runtime/Executor.hs
 cacheHit :: Runtime -> Type -> Maybe Text -> IO (Maybe RValue)
@@ -273,97 +363,109 @@ cacheHit rt resultTy mKey
         pure (mJson >>= either (const Nothing) Just . coerceFromJson resultTy)
 ```
 
-If an agent step is non-cacheable, resuming after a crash **re-runs the
-entire agent loop from scratch**, re-issuing every model call (cost) and
-re-executing every tool call (side effects — e.g. `builtin/write-file`).
-For a long agent loop this is expensive and potentially unsafe.
+If an agent step is merely non-cacheable, resuming after a crash re-runs the
+**entire** loop — re-issuing every model call (cost) and re-executing every
+tool call (side effects like `builtin/write-file`). Two complementary fixes,
+both enabled by §3:
 
-The principled fix is **intra-step caching**: give each model-chosen tool
-call a deterministic sub-key (e.g.
-`hash(agent-step-key, round-index, tcName, canonical(tcArguments))`) and
-cache tool results individually. On resume, the loop replays: model calls
-whose *inputs* match are served from cache, tool calls whose sub-key hits
-are skipped. This is the same content-addressing idea as `RunStore`'s step
-cache, applied one level down. It is real design work and touches
-`StepKey`, `RunStore`, and the trace schema.
+- **Intra-step content-addressed caching.** Give each model call and each
+  tool call a deterministic sub-key
+  (`hash(agent-step-key, round, tcName, canonical(tcArguments))`) and cache
+  results individually — the same idea as `RunStore`'s step cache, one level
+  down. On resume, matching model/tool calls are served from cache.
+- **Serialized machine state.** Because the loop is reified as a
+  step/continuation value (§3.4), the run dir can persist the current
+  `Stack`, and resume reloads it. hwfi's `RValue`/`Type` split makes this
+  serializable without `unsafeCoerce`. This is the larger change and should
+  be its own sub-milestone.
 
-### 4.3 Tracing
+### 5.3 Tracing
 
-New trace event bodies are needed so `hwfi show` and `ctx.trace` can
-represent an agent loop: something like `agent-round-start`,
-`agent-tool-call` (name + redacted args), `agent-tool-result`,
-`agent-round-end`, and the final answer. `EventBody` (in
-`Hwfi.Runtime.Trace`) plus `eventToJson`/`eventFromJson`/`renderEvent` all
-need the new constructors. Redaction (§8.3.4, A8) must apply to tool
-arguments and results the same way it applies to step args today
-(`redactedJson` in `execStep`).
+New `EventBody` constructors are needed (in `Hwfi.Runtime.Trace`) so
+`hwfi show` and `ctx.trace` can represent an agent loop: e.g.
+`agent-round-start`, `agent-tool-call` (name + redacted args),
+`agent-tool-result`, `agent-round-end`, final answer — plus
+`eventToJson`/`eventFromJson`/`renderEvent`. Redaction (§8.3.4, A8) must
+apply to tool arguments and results exactly as `redactedJson` applies to
+step args today.
 
-### 4.4 Error handling posture
+### 5.4 Error-handling posture
 
-v1 aborts on the first error ("Control-flow-driven error handling
-(`try`/recover) … deferred; v1 aborts on the first error", spec §13). But
-an agent loop *needs* to turn a failed tool call into a tool message the
-model can react to and retry — otherwise a single malformed tool call kills
-the run. So the agent builtin introduces a **localized, recoverable error
-boundary** inside an otherwise abort-on-error engine. We must decide which
-failures are recoverable (bad tool arguments, tool returning an error
-result) vs. fatal (workspace lock lost, provider auth failure). This is a
-deliberate, scoped exception to the global policy and should be documented
-as such.
+v1 aborts on the first error (spec §13). An agent loop needs to turn a
+failed tool call into a tool message the model can react to and retry —
+otherwise one malformed call kills the run. So the agent step introduces a
+**localized, recoverable error boundary**. `../llm-workflow` models this
+cleanly as a `WCatch`/`KCatch` continuation frame (§3.5); hwfi should adopt
+the same first-class approach rather than a special case. We must still
+classify which failures are recoverable (bad tool args, tool error result)
+vs. fatal (lock lost, provider auth failure).
 
-### 4.5 Sandbox and secrets
+### 5.5 Sandbox and secrets
 
-- Tools the model calls still run through hwfi's sandboxed `Workspace`, so
-  path-traversal protection (§7.1) is preserved for free — provided we
-  route through the executor and do **not** expose `llm-simple`'s FS tools
+- Tools the model calls run through hwfi's sandboxed `Workspace`, so
+  path-traversal protection (§7.1) is preserved for free — provided we route
+  through the executor and do **not** expose `llm-simple`'s FS tools
   directly.
-- `Secret<_>` inputs must never be model-supplied or interpolated into the
-  prompt (§5.5, A8). Enforced at type-check (§3.2 above): a tool with a
-  secret parameter is not eligible as an agent tool.
-- The introspection escape hatch (`builtin/introspect`) exposes the whole
-  run (redacted). If it were reachable as an agent tool the model could
-  pull the entire trace/bindings into its context; probably it should be
-  disallowed as an agent tool.
+- `Secret<_>` inputs must never be model-supplied or interpolated (§5.5,
+  A8) — enforced at type-check (§4.2).
+- A readonly bit on tools/workflows (as `llm-workflow` uses,
+  `filterReadonlyTools`) lets a readonly agent run drop mutating tools.
+- `builtin/introspect` probably should not be reachable as an agent tool
+  (it exposes the whole run to the model's context).
 
-### 4.6 Type-checking the new builtin
+### 5.6 Type-checking the new builtin
 
 `Hwfi.Check.Builtins` and `Hwfi.Check.Graph` (`builtinFingerprint`) must
-learn `builtin/llm-agent`, including validating that every element of
-`tools` is a `ToolRef`/`WorkflowRef` and that none of the referenced
-callees take secrets. The import graph checker already rejects circular
-tool imports (spec §12); an agent tool set can reintroduce cycles at
-runtime (model calls A which the agent-loop lets call B which calls A), so
-a recursion/round cap is the safety net, not the type checker.
+learn `builtin/llm-agent`, validating that every element of `tools` is a
+`ToolRef`/`WorkflowRef` and that no referenced callee takes secrets. Runtime
+recursion (model calls A → agent lets A call B → B calls A) is bounded by
+the round cap, not the type checker; the existing circular-import check
+(spec §12) does not cover model-driven cycles.
 
-## 5. Proposed milestone shape
+## 6. Proposed milestone shape
 
 Ordered so each step is independently testable:
 
 1. **Schema translation** `Type -> JSON Schema`, with secret/ref rejection.
-   Pure, unit-testable.
-2. **Executor callback** so a builtin can re-enter dispatch
-   (`beCallRef`), or move the agent builtin into the executor.
-3. **`builtin/llm-agent`** with hwfi's own loop over `LLM.Generate`,
-   marked non-cacheable initially. Type-check + graph fingerprint support.
-4. **Trace events** for rounds/tool-calls/results, with redaction, plus
+   Pure, unit-testable. Reused for both tool params and submit output.
+2. **Evaluator refactor**: express step execution as a reified
+   step/continuation machine over `RValue` (modelled on
+   `../llm-workflow`), so tools, sub-workflows, and — later — control flow
+   share one loop. This is the foundational change.
+3. **`builtin/llm-agent`** driving that machine over `LLM.Generate`, with
+   model tool calls reified as `RunWorkflow`-style steps; marked
+   non-cacheable initially. Type-check + graph fingerprint support.
+4. **Mandatory submit tool** for typed agent output (§3.3).
+5. **Trace events** for rounds/tool-calls/results, with redaction, plus
    `hwfi show` rendering and `eventFromJson` round-trip.
-5. **Intra-step caching** (§4.2): per-tool-call and per-model-call
-   sub-keys, so resume doesn't replay a whole loop. This is the largest and
-   should be its own sub-milestone.
-6. **Docs**: promote the relevant part of spec §13 into a real §6 entry and
-   an assertion (A-series) for the loop behaviour.
+6. **Intra-step + serialized-state resume** (§5.2). Largest; own
+   sub-milestone.
+7. **Docs**: promote the relevant part of spec §13 into a real §6 entry and
+   an A-series assertion for the loop behaviour.
 
-## 6. Recommendation
+## 7. Recommendation
 
-The feature is worth building and fits the type system cleanly (refs +
-dispatch already exist). The provider loop is small. **Do not** try to
-bolt on `llm-simple`'s `LLM.Agent` and FS tools wholesale — that fights the
-persistence and redaction model and widens the dependency surface `spec
-§10` deliberately keeps narrow. Instead, synthesize `ToolDef`s from hwfi
-signatures, drive a thin loop over `LLM.Generate`, and route every
-model-chosen call back through `Hwfi.Runtime.Executor`.
+Build it, and use `../llm-workflow` as the architectural reference. The
+feature fits hwfi's type system cleanly (refs + `dispatch` already exist),
+and `llm-workflow` proves the control-flow shape works on top of
+`llm-simple`.
 
-The genuine cost is **not** the loop — it is reconciling nondeterministic,
-model-driven calls with hwfi's deterministic caching/resume contract
-(§4.1–4.2) and introducing a scoped recoverable-error boundary (§4.4).
-Those two decisions should be settled before any code is written.
+Two firm positions, both reinforced by the prior art:
+
+1. **Do not adopt `llm-simple`'s `LLM.Agent` loop or FS tools wholesale.**
+   Synthesize `ToolDef`s from hwfi signatures, and route every model-chosen
+   call back through `Hwfi.Runtime.Executor`. The FS tools bypass hwfi's
+   sandbox/trace/typing; the fixed recursive loop bypasses the reified
+   state that resume needs.
+2. **Build one evaluator, not a bolted-on loop.** Model step execution as a
+   defunctionalized step/continuation machine over `RValue`, exactly as
+   `../llm-workflow` does over its `Final`/`PromptArgs` types — but without
+   `unsafeCoerce`, since hwfi values are already dynamically typed. Then the
+   agent tool loop, sub-workflow calls, and the M6 control-flow constructs
+   (`if`/`foreach`/`par`) are one mechanism.
+
+The genuine cost is **not** the loop — `llm-workflow` shows it is small. It
+is (a) reconciling nondeterministic model-driven calls with hwfi's
+deterministic caching/resume contract (§5.1–§5.2), which `llm-workflow`
+does *not* solve because it has no persistence, and (b) making the reified
+machine state serializable for resume. Settle those two before writing code.
