@@ -5,34 +5,7 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M2: Parsing and AST
-
-- [ ] 2.1 `Hwfi.Parse.Markdown` on top of `commonmark-hs`: split file into
-      frontmatter YAML + body blocks + fenced `step` blocks with source
-      positions
-- [ ] 2.2 Define core AST modules: `Hwfi.Ast.Type`, `Hwfi.Ast.Expr`,
-      `Hwfi.Ast.Step`, `Hwfi.Ast.Workflow`, `Hwfi.Ast.Tool`,
-      `Hwfi.Ast.TypeAlias`, `Hwfi.Ast.Project`
-- [ ] 2.3 Frontmatter parser (YAML) → `Signature { inputs, outputs, imports }`;
-      `TypeExpr` sub-parser per spec §3.4 frontmatter grammar
-- [ ] 2.4 Type-alias file parser (spec §2.1): `kind: type-alias`,
-      `name`, `definition` → `Hwfi.Ast.TypeAlias`
-- [ ] 2.5 Step DSL parser (`megaparsec`) implementing spec §3.4 EBNF:
-      statements, binder + optional `@id`, discard `_ <-`, explicit
-      `return { ... }`, comments (`--`), source-position tracking
-- [ ] 2.6 Expression parser per §3.4: literals, short/long strings with
-      `${...}` interpolation, lists, records, refs with field/index
-      access, bare qnames, `@self#slug`; distinguish bare-ref vs
-      in-string interpolation positions (§3.2.1)
-- [ ] 2.6b `TypeExpr` parser supports `QName` alias references (§3.4)
-- [ ] 2.7 Markdown-section resolver: slug computation (H2/H3 → slug per
-      §3.4) and raw-content extraction for `@self#slug`
-- [ ] 2.8 Project loader: walk project directory, build
-      `Map QualifiedName Declaration`, reject multi-declaration files;
-      classify declarations by kind (workflow/tool/type-alias/prompt)
-- [ ] 2.9 Golden tests: fixture projects under `test/fixtures/parse/`
-
-## Next — M3: Type checker
+## Now — M3: Type checker
 
 - [ ] 3.1 Type representation (`Hwfi.Type`) including `Context`, `Trace`,
       `TraceEvent`, `Secret<T>`, `WorkflowRef`, `ToolRef`
@@ -127,3 +100,7 @@ _Move items here temporarily, then archive to
       hspec suite, CLI stub, `project.json` parser, `KeyStore`, model
       catalog loader + provider-key validation. `cabal build`/`cabal test`
       green. (2026-07-07)
+- [x] M2 Parsing and AST (2.1–2.9): AST + `Hwfi.Source`; markdown/
+      frontmatter/type/expr/step/type-alias/section/project parsers on
+      `commonmark-hs` + `megaparsec`; §9.1 diagnostics; 41 tests + parse
+      fixtures. (2026-07-07)

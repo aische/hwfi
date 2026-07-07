@@ -27,25 +27,49 @@ library
     import:           opts
     hs-source-dirs:   src
     exposed-modules:
+        Hwfi.Ast.Expr
+        Hwfi.Ast.Name
+        Hwfi.Ast.Project
+        Hwfi.Ast.Step
+        Hwfi.Ast.Tool
+        Hwfi.Ast.Type
+        Hwfi.Ast.TypeAlias
+        Hwfi.Ast.Workflow
         Hwfi.Cli
         Hwfi.Compat
+        Hwfi.Parse.Expr
+        Hwfi.Parse.Frontmatter
+        Hwfi.Parse.Lexer
+        Hwfi.Parse.Markdown
+        Hwfi.Parse.Project
+        Hwfi.Parse.Section
+        Hwfi.Parse.Step
+        Hwfi.Parse.Type
+        Hwfi.Parse.TypeAlias
         Hwfi.Project.Manifest
         Hwfi.Runtime.KeyStore
         Hwfi.Runtime.ModelCatalog
         Hwfi.Runtime.Provider
         Hwfi.Runtime.Secret
+        Hwfi.Source
     build-depends:
         base                 ^>=4.18,
         aeson                >=2.0  && <2.3,
         bytestring           >=0.11 && <0.12,
+        commonmark           >=0.2  && <0.3,
         containers           ^>=0.6.7,
         directory            >=1.3  && <1.4,
         dotenv               >=0.11 && <0.13,
         filepath             >=1.4  && <1.6,
         llm-simple,
+        megaparsec           >=9.0  && <10,
         mtl                  >=2.3  && <2.4,
         optparse-applicative >=0.16 && <0.19,
-        text                 >=1.2  && <2.2
+        parsec               >=3.1  && <3.2,
+        parser-combinators   >=1.2  && <1.4,
+        scientific           >=0.3  && <0.4,
+        text                 >=1.2  && <2.2,
+        yaml                 >=0.11 && <0.12
 
 executable hwfi
     import:           opts
@@ -61,9 +85,16 @@ test-suite hwfi-test
     hs-source-dirs:   test
     main-is:          Spec.hs
     other-modules:
+        Hwfi.Parse.ExprSpec
+        Hwfi.Parse.MarkdownSpec
+        Hwfi.Parse.ProjectSpec
+        Hwfi.Parse.SectionSpec
+        Hwfi.Parse.StepSpec
+        Hwfi.Parse.TypeSpec
         Hwfi.Project.ManifestSpec
         Hwfi.Runtime.KeyStoreSpec
         Hwfi.Runtime.ProviderSpec
+        Hwfi.SourceSpec
     build-depends:
         base,
         aeson,
@@ -73,6 +104,7 @@ test-suite hwfi-test
         filepath   >=1.4 && <1.6,
         hspec      >=2.10 && <2.12,
         hwfi,
+        megaparsec >=9.0 && <10,
         temporary  >=1.3 && <1.4,
         text
     build-tool-depends: hspec-discover:hspec-discover

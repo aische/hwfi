@@ -4,40 +4,45 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-**M1 (project skeleton) is complete.** The cabal project builds, the
-`llm-simple` local dependency is wired, the CLI parses all four commands,
-and the runtime foundations (key store, model catalog loader, project
-manifest) are implemented and unit-tested. Ready to start **M2: parsing
-and AST**.
+**M2 (parsing and AST) is complete.** The engine now parses a whole
+project — frontmatter signatures, the step DSL, expressions, type
+expressions, type aliases, and markdown sections — into a typed AST, with
+spec §9.1 diagnostics. Ready to start **M3: type checker**.
 
 ## Done recently
 
-- Cabal project (`hwfi.cabal`, `cabal.project`, GHC2021): library +
-  `hwfi` executable + `hspec` test-suite. `cabal build` and `cabal test`
-  both green (14 examples).
-- `Hwfi.Compat`: curated re-exports of the consumed `llm-simple` surface
-  (`LLM.Generate`, `LLM.Providers.OpenAI`, `LLM.Load.ModelCatalog`);
-  confirms 1.2 wiring compiles.
-- `Hwfi.Cli`: `optparse-applicative` parser for `check`/`run`/`resume`/
-  `show` incl. `--workspace`, `--env-file`, repeatable `--input k=v|k=@f`,
-  `--input-json`, `--entry`. Commands are stubs (exit 2, "not implemented").
-- `Hwfi.Project.Manifest`: `project.json` parser (strict fields, optional
-  `env` → `[]`) + `validateEnvPresence` for strict env presence (A14).
-- `Hwfi.Runtime.Secret`: opaque `Secret a` with redacting `Show`.
-- `Hwfi.Runtime.Provider`: closed provider sum type + env-var mapping.
-- `Hwfi.Runtime.KeyStore`: `.env` parsing via `Configuration.Dotenv.parseFile`,
-  precedence `--env-file` > `<project>/.env` > process env, no process-env
-  injection. Keys typed `Secret Text`.
-- `Hwfi.Runtime.ModelCatalog`: required `model-catalog.json` loader wrapping
-  `loadModelCatalog`; `validateProviderKeys` for A12 (spec-verbatim error).
+- AST modules: `Hwfi.Ast.{Name,Type,Expr,Step,Workflow,Tool,TypeAlias,Project}`
+  and `Hwfi.Source` (positions, spans, §9.1 diagnostic renderer).
+- `Hwfi.Parse.Markdown` on `commonmark-hs`: custom `IsInline`/`IsBlock`
+  instances capture headings and fenced `step` blocks with absolute source
+  lines; frontmatter is blanked (not removed) to keep positions aligned.
+- `Hwfi.Parse.Lexer`: shared megaparsec lexer with two space consumers
+  (`sc` intra-statement, `scn` inside brackets); `runParserAt` for
+  file-absolute positions; error-bundle → `[Diagnostic]`.
+- Parsers: `Type` (incl. `QName` alias refs), `Expr` (bare-ref vs
+  in-string interpolation per §3.2.1, short/long strings, escapes),
+  `Step` (binders, `@id`, discard rule, `return`, comments).
+- `Hwfi.Parse.Frontmatter` (YAML → `Signature`, TypeExpr sub-parser),
+  `Hwfi.Parse.TypeAlias`, `Hwfi.Parse.Section` (slug + `@self#slug` raw
+  content), `Hwfi.Parse.Project` (walks dirs, classifies by kind, builds
+  `Map QName Declaration`).
+- Tests: 41 examples (parsers, sections, §9.1 renderer, fixture projects
+  under `test/fixtures/parse/`). `cabal build`/`cabal test` green.
 
 ## Blockers
 
 - None.
 
+## Notes / decisions
+
+- YAML requires quoting type strings that contain `:` (record types),
+  e.g. `definition: "Record<{ role: String }>"`. Spec §2.1/§3.4 examples
+  show them unquoted; treat quoting as required in real files.
+- `Tool` mirrors `Workflow` structurally in v1 (distinct type, shared
+  `Signature`/`Section`). `DeclPrompt` is supported (kind: prompt) though
+  v1 has no cross-file prompt reference.
+
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M2: Parsing and AST**. Start with 2.1
-(`commonmark-hs` markdown splitting) and 2.2 (core AST modules).
-Note: `commonmark-hs` is not yet in the local cabal cache; first M2 build
-will need network to fetch it.
+See [TASKS.md](TASKS.md) → **M3: Type checker**. Start with 3.1 (type
+representation) and 3.2 (alias resolution + cycle detection).
