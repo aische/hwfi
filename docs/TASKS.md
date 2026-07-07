@@ -26,13 +26,16 @@ roughly ordered but can be reshuffled.
       in `docs/log/`
 - [ ] 2.2 Define core AST modules: `Wfe.Ast.Type`, `Wfe.Ast.Expr`,
       `Wfe.Ast.Step`, `Wfe.Ast.Workflow`, `Wfe.Ast.Tool`, `Wfe.Ast.Project`
-- [ ] 2.3 Frontmatter parser (YAML) → `Signature { inputs, outputs, imports }`
-- [ ] 2.4 Step DSL parser (`megaparsec`): statements `<bind> <- <qname>(args)`,
-      optional `@id`, discard `_ <-`, explicit `return { ... }` blocks
-- [ ] 2.5 Expression parser: literals, interpolated strings, triple-quoted
-      strings, lists, records, `${...}` refs, bare qnames, `@self#slug`
-- [ ] 2.6 Markdown-section resolver: map H2/H3 slugs to raw content for
-      `@self#slug`
+- [ ] 2.3 Frontmatter parser (YAML) → `Signature { inputs, outputs, imports }`;
+      `TypeExpr` sub-parser per spec §3.4 frontmatter grammar
+- [ ] 2.4 Step DSL parser (`megaparsec`) implementing spec §3.4 EBNF:
+      statements, binder + optional `@id`, discard `_ <-`, explicit
+      `return { ... }`, comments (`--`)
+- [ ] 2.5 Expression parser per §3.4: literals, short/long strings with
+      `${...}` interpolation, lists, records, refs with field/index
+      access, bare qnames, `@self#slug`
+- [ ] 2.6 Markdown-section resolver: slug computation (H2/H3 → slug per
+      §3.4) and raw-content extraction for `@self#slug`
 - [ ] 2.7 Project loader: walk project directory, build
       `Map QualifiedName Declaration`, reject multi-declaration files
 - [ ] 2.8 Golden tests: fixture projects under `test/fixtures/parse/`
@@ -78,7 +81,9 @@ roughly ordered but can be reshuffled.
       only; canonical JSON for args
 - [ ] 5.3 Step result cache read/write; skip cached cacheable steps on
       resume; always re-execute non-cacheable steps
-- [ ] 5.4 Append-only `trace.jsonl` with the event schema in spec §8.3
+- [ ] 5.4 Append-only `trace.jsonl` writer implementing spec §8.3:
+      variant encoders, monotonic `seq`, ISO-8601 `at`, ordering
+      invariants, `RunEnd` on resume for prior crashed run
 - [ ] 5.5 `Secret<T>` redaction in trace serialisation
 - [ ] 5.6 Workspace lock file to prevent concurrent runs
 - [ ] 5.7 `wfe resume` command; crash-injection test satisfying A4 and A7

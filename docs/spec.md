@@ -145,6 +145,124 @@ summary  <- builtin/llm-generate(
 ```
 ````
 
+### 3.4 Grammar (EBNF)
+
+Notation: `X*` zero-or-more, `X+` one-or-more, `X?` optional, `|`
+alternation, `"..."` literal terminal, `<lower>` non-terminal, `(...)`
+grouping. `\n` denotes a line terminator.
+
+```
+(* --- Step block (contents of a ```step fenced code block) --- *)
+
+StepBlock       = Sep? Statement (Sep+ Statement)* Sep? ;
+Statement       = ReturnStmt | StepStmt ;
+StepStmt        = Binder "<-" QName "(" ArgList? ")" StepId? ;
+Binder          = Ident | "_" ;
+StepId          = "@" Ident ;
+ReturnStmt      = "return" Record ;
+
+ArgList         = Arg ("," Arg)* ","? ;
+Arg             = Ident "=" Expr ;
+
+(* --- Names --- *)
+
+QName           = Segment ("/" Segment)+     (* declared tool/workflow *)
+                | Ident ;                    (* bare, only where a
+                                                ToolRef/WorkflowRef value
+                                                is in scope *)
+Segment         = Ident ;
+Ident           = Letter (Letter | Digit | "-" | "_")* ;
+
+(* --- Expressions --- *)
+
+Expr            = Literal
+                | Ref
+                | List
+                | Record
+                | SelfRef
+                | QName ;                    (* bare ref *)
+
+Literal         = StringLit | NumberLit | BoolLit | NullLit ;
+BoolLit         = "true" | "false" ;
+NullLit         = "null" ;
+NumberLit       = "-"? Digit+ ("." Digit+)? Exp? ;
+Exp             = ("e" | "E") ("+" | "-")? Digit+ ;
+
+StringLit       = ShortString | LongString ;
+ShortString     = "\"" (ShortChar | Interp)* "\"" ;
+LongString      = "\"\"\"" (LongChar | Interp)* "\"\"\"" ;
+ShortChar       = <any Unicode char except '"', '\', '\n'> | Escape ;
+LongChar        = <any Unicode char except '"""'>         | Escape ;
+Escape          = "\\" ( "\"" | "\\" | "n" | "r" | "t"
+                       | "u" HexDigit HexDigit HexDigit HexDigit ) ;
+Interp          = "${" RefPath "}" ;
+
+Ref             = "${" RefPath "}" ;
+RefPath         = Ident (FieldAccess | IndexAccess)* ;
+FieldAccess     = "." Ident ;
+IndexAccess     = "[" NumberLit "]" ;
+
+List            = "[" (Expr ("," Expr)* ","?)? "]" ;
+Record          = "{" (Field ("," Field)* ","?)? "}" ;
+Field           = Ident "=" Expr ;
+
+SelfRef         = "@self#" Slug ;
+Slug            = (Letter | Digit | "-" | "_")+ ;
+
+(* --- Lexical --- *)
+
+Letter          = "A".."Z" | "a".."z" ;
+Digit           = "0".."9" ;
+HexDigit        = Digit | "a".."f" | "A".."F" ;
+
+Sep             = (Comment? "\n")+ ;          (* one or more line breaks *)
+Comment         = "--" <any char except "\n">* ;
+Whitespace      = (" " | "\t")+ ;             (* insignificant between
+                                                 tokens, ignored by parser *)
+```
+
+Additional lexical rules:
+
+- Reserved keywords (cannot be `Ident`): `return`, `true`, `false`,
+  `null`, `_`.
+- Horizontal whitespace and comments are permitted between any two
+  adjacent tokens without changing meaning.
+- Inside `(...)`, `[...]`, `{...}`, `"..."`, and `"""..."""`, `\n` is
+  permitted freely and does **not** terminate a `Statement`.
+- Outside those brackets, `\n` (or a comment ending in `\n`) is the
+  `Statement` terminator. A trailing separator after the last statement
+  is allowed.
+- Slug matching for `SelfRef` is case-insensitive; slugs are computed
+  from H2/H3 heading text by lowercasing, replacing runs of non-word
+  characters with `-`, and trimming leading/trailing `-`.
+- Two statements binding the same `Ident` are a static error (no
+  shadowing).
+
+Frontmatter grammar (YAML, no separate EBNF; validated against a fixed
+schema):
+
+```
+Frontmatter :=
+  name       : String                        (* must equal the file's
+                                                qualified name *)
+  inputs     : Map<Ident, TypeExpr>          (* optional, defaults to {} *)
+  outputs    : Map<Ident, TypeExpr>          (* optional, defaults to {} *)
+  imports    : List<QName>                   (* optional, defaults to [] *)
+
+TypeExpr    := "String" | "Int" | "Double" | "Bool"
+             | "Json" | "Bytes" | "FileRef"
+             | "List<" TypeExpr ">"
+             | "Record<{" (Ident ":" TypeExpr) ("," Ident ":" TypeExpr)* "}>"
+             | "WorkflowRef<" TypeExpr "," TypeExpr ">"
+             | "ToolRef<"     TypeExpr "," TypeExpr ">"
+             | "Secret<"      TypeExpr ">"
+             | "Context" | "Trace" | "TraceEvent"
+```
+
+`TypeExpr` is a small string language embedded in YAML string values.
+It is parsed by the same lexer/parser as the step DSL, restricted to
+type productions.
+
 ## 4. Control flow (v1)
 
 - Sequential steps only.
@@ -304,15 +422,113 @@ the AST node.
 
 ### 8.3 Trace event schema
 
-`trace.jsonl` is append-only, one JSON object per line, one of:
+`trace.jsonl` is append-only, one JSON object per line. Each object is
+a tagged variant of `TraceEvent`. The same ADT is exposed to workflows
+via `ctx.trace : List<TraceEvent>` (§5.2), so agents can pattern-match
+on events. This is a load-bearing API surface — the shape below is
+stable across v1.
 
-- `{ tag: "run-start",   run_id, entrypoint, inputs, at }`
-- `{ tag: "step-start",  qname, step_id, args, at }`
-- `{ tag: "step-end",    qname, step_id, result, cached: bool, at }`
-- `{ tag: "llm-call",    model, system, prompt, response, tokens, at }`
-- `{ tag: "file-io",     op, path, bytes, at }`
-- `{ tag: "error",       qname, step_id, message, at }`
-- `{ tag: "run-end",     run_id, status, at }`
+#### 8.3.1 Common fields
+
+Every event carries:
+
+| Field   | Type       | Notes                                                |
+|---------|------------|------------------------------------------------------|
+| `tag`   | `String`   | Discriminator; one of the values listed below.       |
+| `seq`   | `Int`      | Monotonic per-run counter, starts at 0.              |
+| `at`    | `String`   | UTC ISO-8601 with millisecond precision, `Z` suffix. |
+
+Events that occur inside a step also carry:
+
+| Field     | Type     | Notes                                             |
+|-----------|----------|---------------------------------------------------|
+| `qname`   | `String` | Fully-qualified name of the enclosing workflow.   |
+| `step_id` | `String` | Step id within that workflow.                     |
+
+#### 8.3.2 Variants
+
+```
+TraceEvent =
+  | RunStart {
+      tag          : "run-start",
+      seq, at,
+      run_id       : String,
+      entrypoint   : String,       -- qname of entry workflow
+      inputs       : Json,         -- root inputs, secrets redacted
+      project_hash : String        -- content hash of the project dir
+    }
+  | StepStart {
+      tag        : "step-start",
+      seq, at, qname, step_id,
+      args       : Json,           -- resolved args, secrets redacted
+      cacheable  : Bool            -- static classification (§8.1)
+    }
+  | StepEnd {
+      tag         : "step-end",
+      seq, at, qname, step_id,
+      result      : Json,          -- secrets redacted
+      cached      : Bool,          -- true iff resolved from step cache
+      duration_ms : Int            -- 0 when cached = true
+    }
+  | LlmCall {
+      tag        : "llm-call",
+      seq, at, qname, step_id,
+      model      : String,
+      system     : String,         -- may be redacted per §5.5
+      prompt     : String,         -- may be redacted per §5.5
+      response   : String,         -- may be redacted per §5.5
+      tokens_in  : Int,
+      tokens_out : Int
+    }
+  | FileIo {
+      tag     : "file-io",
+      seq, at, qname, step_id,
+      op      : "read" | "write" | "list",
+      path    : String,            -- workspace-relative
+      bytes   : Int                -- payload size; 0 for "list"
+    }
+  | Error {
+      tag     : "error",
+      seq, at, qname, step_id,
+      message : String,
+      kind    : "type" | "io" | "sandbox" | "llm" | "user" | "internal"
+    }
+  | RunEnd {
+      tag    : "run-end",
+      seq, at,
+      run_id : String,
+      status : "completed" | "crashed" | "aborted"
+    }
+```
+
+#### 8.3.3 Ordering and correlation invariants
+
+1. Every trace begins with exactly one `RunStart`. A cleanly-terminated
+   trace ends with exactly one `RunEnd`. A crashed/aborted trace may be
+   missing `RunEnd`; on resume, the runtime appends `RunEnd` with
+   `status = "crashed"` or `"aborted"` before appending new events for
+   the resumed portion.
+2. `seq` is strictly increasing within a file and gap-free. After
+   resume, numbering continues from the last `seq + 1`.
+3. For each executed step, exactly one `StepStart` precedes either
+   exactly one `StepEnd` (success) or exactly one `Error` (failure),
+   both matched by `(qname, step_id)`.
+4. Cached steps (skipped on resume) still emit `StepStart` and
+   `StepEnd` with `cached = true`, `duration_ms = 0`. This keeps trace
+   shape uniform for consumers regardless of caching.
+5. `LlmCall` and `FileIo` events occur strictly between their step's
+   `StepStart` and its `StepEnd`/`Error`, tagged with the same
+   `(qname, step_id)`.
+6. Sub-workflow calls nest: the callee's `StepStart`/`StepEnd` events
+   appear between the caller's `StepStart` and `StepEnd`. Consumers can
+   reconstruct the call tree from `(qname, step_id)` chronology.
+
+#### 8.3.4 Redaction
+
+Any field whose statically-inferred type contains `Secret<_>` is
+replaced with the string `"<secret:$name>"` on serialisation, where
+`$name` is the source binding name if known, otherwise `?`. Redaction
+happens once, at the writer, before the line is appended.
 
 `Secret<_>`-typed values in `args`, `result`, `system`, `prompt`,
 `response` are redacted per §5.5.
