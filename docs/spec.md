@@ -143,6 +143,38 @@ Rules:
 
 No arithmetic, no conditionals, no lambdas in v1.
 
+#### 3.2.1 References vs. string interpolation
+
+There are two syntactically distinct positions for a `${...}` reference,
+with different typing:
+
+- **Bare reference** — a `${ref}` that *is* the whole expression (e.g.
+  `text = ${contents.text}`). Its type is exactly the referenced value's
+  type; no conversion happens. This is how structured values (records,
+  lists, `Json`) are passed between steps.
+- **Interpolated reference** — a `${ref}` appearing *inside* a string
+  literal (e.g. `"Summarise:\n${contents.text}"`). The referenced value
+  is **rendered to text** and spliced into the surrounding string. The
+  whole literal has type `String`.
+
+Rendering rules for interpolation (total and statically decidable):
+
+| Referenced type      | Rendered as                                    |
+|----------------------|------------------------------------------------|
+| `String`             | verbatim                                        |
+| `Int`, `Double`      | canonical decimal literal                       |
+| `Bool`               | `true` / `false`                                |
+| `null` (literal)     | `null`                                          |
+| `FileRef`            | its workspace-relative path                     |
+| `Json`, `List<_>`, `Record<{…}>`, `Trace`, `TraceEvent`, `Context` | compact canonical JSON (sorted keys) |
+| `Bytes`              | **static error** — no implicit text encoding    |
+| `Secret<_>`          | **static error** — see §5.5                     |
+
+Because the referenced type is always known at check time, interpolation
+never produces a runtime type error; only `Bytes` and `Secret<_>` in an
+interpolation position are rejected, and that rejection happens at
+`hwfi check`.
+
 ### 3.3 Example
 
 ````markdown
@@ -287,11 +319,18 @@ TypeExpr    := "String" | "Int" | "Double" | "Bool"
              | "ToolRef<"     TypeExpr "," TypeExpr ">"
              | "Secret<"      TypeExpr ">"
              | "Context" | "Trace" | "TraceEvent"
+             | QName ;                    (* reference to a type alias
+                                             declared under types/, §2.1 *)
 ```
 
 `TypeExpr` is a small string language embedded in YAML string values.
 It is parsed by the same lexer/parser as the step DSL, restricted to
-type productions.
+type productions. A `QName` in type position must resolve to a
+`type-alias` declaration (§2.1); resolution and cycle detection happen
+during type-checking. Note the deliberate punctuation split: **types**
+use `:` (as in `Record<{ name: String }>` and YAML frontmatter),
+**values** use `=` (as in the step DSL `{ name = ... }` and `key = expr`
+arguments). The two parsers must not conflate them.
 
 ## 4. Control flow (v1)
 
@@ -369,16 +408,48 @@ sensitive value. Rules:
 1. Every step's `<qname>` must resolve to a declared workflow, tool, or a
    `WorkflowRef`/`ToolRef` value in scope.
 2. `args` structure must match the callee's declared inputs.
-3. Every `${...}` reference must resolve in the binding environment; its
-   type must match the target position.
+3. Every `${...}` reference must resolve in the binding environment.
+   In a bare position its type must match the target; in an interpolation
+   position it is rendered per §3.2.1 (any type except `Bytes` and
+   `Secret<_>`).
 4. `@self#<heading>` is checked to exist in the current file; type `String`.
-5. The final `return` block (or the last step's bind, if no explicit
-   return) must produce values matching declared `outputs`.
+5. Return value:
+   - If `outputs` is empty, no `return` is needed.
+   - Otherwise an explicit `return { … }` block is required, **unless**
+     the final step's result type is structurally equal to the `outputs`
+     record — in which case the last bind is used implicitly. Because
+     tool results are typically shaped like `{ text: String }` while
+     `outputs` is shaped like `{ summary: String }`, the explicit form
+     is the common case; the implicit form is a convenience for
+     pass-through workflows only.
 6. Cycles in the direct call graph across workflows are detected and
    rejected. Indirect references via `WorkflowRef` values are allowed.
-7. The checker is a pure function `Project -> Either [TypeError] TypedProject`
+7. Field access on a statically-typed `Record` is checked; access on an
+   opaque `Json` value is **not** statically checked and may fail at
+   runtime (see §8.3.2 `eval` errors). List indexing is never bounds-checked
+   statically.
+8. The checker is a pure function `Project -> Either [TypeError] TypedProject`
    so the same checker runs both at load time (`hwfi check`) and at runtime
    over dynamically synthesized workflows (see §13).
+
+### 5.7 Environment access (`ctx.env`)
+
+The `env` whitelist in `project.json` determines the fields of
+`ctx.env`. v1 uses **strict presence**: every whitelisted variable must
+be present in the process environment when `hwfi run` starts. A missing
+whitelisted variable aborts startup before any step executes, with an
+error naming the variable. Consequences:
+
+- `ctx.env.<VAR>` has type `String` (or `Secret<String>` if the name
+  matches the secret patterns in §5.5) and is **guaranteed present** —
+  there is no `null`/`Option` case to handle, so string operations on it
+  cannot fail at runtime for want of a value.
+- v1 has no nullable/optional type. If future versions need "optional
+  environment variable", that is an `Optional<T>` type addition
+  (deferred, see §13), not a change to this strict default.
+- This validation is distinct from provider-key validation (§7.3):
+  provider keys are consumed by the runtime and are *not* required to be
+  in the `env` whitelist.
 
 ## 6. Built-in tools (v1)
 
@@ -388,19 +459,27 @@ Provided by the engine, addressed as `builtin/<name>`:
 - `builtin/write-file` : `{ path: FileRef, text: String } -> {}`
 - `builtin/list-dir` : `{ path: FileRef } -> { entries: List<String> }`
 - `builtin/llm-generate` : `{ system: String, prompt: String, model: String }
-  -> { text: String }` (backed by `llm-simple`
+  -> { text: String }` (single-shot; backed by `llm-simple`
   `Generate.generateTextWithFallbacks`)
+- `builtin/llm-chat` :
+  `{ system: String,
+     messages: List<Record<{ role: String, content: String }>>,
+     model: String } -> { text: String }` — multi-turn generation for
+  agentic loops, where `messages` is an ordered chat history
+  (`role ∈ {"user","assistant","tool"}`, validated at runtime). Maps to
+  `llm-simple`'s message-based `GenRequest`. Prefer this over encoding a
+  whole conversation into a single `prompt` string.
 - `builtin/llm-gen-object` : `{ system: String, prompt: String, schema: Json,
   model: String } -> { value: Json }` (backed by `genObject` /
   `genObjectUntyped`)
-
-For both LLM tools, `model` names an entry in the **model catalog** (§7),
-not a raw provider model id. Retry, timeout, temperature, and pricing
-metadata come from the catalog entry, not from tool arguments.
 - `builtin/introspect` : `{} -> { data: Json }` — escape hatch returning a
   JSON dump of everything the runtime knows about the current run
   (including full trace, all bindings, workspace path, project metadata).
   Marks the calling step non-cacheable (§8.2).
+
+For all LLM tools, `model` names an entry in the **model catalog** (§7.3),
+not a raw provider model id. Retry, timeout, temperature, and pricing
+metadata come from the catalog entry, not from tool arguments.
 
 **[deferred v1.1]** shell/exec tool.
 
@@ -523,9 +602,42 @@ trace.jsonl       # append-only event log
 
 ### 8.1 Step-key hashing
 
-`step-key = hash(qname, step-id, resolved-args, ctx-projection)` where
-`ctx-projection` includes only those `ctx.*` fields the step actually
-references, restricted to *stable* fields:
+```
+step-key = hash( qname,
+                 step-id,
+                 resolved-args,
+                 ctx-projection,
+                 callee-fingerprint )
+```
+
+**Declaration fingerprint (Merkle over the call graph).** Each workflow
+and tool has a fingerprint:
+
+```
+fingerprint(d) = hash( normalized-AST(d),
+                       [ fingerprint(c) | c <- sorted direct-callees(d) ] )
+```
+
+- `normalized-AST(d)` is the parsed declaration with source positions,
+  comments, and insignificant whitespace stripped, plus the declaration's
+  frontmatter signature.
+- Direct callees are the qnames a declaration statically calls. Because
+  the direct call graph is acyclic (§5.6.6), this recursion terminates.
+- `callee-fingerprint` in the step-key is `fingerprint(callee)` of the
+  step's `call` target. Editing the called tool/sub-workflow — or
+  anything it transitively calls — changes the fingerprint and therefore
+  the step-key, so **cached results are correctly invalidated when code
+  changes** across an abort/resume boundary.
+- When an argument value is a `WorkflowRef`/`ToolRef`, its contribution
+  to `resolved-args` is the referenced declaration's `fingerprint`, not
+  merely its qname, so passing an edited workflow as a value also
+  invalidates correctly.
+
+Built-in tools (`builtin/*`) have a fixed fingerprint derived from the
+engine version.
+
+**Ctx projection.** `ctx-projection` includes only those `ctx.*` fields
+the step actually references, restricted to *stable* fields:
 
 - Stable: `ctx.workspace`, `ctx.run.id`, `ctx.self.qname`, `ctx.self.step_id`,
   `ctx.inputs.*`, `ctx.env.*`.
@@ -540,11 +652,17 @@ the AST node.
 ### 8.2 Resume semantics
 
 - Cacheable steps: skipped on resume if their `step-key` has a persisted
-  result.
+  result. A skipped step emits **no new trace events**; its original
+  events from the earlier attempt remain in `trace.jsonl` and continue to
+  represent it (see §8.3.5).
 - Non-cacheable steps: always re-executed. Rationale: their whole purpose
   is to observe the current trace or environment, so replaying with cached
   output would defeat the point.
-- A step is atomic: partial LLM output is not resumed mid-call.
+- A step is atomic: partial LLM output is not resumed mid-call. A step
+  whose `StepStart` was written but which crashed before a terminal event
+  has no persisted result, so it is re-executed on resume.
+- On resume the runtime appends one `Resumed` marker (§8.3.2) before any
+  new events, then continues numbering `seq` from the last value + 1.
 - A run is resumable if `run.json.status ∈ {running, crashed, aborted}`.
 
 ### 8.3 Trace event schema
@@ -594,8 +712,7 @@ TraceEvent =
       tag         : "step-end",
       seq, at, qname, step_id,
       result      : Json,          -- secrets redacted
-      cached      : Bool,          -- true iff resolved from step cache
-      duration_ms : Int            -- 0 when cached = true
+      duration_ms : Int
     }
   | LlmCall {
       tag        : "llm-call",
@@ -618,37 +735,59 @@ TraceEvent =
       tag     : "error",
       seq, at, qname, step_id,
       message : String,
-      kind    : "type" | "io" | "sandbox" | "llm" | "user" | "internal"
+      kind    : "type" | "eval" | "io" | "sandbox"
+              | "llm" | "user" | "internal"
+    }
+  | Resumed {
+      tag      : "resumed",
+      seq, at,
+      run_id   : String,
+      from_seq : Int               -- last seq of the interrupted attempt
     }
   | RunEnd {
       tag    : "run-end",
       seq, at,
       run_id : String,
-      status : "completed" | "crashed" | "aborted"
+      status : "completed" | "aborted"
     }
 ```
 
+`kind` values: `type` (should not occur at runtime for statically-checked
+code), `eval` (expression evaluation failure — list index out of bounds,
+missing field on an opaque `Json` value, interpolation of an unexpected
+runtime value), `io` (filesystem), `sandbox` (workspace-boundary
+violation), `llm` (provider/generation failure), `user` (error raised by
+workflow logic itself), `internal` (engine bug).
+
 #### 8.3.3 Ordering and correlation invariants
 
-1. Every trace begins with exactly one `RunStart`. A cleanly-terminated
-   trace ends with exactly one `RunEnd`. A crashed/aborted trace may be
-   missing `RunEnd`; on resume, the runtime appends `RunEnd` with
-   `status = "crashed"` or `"aborted"` before appending new events for
-   the resumed portion.
-2. `seq` is strictly increasing within a file and gap-free. After
-   resume, numbering continues from the last `seq + 1`.
-3. For each executed step, exactly one `StepStart` precedes either
-   exactly one `StepEnd` (success) or exactly one `Error` (failure),
-   both matched by `(qname, step_id)`.
-4. Cached steps (skipped on resume) still emit `StepStart` and
-   `StepEnd` with `cached = true`, `duration_ms = 0`. This keeps trace
-   shape uniform for consumers regardless of caching.
+A trace represents one *logical run*, which may span several execution
+*attempts* separated by `Resumed` markers.
+
+1. The file begins with exactly one `RunStart`. Each resume appends
+   exactly one `Resumed` marker. When the logical run reaches a terminal
+   state it ends with exactly one `RunEnd` (`status ∈ {completed,
+   aborted}`). A run interrupted by a crash has no `RunEnd` until a later
+   attempt completes or permanently aborts it; resumability is determined
+   by `run.json.status`, not by the presence of `RunEnd`.
+2. `seq` is strictly increasing across the whole file and gap-free,
+   continuing across attempts.
+3. Within a single attempt (the events between one `RunStart`/`Resumed`
+   and the next `Resumed`/`RunEnd`), each executed step's `StepStart` is
+   followed by exactly one terminal event — `StepEnd` (success) or
+   `Error` (failure) — matched by `(qname, step_id)`. A `StepStart` left
+   without a terminal before a `Resumed` marker denotes a step
+   interrupted by crash; it is retried in the next attempt. Consequently
+   a given `(qname, step_id)` may recur across attempts.
+4. On resume, a cacheable step served from cache emits **no** events;
+   its original `StepStart` / inner / `StepEnd` from the earlier attempt
+   already exist earlier in the file.
 5. `LlmCall` and `FileIo` events occur strictly between their step's
-   `StepStart` and its `StepEnd`/`Error`, tagged with the same
+   `StepStart` and its terminal event, tagged with the same
    `(qname, step_id)`.
-6. Sub-workflow calls nest: the callee's `StepStart`/`StepEnd` events
-   appear between the caller's `StepStart` and `StepEnd`. Consumers can
-   reconstruct the call tree from `(qname, step_id)` chronology.
+6. Sub-workflow calls nest: the callee's events appear between the
+   caller's `StepStart` and terminal. Consumers reconstruct the call tree
+   from `(qname, step_id)` chronology within an attempt.
 
 #### 8.3.4 Redaction
 
@@ -659,6 +798,23 @@ happens once, at the writer, before the line is appended.
 
 `Secret<_>`-typed values in `args`, `result`, `system`, `prompt`,
 `response` are redacted per §5.5.
+
+#### 8.3.5 `ctx.trace` construction
+
+At the moment a step begins executing, `ctx.trace` is the ordered parse
+of `trace.jsonl` exactly as persisted so far — every real event of the
+logical run across all attempts, including `Resumed` markers.
+
+This makes the observed history **independent of caching**: because a
+cached upstream step contributes its *original* detailed events (which
+remain in the file) rather than a synthetic placeholder, a downstream
+step reading `ctx.trace` sees the same `LlmCall`/`FileIo`/`StepEnd`
+events whether or not the upstream step was re-executed on this attempt.
+A workflow's behaviour therefore does not change depending on where a
+crash happened to occur.
+
+Consumers that want per-attempt segmentation can split on `Resumed`
+markers; consumers that want the logical-run view can ignore them.
 
 ## 9. CLI
 
@@ -738,7 +894,8 @@ A5. Attempting to write to a path outside the workspace fails with a
 A6. A workflow can call another workflow as a step; type-checking
     enforces the callee's signature.
 A7. A step whose args reference `${ctx.trace}` is re-executed on resume;
-    a step that does not is skipped when cached.
+    a cacheable step that does not is skipped (emitting no new trace
+    events on the resumed attempt).
 A8. `Secret<String>` values loaded from `ctx.env` never appear in
     `trace.jsonl` in cleartext; they render as `<secret:$name>`.
 A9. `@self#heading` in a step arg resolves to the current file's markdown
@@ -752,6 +909,17 @@ A12. A project whose `model-catalog.json` references provider `openai`
     but for which no `OPENAI_API_KEY` is discoverable via `--env-file`,
     `<project>/.env`, or the process environment fails at `hwfi run`
     startup with a message naming the offending model and provider.
+A13. Editing a called tool or sub-workflow between an aborted run and
+    `hwfi resume` causes every dependent cached step to be recomputed
+    (its `callee-fingerprint`, hence `step-key`, changed — §8.1).
+A14. A whitelisted `env` variable that is absent from the environment at
+    `hwfi run` startup aborts the run before any step executes, with a
+    message naming the variable (§5.7).
+A15. A downstream step's `ctx.trace` contains the same detailed events
+    for an upstream step regardless of whether that upstream step was
+    freshly executed or served from cache on resume (§8.3.5).
+A16. `builtin/llm-chat` conducts a multi-turn exchange from a `messages`
+    history and returns assistant text.
 
 ## 12. Edge cases and known tricky bits
 
@@ -782,3 +950,6 @@ A12. A project whose `model-catalog.json` references provider `openai`
 - Skill extraction from traces.
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
+- `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
+- Control-flow-driven error handling (`try`/recover); v1 aborts on the
+  first error.

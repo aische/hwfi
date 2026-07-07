@@ -28,6 +28,13 @@ Ready to start **M1: project skeleton**.
   parser `commonmark-hs`, shared types under `types/*.md` in v1, model
   arg names a catalog entry, CLI structured inputs, `file:line:col`
   error format.
+- Spec review pass (from temporary `issues.md`): step-key now includes a
+  transitive callee fingerprint (fixes code-edit cache invalidation);
+  strict `env` presence (no `Optional<T>` in v1); `TypeExpr` can
+  reference aliases; added `builtin/llm-chat`; defined interpolation
+  rendering; redesigned resume trace model (`Resumed` marker, no
+  synthetic cached events, `ctx.trace` = full file parse); added `eval`
+  error kind; tightened the `return` rule. Acceptance now A1–A16.
 
 ## Blockers
 

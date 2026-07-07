@@ -10,14 +10,16 @@ roughly ordered but can be reshuffled.
 - [ ] 1.1 Initialize cabal project (`hwfi.cabal`, `cabal.project`) with
       GHC2021, library + executable (`hwfi`) + `hspec` test-suite stanzas
 - [ ] 1.2 Wire `../llm-simple` as a local `packages:` entry in
-      `cabal.project`; confirm a trivial `import LLM.Generate` and
-      `import LLM.Load` compile
+      `cabal.project`; confirm `import LLM.Generate`,
+      `import LLM.Providers.OpenAI`, and
+      `import LLM.Load.ModelCatalog` compile
 - [ ] 1.3 `hspec` smoke test + `cabal test` wired
 - [ ] 1.4 `optparse-applicative` CLI stub for `check`, `run`, `resume`,
       `show` per spec §9 (including `--input`, `--input-json`, `--entry`
       flags); commands print "not implemented" and exit appropriately
 - [ ] 1.5 `project.json` schema module + parser (fields: `name`, `version`,
-      `entrypoint`, optional `env` whitelist)
+      `entrypoint`, optional `env` whitelist); enforce strict env presence
+      at startup (§5.7, A14)
 - [ ] 1.6 `Hwfi.Runtime.KeyStore`: parse `.env` files via
       `Configuration.Dotenv.parseFile` (no process-env injection), merge
       `--env-file` > `<project>/.env` > process environment into
@@ -43,7 +45,9 @@ roughly ordered but can be reshuffled.
       `return { ... }`, comments (`--`), source-position tracking
 - [ ] 2.6 Expression parser per §3.4: literals, short/long strings with
       `${...}` interpolation, lists, records, refs with field/index
-      access, bare qnames, `@self#slug`
+      access, bare qnames, `@self#slug`; distinguish bare-ref vs
+      in-string interpolation positions (§3.2.1)
+- [ ] 2.6b `TypeExpr` parser supports `QName` alias references (§3.4)
 - [ ] 2.7 Markdown-section resolver: slug computation (H2/H3 → slug per
       §3.4) and raw-content extraction for `@self#slug`
 - [ ] 2.8 Project loader: walk project directory, build
@@ -66,11 +70,18 @@ roughly ordered but can be reshuffled.
 - [ ] 3.7 Static classification: mark each step **cacheable** or
       **non-cacheable** by scanning arg expressions for volatile `ctx.*`
       references and calls to `builtin/introspect`
-- [ ] 3.8 `Secret<T>` flow rules: forbid interpolation into plain
-      `String`, auto-tag `ctx.env.*` fields matching secret name patterns
-- [ ] 3.9 Factor checker as `Project -> Either [TypeError] TypedProject`
+- [ ] 3.8 `Secret<T>` flow rules: forbid interpolation of `Secret<_>`
+      and `Bytes`, auto-tag `ctx.env.*` fields matching secret name
+      patterns
+- [ ] 3.9 Interpolation rendering typing (§3.2.1): allow any non-Secret,
+      non-Bytes type in an interpolation position; enforce return rule
+      (§5.6.5, explicit vs implicit `return`)
+- [ ] 3.10 Declaration fingerprinting (`fingerprint(d)` Merkle over the
+      acyclic direct call graph, §8.1) — computed in the checker, stored
+      on `TypedProject` for the runtime to consume
+- [ ] 3.11 Factor checker as `Project -> Either [TypeError] TypedProject`
       (pure, no IO) — required for v1.1 dynamic workflow eval
-- [ ] 3.10 `hwfi check` end-to-end, integration tests with
+- [ ] 3.12 `hwfi check` end-to-end, integration tests with
       expected-error fixtures
 
 ## Later — M4: Runtime and built-in tools
@@ -85,28 +96,37 @@ roughly ordered but can be reshuffled.
       directly from `LLM.Providers.*` constructors + `KeyStore`;
       validate provider–key linkage against effective catalog at startup
       (A12); assemble `ModelConfig` values by joining catalog entries
-      with gateways; wire `builtin/llm-generate` and
-      `builtin/llm-gen-object` on top of `LLM.Generate`; unknown-model
-      error lists available names (A11)
-- [ ] 4.6 `builtin/introspect` returning `{ data: Json }`
-- [ ] 4.7 Sub-workflow invocation as a step target
-- [ ] 4.8 End-to-end sample project (`examples/summarise/`) exercising
+      with gateways; wire `builtin/llm-generate`, `builtin/llm-chat`
+      (message-based `GenRequest`, A16), and `builtin/llm-gen-object` on
+      top of `LLM.Generate`; unknown-model error lists available names
+      (A11)
+- [ ] 4.6 Expression evaluator with `eval`-kind runtime errors for list
+      OOB and missing `Json` fields (§8.3.2); interpolation rendering
+      per §3.2.1
+- [ ] 4.7 `builtin/introspect` returning `{ data: Json }`
+- [ ] 4.8 Sub-workflow invocation as a step target
+- [ ] 4.9 End-to-end sample project (`examples/summarise/`) exercising
       A3 and A9
 
 ## Later — M5: Persistence, tracing, resume
 
 - [ ] 5.1 Run directory layout (`.hwfi/runs/<id>/`), `run.json` schema
-- [ ] 5.2 Step-key hashing including ctx-projection over stable fields
-      only; canonical JSON for args
+- [ ] 5.2 Step-key hashing (§8.1): ctx-projection over stable fields,
+      `callee-fingerprint` from 3.10, `WorkflowRef`/`ToolRef` args
+      contribute referenced fingerprints; canonical JSON for args
 - [ ] 5.3 Step result cache read/write; skip cached cacheable steps on
-      resume; always re-execute non-cacheable steps
+      resume; always re-execute non-cacheable steps; verify code-edit
+      invalidation (A13)
 - [ ] 5.4 Append-only `trace.jsonl` writer implementing spec §8.3:
-      variant encoders, monotonic `seq`, ISO-8601 `at`, ordering
-      invariants, synthetic `RunEnd` on resume for prior crashed run
-- [ ] 5.5 `Secret<T>` redaction in trace serialisation
-- [ ] 5.6 Workspace lock file (`.hwfi/lock`) to prevent concurrent runs
-- [ ] 5.7 `hwfi resume` command; crash-injection test satisfying A4 and A7
-- [ ] 5.8 `hwfi show` pretty-printer for a trace
+      variant encoders (incl. `Resumed`, `eval` error kind), monotonic
+      `seq` continuing across attempts, ISO-8601 `at`, ordering
+      invariants; cached steps emit no new events
+- [ ] 5.5 `ctx.trace` reconstruction on resume by parsing the full
+      persisted `trace.jsonl` (§8.3.5); test caching-independence (A15)
+- [ ] 5.6 `Secret<T>` redaction in trace serialisation
+- [ ] 5.7 Workspace lock file (`.hwfi/lock`) to prevent concurrent runs
+- [ ] 5.8 `hwfi resume` command; crash-injection test satisfying A4 and A7
+- [ ] 5.9 `hwfi show` pretty-printer for a trace
 
 ## Backlog — M6+: Deferred, per spec §13
 
