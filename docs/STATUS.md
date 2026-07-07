@@ -4,32 +4,33 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-**M4 (runtime and built-in tools) is complete.** `hwfi run` executes a
-type-checked project end-to-end: it evaluates step arguments, injects the
-ambient `ctx` per step, dispatches to built-in tools and sub-workflows,
-and produces workflow outputs. Ready to start **M5: persistence, tracing,
-and resume** (the trace ADT and an in-memory tracer already exist as the
-seam M5 will persist through).
+**M5 (persistence, tracing, resume) is complete.** Every `hwfi run`
+now writes a durable run directory under `<workspace>/.hwfi/runs/<id>/`
+(`run.json`, `steps/<step-key>.json`, append-only `trace.jsonl`), and
+`hwfi resume` re-executes an interrupted run: cacheable steps with a
+persisted result are skipped (no new trace events), non-cacheable steps
+always re-run, and `ctx.trace` is reconstructed from the file so
+downstream behaviour is caching-independent. `hwfi show` pretty-prints a
+run. Ready to start **M6+** (deferred features, spec §13).
 
 ## Done recently
 
-- `Hwfi.Runtime.Value`: `RValue` runtime values, JSON conversion,
-  canonical (sorted-key) JSON, the §3.2.1 render table, secret redaction,
-  and CLI/JSON input coercion by declared type.
-- `Hwfi.Runtime.Error`: `RuntimeError` + `ErrorKind` (§8.3.2 kinds).
-- `Hwfi.Runtime.Trace`: stable `TraceEvent` ADT + JSON encoders (§8.3) and
-  an in-memory `Tracer` (monotonic gap-free `seq`, ISO-8601 `at`).
-- `Hwfi.Runtime.Workspace`: canonicalised root + lexical traversal guard
-  (A5), UTF-8 file read/write/list.
-- `Hwfi.Runtime.Gateways`: gateways from `LLM.Providers.*` + `KeyStore`;
-  `ModelConfig` assembly from the catalog; unknown-model error lists names
-  (A11).
-- `Hwfi.Runtime.{Context,Eval,Builtins,Executor}`: per-step `ctx`, the
-  expression evaluator (with `eval` errors, §8.3.2), all `builtin/*`
-  tools, and the linear step interpreter with sub-workflow recursion (A6).
-- `hwfi run` wired (inputs, entrypoint override, key/env validation);
-  `examples/summarise/`; 102 tests (was 71) incl. an end-to-end file
-  workflow covering A3/A6/A9.
+- `Hwfi.Runtime.Trace`: append-only file sink on `emit` (flushed per
+  line), resume preload + `seq` continuation, `eventFromJson` decoder
+  (inverse of `eventToJson`), `renderEvent` for `hwfi show`.
+- `Hwfi.Runtime.StepKey`: §8.1 step-key = hash(qname, step-id, canonical
+  resolved-args with `Ref` args contributing target fingerprints, stable
+  `ctx` projection, callee fingerprint). Secrets hashed by actual value.
+- `Hwfi.Runtime.RunStore`: run-dir layout, `run.json` schema + atomic
+  read/write, content-addressed step cache, strict `trace.jsonl` reader,
+  and the exclusive `<workspace>/.hwfi/lock` (§12).
+- `Hwfi.Runtime.Executor`: cache-aware `execStep`; `performRun` /
+  `performResume` orchestrating lock + `run.json` phase + persistent
+  tracer; real `projectContentHash`; runtime fingerprint-by-qname.
+- `TypedStep` gained `tsResultType` (threaded through `Check.Decl` /
+  `Check`) so a cached result reconstructs to a typed `RValue`.
+- `hwfi run/resume/show` wired; 128 tests (was 102) incl. A4/A7/A13/A15
+  and a truncated-trace crash-resume test.
 
 ## Blockers
 
@@ -37,17 +38,21 @@ seam M5 will persist through).
 
 ## Notes / decisions
 
-- Persistence is intentionally out of M4: the executor accumulates the
-  trace in memory via `Tracer`; M5 adds the `trace.jsonl` writer, step-key
-  caching, and resume on the same seam.
-- `run-start`'s `project_hash` is currently the entrypoint's Merkle
-  fingerprint (a stand-in); M5 replaces it with a project-dir content hash.
-- `ctx.trace` is a `List` of per-event JSON values; indexing yields a
-  `TraceEvent` (opaque `Json` at runtime), matching the checker's typing.
-- Errors nest: each failing step in a call chain emits its own `error`
-  event, so every `StepStart` has a terminal (§8.3.3 invariant 3).
+- Caching is consulted **only on resume** (spec §8.2); every attempt
+  still *writes* cache entries so a later resume can use them.
+- Step classification is per-call-site and static: a cacheable step that
+  calls a sub-workflow is skipped wholesale on a cache hit, even if the
+  sub-workflow contains non-cacheable steps (its result was persisted).
+- `run.json.inputs` and `steps/*.json` store **actual** (non-redacted)
+  values — resume must re-evaluate with the real inputs/results — while
+  `trace.jsonl` redacts secrets (§8.3.4, A8). Both live under `.hwfi/`.
+- `run.json` records `project_dir` so `hwfi resume <ws> <id>` can
+  re-parse and re-check the project (a code edit re-invalidates step
+  keys, A13) without the user re-supplying the path.
+- The workspace lock is an advisory OS `flock`; a second in-process open
+  of the lock file (GHC single-writer) is caught and reported as busy.
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M5**. Start with 5.1 (run directory +
-`run.json`) and 5.4 (persist the existing `Tracer` events to `trace.jsonl`).
+See [TASKS.md](TASKS.md) → **M6+**. Nothing is required before starting;
+control flow (`if`/`foreach`/`par`) is the natural next milestone.

@@ -98,9 +98,10 @@ checkProject proj
             [ TypedStep
                 { tsStmt = stmt,
                   tsCacheable = cacheable,
-                  tsCalleeFingerprint = lookupCalleeFingerprint fps (stepTargetOf stmt)
+                  tsCalleeFingerprint = lookupCalleeFingerprint fps (stepTargetOf stmt),
+                  tsResultType = resultTy
                 }
-            | (stmt, cacheable) <- Map.findWithDefault [] q stepMap
+            | (stmt, cacheable, resultTy) <- Map.findWithDefault [] q stepMap
             ],
           tdFingerprint = Map.findWithDefault (Fingerprint "") q fps
         }

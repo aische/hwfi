@@ -47,7 +47,12 @@ data TypedStep = TypedStep
     -- target is a first-class @ToolRef@/@WorkflowRef@ value in scope, whose
     -- fingerprint is only determined at runtime from the resolved argument
     -- (§8.1).
-    tsCalleeFingerprint :: Maybe Fingerprint
+    tsCalleeFingerprint :: Maybe Fingerprint,
+    -- | The step's statically-inferred result type (the callee's outputs
+    -- record). Used to reconstruct a cached result 'RValue' from its persisted
+    -- JSON on resume (§8.2), preserving @FileRef@\/@Secret@ distinctions that
+    -- plain JSON conflates.
+    tsResultType :: Type
   }
   deriving stock (Eq, Show)
 

@@ -11,6 +11,7 @@ module Hwfi.Check.Graph
     detectImportCycles,
     computeFingerprints,
     lookupCalleeFingerprint,
+    builtinFingerprint,
   )
 where
 

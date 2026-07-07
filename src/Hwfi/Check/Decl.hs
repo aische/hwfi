@@ -49,7 +49,7 @@ checkDeclBody ::
   QName ->
   Declaration ->
   ResolvedSignature ->
-  ([TypeError], [(StepStmt, Bool)])
+  ([TypeError], [(StepStmt, Bool, Type)])
 checkDeclBody ctx qname decl sig =
   case decl of
     DeclWorkflow w -> checkBody ctx qname sig (wfStatements w) (wfSections w)
@@ -63,7 +63,7 @@ data BodyState = BodyState
   { bsRoots :: Map Ident Type,
     bsBound :: [Ident],
     bsErrors :: [TypeError],
-    bsSteps :: [(StepStmt, Bool)],
+    bsSteps :: [(StepStmt, Bool, Type)],
     -- | Result type of the most recent step, for the implicit-return rule.
     bsLastResult :: Maybe Type
   }
@@ -74,7 +74,7 @@ checkBody ::
   ResolvedSignature ->
   [Statement] ->
   [Section] ->
-  ([TypeError], [(StepStmt, Bool)])
+  ([TypeError], [(StepStmt, Bool, Type)])
 checkBody ctx qname sig statements sections =
   (bsErrors final <> returnErrs, reverse (bsSteps final))
   where
@@ -109,7 +109,7 @@ checkStep :: CheckCtx -> FilePath -> [Section] -> BodyState -> StepStmt -> BodyS
 checkStep ctx path sections st s =
   st
     { bsErrors = bsErrors st <> targetErrs <> argErrs <> bindErrs,
-      bsSteps = (s, cacheable) : bsSteps st,
+      bsSteps = (s, cacheable, maybe TyJson id resultType) : bsSteps st,
       bsRoots = roots',
       bsBound = bound',
       bsLastResult = resultType

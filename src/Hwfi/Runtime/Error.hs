@@ -4,6 +4,7 @@
 module Hwfi.Runtime.Error
   ( ErrorKind (..),
     errorKindText,
+    errorKindFromText,
     RuntimeError (..),
     runtimeError,
     evalError,
@@ -44,6 +45,19 @@ errorKindText = \case
   KLlm -> "llm"
   KUser -> "user"
   KInternal -> "internal"
+
+-- | Parse an 'ErrorKind' from its trace spelling (spec §8.3.2), used when
+-- reconstructing a trace from @trace.jsonl@ on resume. Unknown spellings map to
+-- 'KInternal' so a malformed line never crashes the reader.
+errorKindFromText :: Text -> ErrorKind
+errorKindFromText = \case
+  "type" -> KType
+  "eval" -> KEval
+  "io" -> KIo
+  "sandbox" -> KSandbox
+  "llm" -> KLlm
+  "user" -> KUser
+  _ -> KInternal
 
 -- | Which step a runtime error occurred in (spec §9.1): the enclosing
 -- workflow's qname and the step id within it.

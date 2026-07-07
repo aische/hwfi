@@ -48,7 +48,7 @@ import Hwfi.Check (checkProject, renderCheckErrors)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (ProjectManifest (..), validateEnvPresence)
 import Hwfi.Runtime.Error (renderRuntimeError)
-import Hwfi.Runtime.Executor (RunResult (..), runEntrypoint)
+import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
 import Hwfi.Runtime.Gateways (buildGateways, buildModelStore)
 import Hwfi.Runtime.KeyStore (loadKeyStore)
 import Hwfi.Runtime.ModelCatalog
@@ -57,8 +57,16 @@ import Hwfi.Runtime.ModelCatalog
     renderCatalogError,
     validateProviderKeys,
   )
+import Hwfi.Runtime.RunStore
+  ( RunMeta (..),
+    openRunStore,
+    phaseText,
+    readRunMeta,
+    readTraceEvents,
+  )
+import Hwfi.Runtime.Trace (renderEvent)
 import Hwfi.Runtime.Value (RValue, coerceFromJson, coerceFromString, redactedJson)
-import Hwfi.Runtime.Workspace (newWorkspace)
+import Hwfi.Runtime.Workspace (Workspace, newWorkspace, workspaceRoot)
 import Hwfi.Source (Diagnostic (..), renderDiagnostic)
 import Hwfi.Type (Type)
 import Hwfi.TypedProject
@@ -70,7 +78,7 @@ import Hwfi.TypedProject
 import Options.Applicative
 import System.Exit (ExitCode (ExitFailure), exitWith)
 import System.FilePath ((</>))
-import System.IO (hPutStrLn, stderr)
+import System.IO (stderr)
 import System.Random (randomRIO)
 
 -- | A parsed CLI invocation.
@@ -192,8 +200,8 @@ dispatch :: Command -> IO ()
 dispatch = \case
   Check opts -> runCheck opts
   Run opts -> runRun opts
-  Resume _ -> notImplemented "resume"
-  Show _ -> notImplemented "show"
+  Resume opts -> runResume opts
+  Show opts -> runShow opts
 
 -- | Run @hwfi check@ (spec §9): parse the project, require a parseable
 -- @model-catalog.json@ (§7.3), and type-check. Prints nothing and exits 0 on
@@ -279,18 +287,86 @@ runChecked opts dir tp catalog = do
                   Right rootInputs -> do
                     workspace <- newWorkspace opts.workspace
                     runId <- genRunId
-                    result <- runEntrypoint tp workspace models envVars runId entry rootInputs
-                    finishRun result
+                    outcome <- performRun tp workspace models envVars dir runId entry rootInputs
+                    finishRun outcome
 
 -- | Look up the declared inputs of the entrypoint (in signature order).
 entrypointInputs :: QName -> TypedProject -> Maybe [(Ident, Type)]
 entrypointInputs entry tp = rsigInputs . tdSignature <$> lookupTyped entry tp
 
--- | Print the outcome and exit.
-finishRun :: RunResult -> IO ()
-finishRun result = case rrOutcome result of
-  Left err -> failMsgs [renderRuntimeError err]
-  Right outputs -> TIO.putStrLn (jsonText (redactedJson outputs))
+-- | Print the outcome of a run/resume and exit. Orchestration failures (lock
+-- busy, non-resumable, etc.) and workflow errors both exit non-zero.
+finishRun :: Either Text RunResult -> IO ()
+finishRun = \case
+  Left orchErr -> failMsgs ["error: " <> orchErr]
+  Right result -> case rrOutcome result of
+    Left err -> failMsgs [renderRuntimeError err]
+    Right outputs -> TIO.putStrLn (jsonText (redactedJson outputs))
+
+-- | Run @hwfi resume@ (spec §8.2, §9): parse and type-check the project again
+-- (so a code edit invalidates dependent step keys, A13), rebuild gateways and
+-- the model store, then resume the persisted run — skipping cacheable steps
+-- with a stored result and re-executing the rest.
+runResume :: ResumeOpts -> IO ()
+runResume opts = do
+  workspace <- newWorkspace opts.workspaceDir
+  eStore <- openRunStore (workspaceRoot workspace) opts.runId
+  case eStore of
+    Left e -> failMsgs ["error: " <> e]
+    Right store -> do
+      eMeta <- readRunMeta store
+      case eMeta of
+        Left e -> failMsgs ["error: " <> e]
+        Right meta -> resumeChecked workspace meta
+
+resumeChecked :: Workspace -> RunMeta -> IO ()
+resumeChecked workspace meta = do
+  let dir = T.unpack meta.rmProjectDir
+  eproj <- loadProject dir
+  case eproj of
+    Left ds -> reportAndFail dir ds []
+    Right proj -> do
+      ecat <- loadCatalog dir
+      case (checkProject proj, ecat) of
+        (Left errs, _) -> reportAndFail dir (renderCheckErrors errs) (catMsgsOf ecat)
+        (Right _, Left ce) -> failMsgs [renderCatalogError ce]
+        (Right tp, Right catalog) -> do
+          keyStore <- loadKeyStore Nothing dir
+          case validateProviderKeys catalog keyStore of
+            errs@(_ : _) -> failMsgs (map renderCatalogError errs)
+            [] -> do
+              envResult <- validateEnvPresence tp.tpManifest
+              case envResult of
+                Left missing -> failMsgs (map missingEnvMsg missing)
+                Right envVars -> case buildModelStore (buildGateways keyStore) catalog of
+                  Left ce -> failMsgs [renderCatalogError ce]
+                  Right models -> do
+                    outcome <- performResume tp workspace models envVars meta.rmRunId
+                    finishRun outcome
+  where
+    catMsgsOf = either (\e -> [renderCatalogError e]) (const [])
+
+-- | Run @hwfi show@ (spec §9): pretty-print a persisted run's metadata and its
+-- @trace.jsonl@ events, one per line.
+runShow :: ShowOpts -> IO ()
+runShow opts = do
+  workspace <- newWorkspace opts.workspaceDir
+  eStore <- openRunStore (workspaceRoot workspace) opts.runId
+  case eStore of
+    Left e -> failMsgs ["error: " <> e]
+    Right store -> do
+      eMeta <- readRunMeta store
+      events <- readTraceEvents store
+      let metaLines = case eMeta of
+            Right m ->
+              [ "run:        " <> m.rmRunId,
+                "entrypoint: " <> m.rmEntrypoint,
+                "started_at: " <> m.rmStartedAt,
+                "status:     " <> phaseText m.rmPhase,
+                ""
+              ]
+            Left _ -> []
+      TIO.putStr (T.unlines (metaLines <> map renderEvent events))
 
 -- Input assembly (§9) --------------------------------------------------------
 
@@ -377,8 +453,3 @@ failMsgs :: [Text] -> IO ()
 failMsgs msgs = do
   TIO.hPutStr stderr (T.intercalate "\n\n" msgs <> "\n")
   exitWith (ExitFailure 1)
-
-notImplemented :: String -> IO ()
-notImplemented name = do
-  hPutStrLn stderr ("hwfi " <> name <> ": not implemented yet")
-  exitWith (ExitFailure 2)

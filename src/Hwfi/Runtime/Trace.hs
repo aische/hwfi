@@ -13,13 +13,18 @@
 module Hwfi.Runtime.Trace
   ( FileOp (..),
     fileOpText,
+    fileOpFromText,
     RunStatus (..),
     runStatusText,
+    runStatusFromText,
     EventBody (..),
     TraceEvent (..),
     eventToJson,
+    eventFromJson,
+    renderEvent,
     Tracer,
     newTracer,
+    newPersistentTracer,
     emit,
     snapshotEvents,
     snapshotJson,
@@ -27,14 +32,17 @@ module Hwfi.Runtime.Trace
   )
 where
 
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value (..), encode, object, (.:), (.=))
+import Data.Aeson.Types (Parser, parseMaybe, withObject)
+import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Vector qualified as V
-import Hwfi.Ast.Name (Ident, QName, renderQName)
-import Hwfi.Runtime.Error (ErrorKind, errorKindText)
+import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
+import Hwfi.Runtime.Error (ErrorKind, errorKindFromText, errorKindText)
+import System.IO (Handle, hFlush)
 
 -- | The @op@ discriminator of a 'FileIo' event (§8.3.2).
 data FileOp = OpRead | OpWrite | OpList
@@ -46,6 +54,14 @@ fileOpText = \case
   OpWrite -> "write"
   OpList -> "list"
 
+-- | Parse a 'FileOp' from its wire spelling; defaults to 'OpList' on an
+-- unrecognised value (its @bytes@ is 0 and it has no side effects).
+fileOpFromText :: Text -> FileOp
+fileOpFromText = \case
+  "read" -> OpRead
+  "write" -> OpWrite
+  _ -> OpList
+
 -- | The terminal @status@ of a logical run (§8.3.2, §8.3.3).
 data RunStatus = Completed | Aborted
   deriving stock (Eq, Show)
@@ -54,6 +70,12 @@ runStatusText :: RunStatus -> Text
 runStatusText = \case
   Completed -> "completed"
   Aborted -> "aborted"
+
+-- | Parse a 'RunStatus' from its wire spelling; defaults to 'Aborted'.
+runStatusFromText :: Text -> RunStatus
+runStatusFromText = \case
+  "completed" -> Completed
+  _ -> Aborted
 
 -- | The variant-specific payload of a trace event (spec §8.3.2). The common
 -- @seq@\/@at@ fields live on 'TraceEvent'; in-step variants carry their
@@ -150,28 +172,121 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "status" .= runStatusText status
         ]
 
--- | An in-memory event accumulator. Holds the next @seq@ and the events so far
--- in reverse chronological order. M5 will additionally persist each emitted
--- event to @trace.jsonl@ through this same seam.
-data Tracer = Tracer (IORef (Int, [TraceEvent]))
+-- | Decode a single @trace.jsonl@ line back into a 'TraceEvent' (spec §8.3),
+-- the inverse of 'eventToJson'. Used to reconstruct @ctx.trace@ and continue
+-- @seq@ numbering on resume (§8.3.5, §8.2), and by @hwfi show@. Returns
+-- 'Nothing' on a malformed line so a corrupt trailing write (e.g. from a crash
+-- mid-append) is skipped rather than aborting the reader.
+eventFromJson :: Value -> Maybe TraceEvent
+eventFromJson = parseMaybe parseEvent
 
--- | Create a fresh tracer starting at @seq = 0@ (spec §8.3.1).
+parseEvent :: Value -> Parser TraceEvent
+parseEvent = withObject "TraceEvent" $ \o -> do
+  s <- o .: "seq"
+  at <- o .: "at"
+  tag <- o .: "tag" :: Parser Text
+  body <- parseBody tag o
+  pure (TraceEvent s at body)
+  where
+    parseBody tag o = case tag of
+      "run-start" ->
+        RunStart <$> o .: "run_id" <*> o .: "entrypoint" <*> o .: "inputs" <*> o .: "project_hash"
+      "step-start" ->
+        StepStart <$> qn o <*> o .: "step_id" <*> o .: "args" <*> o .: "cacheable"
+      "step-end" ->
+        StepEnd <$> qn o <*> o .: "step_id" <*> o .: "result" <*> o .: "duration_ms"
+      "llm-call" ->
+        LlmCall
+          <$> qn o
+          <*> o .: "step_id"
+          <*> o .: "model"
+          <*> o .: "system"
+          <*> o .: "prompt"
+          <*> o .: "response"
+          <*> o .: "tokens_in"
+          <*> o .: "tokens_out"
+      "file-io" ->
+        FileIo <$> qn o <*> o .: "step_id" <*> (fileOpFromText <$> o .: "op") <*> o .: "path" <*> o .: "bytes"
+      "error" ->
+        ErrorEvent <$> qn o <*> o .: "step_id" <*> o .: "message" <*> (errorKindFromText <$> o .: "kind")
+      "resumed" ->
+        Resumed <$> o .: "run_id" <*> o .: "from_seq"
+      "run-end" ->
+        RunEnd <$> o .: "run_id" <*> (runStatusFromText <$> o .: "status")
+      other -> fail ("unknown trace tag: " <> T.unpack other)
+    qn o = qnameFromText <$> o .: "qname"
+
+-- | A one-line human-readable rendering of a trace event for @hwfi show@
+-- (spec §9). Not a wire format; 'eventToJson' remains the persisted form.
+renderEvent :: TraceEvent -> Text
+renderEvent (TraceEvent s at body) =
+  pad6 s <> "  " <> at <> "  " <> renderBody body
+  where
+    pad6 n = let t = T.pack (show n) in T.replicate (max 0 (6 - T.length t)) " " <> t
+    at' = renderQName
+    step q sid = at' q <> "#" <> sid
+    renderBody = \case
+      RunStart runId entry _ ph ->
+        "run-start   " <> runId <> "  entry=" <> entry <> "  project=" <> shortHash ph
+      StepStart q sid _ cacheable ->
+        "step-start  " <> step q sid <> (if cacheable then "  [cacheable]" else "  [volatile]")
+      StepEnd q sid _ ms ->
+        "step-end    " <> step q sid <> "  " <> T.pack (show ms) <> "ms"
+      LlmCall q sid model _ _ _ tin tout ->
+        "llm-call    " <> step q sid <> "  model=" <> model <> "  tokens=" <> T.pack (show tin) <> "/" <> T.pack (show tout)
+      FileIo q sid op path bytes ->
+        "file-io     " <> step q sid <> "  " <> fileOpText op <> " " <> path <> " (" <> T.pack (show bytes) <> "B)"
+      ErrorEvent q sid msg _ ->
+        "error       " <> step q sid <> "  " <> msg
+      Resumed runId fromSeq ->
+        "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
+      RunEnd runId status ->
+        "run-end     " <> runId <> "  status=" <> runStatusText status
+    shortHash h = T.take 12 h
+
+-- | An event accumulator with an optional append-only file sink. Holds the
+-- next @seq@ and the events so far in reverse chronological order. When a sink
+-- is present, 'emit' also appends the event's JSON line to @trace.jsonl@ and
+-- flushes, so a crash mid-run leaves a durable prefix to resume from (§8.2).
+data Tracer = Tracer (IORef (Int, [TraceEvent])) (Maybe Handle)
+
+-- | Create a fresh in-memory tracer starting at @seq = 0@ (spec §8.3.1). Used
+-- by tests and callers that do not persist.
 newTracer :: IO Tracer
-newTracer = Tracer <$> newIORef (0, [])
+newTracer = do
+  ref <- newIORef (0, [])
+  pure (Tracer ref Nothing)
 
--- | Append an event, assigning it the next @seq@ and the current timestamp.
+-- | Create a tracer that appends every emitted event to @h@, seeded with the
+-- events already persisted (in chronological order) and the next @seq@ to
+-- assign. On a fresh run this is @(h, [], 0)@; on resume it is the parsed
+-- @trace.jsonl@ and @last-seq + 1@ (spec §8.2, §8.3.5).
+newPersistentTracer :: Handle -> [TraceEvent] -> Int -> IO Tracer
+newPersistentTracer h preload nextSeq = do
+  ref <- newIORef (nextSeq, reverse preload)
+  pure (Tracer ref (Just h))
+
+-- | Append an event, assigning it the next @seq@ and the current timestamp,
+-- and persisting it to the sink (if any) before returning.
 emit :: Tracer -> EventBody -> IO TraceEvent
-emit (Tracer ref) body = do
+emit (Tracer ref sink) body = do
   now <- getCurrentTime
   let at = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%3QZ" now)
-  atomicModifyIORef' ref $ \(nextSeq, evs) ->
-    let ev = TraceEvent nextSeq at body
-     in ((nextSeq + 1, ev : evs), ev)
+  ev <-
+    atomicModifyIORef' ref $ \(nextSeq, evs) ->
+      let e = TraceEvent nextSeq at body
+       in ((nextSeq + 1, e : evs), e)
+  case sink of
+    Nothing -> pure ()
+    Just h -> do
+      BSL.hPut h (encode (eventToJson ev) <> "\n")
+      hFlush h
+  pure ev
 
 -- | All events so far, in chronological order (spec §8.3.5: @ctx.trace@ is the
 -- ordered parse of the trace as persisted so far).
 snapshotEvents :: Tracer -> IO [TraceEvent]
-snapshotEvents (Tracer ref) = reverse . snd <$> readIORef ref
+snapshotEvents (Tracer ref _) = reverse . snd <$> readIORef ref
 
 -- | The events so far as a JSON array, one object per event.
 snapshotJson :: Tracer -> IO Value
@@ -179,4 +294,4 @@ snapshotJson t = Array . V.fromList . map eventToJson <$> snapshotEvents t
 
 -- | The @seq@ that will be assigned to the next emitted event.
 currentSeq :: Tracer -> IO Int
-currentSeq (Tracer ref) = fst <$> readIORef ref
+currentSeq (Tracer ref _) = fst <$> readIORef ref

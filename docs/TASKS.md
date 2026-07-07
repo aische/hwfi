@@ -5,29 +5,11 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M5: Persistence, tracing, resume
+## Now — M6+: Deferred features (spec §13)
 
-M4 already landed the stable `TraceEvent` ADT + JSON encoders and an
-in-memory `Tracer` (`Hwfi.Runtime.Trace`); M5 extends that seam to persist
-to `trace.jsonl` and reconstruct on resume rather than reinventing the shape.
-
-- [ ] 5.1 Run directory layout (`.hwfi/runs/<id>/`), `run.json` schema
-- [ ] 5.2 Step-key hashing (§8.1): ctx-projection over stable fields,
-      `callee-fingerprint` from 3.10, `WorkflowRef`/`ToolRef` args
-      contribute referenced fingerprints; canonical JSON for args
-- [ ] 5.3 Step result cache read/write; skip cached cacheable steps on
-      resume; always re-execute non-cacheable steps; verify code-edit
-      invalidation (A13)
-- [ ] 5.4 Append-only `trace.jsonl` writer implementing spec §8.3:
-      variant encoders (incl. `Resumed`, `eval` error kind), monotonic
-      `seq` continuing across attempts, ISO-8601 `at`, ordering
-      invariants; cached steps emit no new events
-- [ ] 5.5 `ctx.trace` reconstruction on resume by parsing the full
-      persisted `trace.jsonl` (§8.3.5); test caching-independence (A15)
-- [ ] 5.6 `Secret<T>` redaction in trace serialisation
-- [ ] 5.7 Workspace lock file (`.hwfi/lock`) to prevent concurrent runs
-- [ ] 5.8 `hwfi resume` command; crash-injection test satisfying A4 and A7
-- [ ] 5.9 `hwfi show` pretty-printer for a trace
+M1–M5 are complete. The engine parses, type-checks, runs, persists,
+resumes, and pretty-prints. Pick the next milestone from the backlog
+below; control flow (6.1) is the natural next step.
 
 ## Backlog — M6+: Deferred, per spec §13
 
@@ -68,3 +50,9 @@ _Move items here temporarily, then archive to
       + `introspect`), sub-workflow calls, in-memory tracer; `hwfi run`
       wired; `examples/summarise/`; 102 tests (A3/A6/A9/A11 covered).
       (2026-07-07)
+- [x] M5 Persistence, tracing, resume (5.1–5.9): `Hwfi.Runtime.{RunStore,
+      StepKey}`; run dir + `run.json`; content-addressed step cache with
+      §8.1 step-key; append-only `trace.jsonl` + `eventFromJson`; resume
+      with `ctx.trace` reconstruction; secret redaction at the writer;
+      `.hwfi/lock`; `hwfi resume`/`show`; 128 tests (A4/A7/A13/A15 +
+      truncated-trace crash resume). (2026-07-07)
