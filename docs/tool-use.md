@@ -144,11 +144,12 @@ the executor runs under its own tracing/caching, with the sub-workflow's
 result fed back to the model. The engine stays in control of every effect;
 the tool layer only names what to run.
 
-### 3.3 Typed output via a mandatory "submit" tool
+### 3.3 Typed output via a terminating "submit" tool
 
+This is the mechanism that unifies structured output with tool-calling.
 Instead of provider JSON mode, an agent that must return structured data is
 given a synthetic `submit_<name>` tool whose parameters *are* the output
-schema, and it is required to call it to finish:
+schema:
 
 ```224:234:../llm-workflow/src/LLM/Workflow/Workflow.hs
       WAgentSubmit @o name agentWithModels mbcid ->
@@ -157,15 +158,77 @@ schema, and it is required to call it to finish:
             pending = Pending { ..., submitTool = Just submit }
 ```
 
-`mkSomeSubmit` builds a `ToolDef` from the type's `autodocodec` schema, and
-`ssDecode` validates the model's submit arguments back into the typed value
-(`src/LLM/Workflow/ToolUtils.hs`). Finishing *without* calling submit is a
-hard error (`submitRequiredError`).
+The submit tool is special in two ways:
 
-**Lesson for hwfi:** an agent step that must produce a typed record (per
-its `rsigOutputs`) can expose a mandatory submit tool synthesized from the
-same `Type -> JSON Schema` translation used for tool parameters (§4.2).
-This gives type-safe agent output without a second `genObject` round.
+1. **Calling it ends the loop and its arguments become the result.** A
+   submit call produces a `ToolYield`; the machine decodes the arguments
+   against the output type and `unwindPastTools` discards the remaining
+   tool-round continuation, short-circuiting the loop:
+
+```206:213:../llm-workflow/src/LLM/Workflow/Workflow.hs
+        ToolYield val ->
+          case pending.submitTool of
+            Just submit | toolCall.tcName == submit.ssName ->
+              case submit.ssDecode val of
+                Right decoded ->
+                  pure $ Stack uAcc (RunReturn (unsafeCoerce decoded)) (unwindPastTools konts)
+                Left err ->
+                  pure $ Stack uAcc (RunReturn ("Submit decode error: " <> err)) konts
+```
+
+   A decode failure is returned as an ordinary tool reply
+   (`"Submit decode error: …"`), so the model can correct itself and call
+   submit again — no run abort.
+
+2. **It is mandatory.** `mkSomeSubmit` builds the `ToolDef` from the type's
+   `autodocodec` schema and `ssDecode` validates the arguments
+   (`src/LLM/Workflow/ToolUtils.hs`); finishing with plain text *without*
+   calling submit is a hard error (`submitRequiredError`).
+
+**Lesson for hwfi:** an agent step that must produce a typed record (per its
+`rsigOutputs`) should expose a **terminating submit tool** synthesized from
+the same `Type -> JSON Schema` translation used for tool parameters (§4.2).
+When the model calls it, the engine `coerceFromJson`s the arguments into the
+step's typed `RValue` result and stops the loop; a coercion failure is fed
+back as a tool message for retry. This gives type-safe agent output while
+still letting the agent call tools to gather information first — something
+neither `builtin/llm-gen-object` (structured, but no tools) nor a plain
+free-text agent can do. In effect `builtin/llm-gen-object` becomes the
+degenerate zero-tool case of a submit-terminated agent.
+
+Design choice to settle: whether submit is **mandatory** (agent must call it
+to finish, `llm-workflow`'s rule — good when a typed result is required) or
+**optional** (agent may finish with free text *or* submit — good when the
+step's output is `{ text: String }`). The natural rule for hwfi: derive it
+from the step's declared output type — a non-trivial `rsigOutputs` record
+implies a mandatory terminating submit tool; a `{ text: String }` output
+allows free-text termination.
+
+**Terminating-round semantics.** Because submit ends the loop, a round that
+mixes submit with other tool calls is ambiguous: the other calls in that
+round would be discarded unrun (`unwindPastTools` throws away the pending
+`KTool` frames). We resolve this in two layers:
+
+- *Instruction (soft).* The synthesized submit tool's `toolDescription`
+  must state clearly that it ends the task and **must be called on its own,
+  never in the same response as other tool calls** — e.g. "Call this only
+  when you have everything you need; do not combine it with other tool
+  calls in the same turn." Most providers respect this and will emit submit
+  as a solitary call.
+
+- *Engine policy (hard), for when a model ignores the instruction.* Decide
+  one of: (a) reject the round and feed back a tool message telling the
+  model to call submit alone (safest — no side effects run speculatively,
+  and it composes with the decode-error retry path); or (b) run the
+  non-submit calls in the round first, then submit. Recommended: **(a)**,
+  because option (b) executes tool side effects whose results the model
+  never sees, which is confusing and can be unsafe for mutating tools.
+
+**Caching/resume.** Submit is just another tool call, so the intra-step
+content-addressed caching of §5.2 covers it with no special handling: its
+sub-key is `hash(agent-step-key, round, submit-name,
+canonical(arguments))`, and on resume a matching submit is served from
+cache and the loop terminates identically.
 
 ### 3.4 Machine state is inspectable data (the resume lever)
 
@@ -435,7 +498,10 @@ Ordered so each step is independently testable:
 3. **`builtin/llm-agent`** driving that machine over `LLM.Generate`, with
    model tool calls reified as `RunWorkflow`-style steps; marked
    non-cacheable initially. Type-check + graph fingerprint support.
-4. **Mandatory submit tool** for typed agent output (§3.3).
+4. **Terminating submit tool** for typed agent output (§3.3): calling it
+   ends the loop and its coerced arguments become the step result; mandatory
+   or optional per the step's declared output type. Subsumes
+   `builtin/llm-gen-object` as the zero-tool case.
 5. **Trace events** for rounds/tool-calls/results, with redaction, plus
    `hwfi show` rendering and `eventFromJson` round-trip.
 6. **Intra-step + serialized-state resume** (§5.2). Largest; own
