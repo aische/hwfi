@@ -4,37 +4,32 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-Spec v1 is complete: all `[open]` markers resolved, grammar and trace
-schema pinned, `llm-simple` integration path verified against source.
-Ready to start **M1: project skeleton**.
+**M1 (project skeleton) is complete.** The cabal project builds, the
+`llm-simple` local dependency is wired, the CLI parses all four commands,
+and the runtime foundations (key store, model catalog loader, project
+manifest) are implemented and unit-tested. Ready to start **M2: parsing
+and AST**.
 
 ## Done recently
 
-- Concretised `docs/spec.md` from `idea.md`: layout, syntax, type system,
-  built-in tools, sandbox, persistence, CLI, acceptance A1–A11.
-- Locked step DSL and expression grammar (§3.4 EBNF); locked trace event
-  schema with ordering invariants (§8.3).
-- Ambient typed `Context` (`workspace`, `run`, `self`, `inputs`, `trace`,
-  `env`) + `builtin/introspect` escape hatch + `Secret<T>` with trace
-  redaction + non-cacheable classification for volatile-ctx steps.
-- Read `llm-simple` `Load` module; confirmed `.env`-based key flow.
-- Revised decision after review: `hwfi` builds its own gateway map
-  from `LLM.Providers.*` and its own key store from `--env-file`,
-  `<project>/.env`, and process env (in that precedence). No chdir;
-  no engine-default model catalog (every project ships one). Keys
-  typed as `Secret Text` throughout. Startup validates provider–key
-  linkage against the catalog (A12).
-- Final decisions: binary `hwfi`, run dir `.hwfi/`, test `hspec`, md
-  parser `commonmark-hs`, shared types under `types/*.md` in v1, model
-  arg names a catalog entry, CLI structured inputs, `file:line:col`
-  error format.
-- Spec review pass (from temporary `issues.md`): step-key now includes a
-  transitive callee fingerprint (fixes code-edit cache invalidation);
-  strict `env` presence (no `Optional<T>` in v1); `TypeExpr` can
-  reference aliases; added `builtin/llm-chat`; defined interpolation
-  rendering; redesigned resume trace model (`Resumed` marker, no
-  synthetic cached events, `ctx.trace` = full file parse); added `eval`
-  error kind; tightened the `return` rule. Acceptance now A1–A16.
+- Cabal project (`hwfi.cabal`, `cabal.project`, GHC2021): library +
+  `hwfi` executable + `hspec` test-suite. `cabal build` and `cabal test`
+  both green (14 examples).
+- `Hwfi.Compat`: curated re-exports of the consumed `llm-simple` surface
+  (`LLM.Generate`, `LLM.Providers.OpenAI`, `LLM.Load.ModelCatalog`);
+  confirms 1.2 wiring compiles.
+- `Hwfi.Cli`: `optparse-applicative` parser for `check`/`run`/`resume`/
+  `show` incl. `--workspace`, `--env-file`, repeatable `--input k=v|k=@f`,
+  `--input-json`, `--entry`. Commands are stubs (exit 2, "not implemented").
+- `Hwfi.Project.Manifest`: `project.json` parser (strict fields, optional
+  `env` → `[]`) + `validateEnvPresence` for strict env presence (A14).
+- `Hwfi.Runtime.Secret`: opaque `Secret a` with redacting `Show`.
+- `Hwfi.Runtime.Provider`: closed provider sum type + env-var mapping.
+- `Hwfi.Runtime.KeyStore`: `.env` parsing via `Configuration.Dotenv.parseFile`,
+  precedence `--env-file` > `<project>/.env` > process env, no process-env
+  injection. Keys typed `Secret Text`.
+- `Hwfi.Runtime.ModelCatalog`: required `model-catalog.json` loader wrapping
+  `loadModelCatalog`; `validateProviderKeys` for A12 (spec-verbatim error).
 
 ## Blockers
 
@@ -42,5 +37,7 @@ Ready to start **M1: project skeleton**.
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **Now (M1)**. Start with 1.1 (cabal init)
-and 1.2 (`../llm-simple` local package).
+See [TASKS.md](TASKS.md) → **M2: Parsing and AST**. Start with 2.1
+(`commonmark-hs` markdown splitting) and 2.2 (core AST modules).
+Note: `commonmark-hs` is not yet in the local cabal cache; first M2 build
+will need network to fetch it.

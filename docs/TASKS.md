@@ -5,30 +5,7 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M1: Project skeleton
-
-- [ ] 1.1 Initialize cabal project (`hwfi.cabal`, `cabal.project`) with
-      GHC2021, library + executable (`hwfi`) + `hspec` test-suite stanzas
-- [ ] 1.2 Wire `../llm-simple` as a local `packages:` entry in
-      `cabal.project`; confirm `import LLM.Generate`,
-      `import LLM.Providers.OpenAI`, and
-      `import LLM.Load.ModelCatalog` compile
-- [ ] 1.3 `hspec` smoke test + `cabal test` wired
-- [ ] 1.4 `optparse-applicative` CLI stub for `check`, `run`, `resume`,
-      `show` per spec §9 (including `--input`, `--input-json`, `--entry`
-      flags); commands print "not implemented" and exit appropriately
-- [ ] 1.5 `project.json` schema module + parser (fields: `name`, `version`,
-      `entrypoint`, optional `env` whitelist); enforce strict env presence
-      at startup (§5.7, A14)
-- [ ] 1.6 `Hwfi.Runtime.KeyStore`: parse `.env` files via
-      `Configuration.Dotenv.parseFile` (no process-env injection), merge
-      `--env-file` > `<project>/.env` > process environment into
-      `Map ProviderName (Secret Text)`
-- [ ] 1.7 Model catalog loader: require `<project>/model-catalog.json`;
-      parse via `LLM.Load.ModelCatalog.loadModelCatalog`; fail with a
-      clear error if missing (A10-adjacent, A11, A12)
-
-## Next — M2: Parsing and AST
+## Now — M2: Parsing and AST
 
 - [ ] 2.1 `Hwfi.Parse.Markdown` on top of `commonmark-hs`: split file into
       frontmatter YAML + body blocks + fenced `step` blocks with source
@@ -145,3 +122,8 @@ roughly ordered but can be reshuffled.
 
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
+
+- [x] M1 Project skeleton (1.1–1.7): cabal project, `llm-simple` wiring,
+      hspec suite, CLI stub, `project.json` parser, `KeyStore`, model
+      catalog loader + provider-key validation. `cabal build`/`cabal test`
+      green. (2026-07-07)
