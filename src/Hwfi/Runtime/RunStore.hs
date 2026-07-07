@@ -281,5 +281,5 @@ withWorkspaceLock wsRoot action = do
 atomicWrite :: FilePath -> BSL.ByteString -> IO ()
 atomicWrite path bytes = do
   let tmp = path <> ".tmp"
-  withFile tmp WriteMode (\h -> BSL.hPut h bytes)
+  withFile tmp WriteMode (`BSL.hPut` bytes)
   renameFile tmp path

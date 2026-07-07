@@ -42,6 +42,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, renderQName)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
+import Data.Maybe (fromMaybe)
 
 -- | Compute the hex step-key (spec §8.1).
 computeStepKey ::
@@ -84,7 +85,7 @@ argsToJson refFp args =
   Aeson.Object (KM.fromList [(K.fromText k, toJson v) | (k, v) <- Map.toList args])
   where
     toJson = \case
-      VRef _ q -> Aeson.String ("ref:" <> maybe (renderQName q) id (refFp q))
+      VRef _ q -> Aeson.String ("ref:" <> fromMaybe (renderQName q) (refFp q))
       VSecret _ inner -> toJson inner
       VList xs -> Aeson.Array (V.fromList (map toJson xs))
       VRecord m -> Aeson.Object (KM.fromList [(K.fromText k, toJson x) | (k, x) <- Map.toList m])

@@ -1,6 +1,6 @@
 module Hwfi.Runtime.RunStoreSpec (spec) where
 
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (object, (.=))
 import Data.Either (isLeft)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
@@ -17,6 +17,7 @@ import Hwfi.Runtime.RunStore
   )
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
+import Control.Monad (join)
 
 sampleMeta :: RunMeta
 sampleMeta =
@@ -77,6 +78,5 @@ spec = do
     it "rejects a second concurrent holder" $
       withSystemTempDirectory "hwfi-rs" $ \root -> do
         outer <- withWorkspaceLock root $ do
-          inner <- withWorkspaceLock root (pure ())
-          pure inner
-        (outer >>= id) `shouldSatisfy` isLeft
+          withWorkspaceLock root (pure ())
+        join outer `shouldSatisfy` isLeft

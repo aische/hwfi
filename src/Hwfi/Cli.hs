@@ -36,6 +36,7 @@ import Data.Aeson (Value (..), eitherDecodeFileStrict', encode)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BSL
+import Data.Either (fromRight)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -241,7 +242,7 @@ renderOne projectDir d = do
 readFileOrEmpty :: FilePath -> IO Text
 readFileOrEmpty path = do
   result <- try (TIO.readFile path) :: IO (Either IOException Text)
-  pure (either (const "") id result)
+  pure (fromRight "" result)
 
 -- | Run @hwfi run@ (spec §7, §9): parse, type-check, validate provider keys
 -- (A12) and the @env@ whitelist (A14), build gateways and the model store
@@ -396,7 +397,7 @@ collectInputs opts = do
           isStrings = Map.fromList [(k, v) | InputString k v <- opts.inputs]
         }
   where
-    readFileArg (k, p) = fmap ((,) k) <$> readJsonFile p
+    readFileArg (k, p) = fmap (k,) <$> readJsonFile p
 
 -- | Resolve each declared input to a typed 'RValue', applying source
 -- precedence and coercing to the declared type.

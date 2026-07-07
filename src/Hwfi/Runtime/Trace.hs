@@ -242,7 +242,7 @@ renderEvent (TraceEvent s at body) =
         "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
       RunEnd runId status ->
         "run-end     " <> runId <> "  status=" <> runStatusText status
-    shortHash h = T.take 12 h
+    shortHash = T.take 12
 
 -- | An event accumulator with an optional append-only file sink. Holds the
 -- next @seq@ and the events so far in reverse chronological order. When a sink

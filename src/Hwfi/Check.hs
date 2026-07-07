@@ -40,6 +40,7 @@ import Hwfi.Project.Manifest (ProjectManifest (..))
 import Hwfi.Source (Diagnostic, Pos (..))
 import Hwfi.TypedProject
 import Hwfi.Type (Type (..), isSecretEnvName)
+import Data.Either (fromRight)
 
 -- | Type-check a parsed project. Returns all accumulated errors, or the
 -- checked project.
@@ -122,7 +123,7 @@ resolveSignature known aliasMap path (Signature ins outs imps) =
     resolveFields fs =
       let rs = [(n, resolveSigTypeExpr known aliasMap path (Pos 1 1) t) | (n, t) <- fs]
           errs = concat [e | (_, Left e) <- rs]
-          ok = [(n, either (const TyJson) id r) | (n, r) <- rs]
+          ok = [(n, fromRight TyJson r) | (n, r) <- rs]
        in (errs, ok)
 
 -- Imports and entrypoint -----------------------------------------------------

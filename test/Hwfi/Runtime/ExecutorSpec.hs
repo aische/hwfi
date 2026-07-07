@@ -165,7 +165,7 @@ spec = do
       withSystemTempDirectory "hwfi-run" $ \ws -> do
         _ <- runFileOnly ws
         readFileT (ws </> ".hwfi" </> "runs" </> "run-test" </> "trace.jsonl")
-          >>= \t -> (T.null t) `shouldBe` False
+          >>= \t -> T.null t `shouldBe` False
 
   describe "Resume and step caching (§8.2, A4, A7, A15)" $ do
     it "skips cacheable steps and re-executes volatile ones on resume" $

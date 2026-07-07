@@ -108,6 +108,7 @@ import Hwfi.TypedProject
   )
 import System.IO (hClose)
 import UnliftIO.Exception (bracket)
+import Data.Maybe (fromMaybe)
 
 -- | Everything the executor threads through a run.
 data Runtime = Runtime
@@ -297,7 +298,7 @@ execStatements ::
   [Statement] ->
   IO (Either RuntimeError RValue)
 execStatements rt typedSteps q sections bindings lastResult = \case
-  [] -> pure (Right (maybe (VRecord Map.empty) id lastResult))
+  [] -> pure (Right (fromMaybe (VRecord Map.empty) lastResult))
   (SReturn args _ : _) -> do
     ctx <- buildCtx rt q "return"
     let env = mkEvalEnv rt sections (Map.insert "ctx" ctx bindings)

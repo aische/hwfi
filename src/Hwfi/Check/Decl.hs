@@ -17,6 +17,7 @@ where
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
@@ -29,8 +30,9 @@ import Hwfi.Check.Builtins (Callee (..), introspectQName)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr)
 import Hwfi.Source (Pos (..), Span (..))
-import Hwfi.TypedProject (ResolvedSignature (..))
 import Hwfi.Type
+import Hwfi.TypedProject (ResolvedSignature (..))
+import Data.Either (fromLeft)
 
 -- | Ambient information a body check needs about the rest of the project.
 data CheckCtx = CheckCtx
@@ -109,7 +111,7 @@ checkStep :: CheckCtx -> FilePath -> [Section] -> BodyState -> StepStmt -> BodyS
 checkStep ctx path sections st s =
   st
     { bsErrors = bsErrors st <> targetErrs <> argErrs <> bindErrs,
-      bsSteps = (s, cacheable, maybe TyJson id resultType) : bsSteps st,
+      bsSteps = (s, cacheable, fromMaybe TyJson resultType) : bsSteps st,
       bsRoots = roots',
       bsBound = bound',
       bsLastResult = resultType
@@ -148,7 +150,9 @@ resolveTarget ctx env path pos target
                 path
                 pos
                 UndeclaredTarget
-                ( "'" <> renderQName target <> "' is not a ToolRef/WorkflowRef value (it has type "
+                ( "'"
+                    <> renderQName target
+                    <> "' is not a ToolRef/WorkflowRef value (it has type "
                     <> renderType other
                     <> ")"
                 )
@@ -204,8 +208,8 @@ checkArgs env callee args = missingErrs <> extraErrs <> valueErrs
           (envArgPos args)
           ArgMismatch
           ("missing argument '" <> n <> "'")
-      | n <- inputNames,
-        n `notElem` argNames
+        | n <- inputNames,
+          n `notElem` argNames
       ]
 
     extraErrs =
@@ -214,15 +218,15 @@ checkArgs env callee args = missingErrs <> extraErrs <> valueErrs
           (spanStart (argSpan a))
           ArgMismatch
           ("unexpected argument '" <> argName a <> "'")
-      | a <- args,
-        argName a `notElem` inputNames
+        | a <- args,
+          argName a `notElem` inputNames
       ]
 
     valueErrs =
       concat
-        [ either id (const []) (checkExpr env (spanStart (argSpan a)) t (argValue a))
-        | a <- args,
-          Just t <- [lookup (argName a) inputs]
+        [ fromLeft [] (checkExpr env (spanStart (argSpan a)) t (argValue a))
+          | a <- args,
+            Just t <- [lookup (argName a) inputs]
         ]
 
 -- | A fallback position for a "missing argument" error: the first argument's
@@ -247,7 +251,7 @@ bindResult path pos binder resultType st =
       | n `elem` bsBound st ->
           (bsRoots st, bsBound st, [shadow n "an earlier step"])
       | otherwise ->
-          ( Map.insert n (maybe TyJson id resultType) (bsRoots st),
+          ( Map.insert n (fromMaybe TyJson resultType) (bsRoots st),
             n : bsBound st,
             []
           )
@@ -298,14 +302,14 @@ checkExplicitReturn env outputs args pos = nameErrs <> valueErrs
               <> commas argNames
               <> "}"
           )
-      | not (null missing) || not (null extra)
+        | not (null missing) || not (null extra)
       ]
 
     valueErrs =
       concat
-        [ either id (const []) (checkExpr env (spanStart (argSpan a)) t (argValue a))
-        | a <- args,
-          Just t <- [lookup (argName a) outputs]
+        [ fromLeft [] (checkExpr env (spanStart (argSpan a)) t (argValue a))
+          | a <- args,
+            Just t <- [lookup (argName a) outputs]
         ]
 
 -- | Apply the implicit-return rule: with non-empty outputs and no explicit
