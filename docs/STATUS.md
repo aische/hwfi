@@ -51,6 +51,8 @@ items (agent state serialisation §8.2.1, OS-level `exec` isolation §7.5,
   uniform and makes conditional/loop results first-class.
 - Step ids are globally unique **within a declaration**, including across `if`
   branches, so `then`/`else` arms cannot reuse a binder name (checked, A-dup).
+  **Open decision (revisit before v1 freeze):** keep this flat namespace or move
+  to block-local scoping — see spec §4.2 and TASKS → DEC-1.
 - `par` result ordering is by input index (not completion); the first error is
   the lowest-index one. Iterations write to distinct cache keys/paths, so
   concurrent cache writes are safe; only the tracer's `emit` is serialised.

@@ -356,10 +356,63 @@ arguments). The two parsers must not conflate them.
 
 ## 4. Control flow (v1)
 
-- Sequential steps only.
-- **[deferred v1.1]** `if`, `foreach`, `par`.
+- Sequential steps, plus `if`/`else`, `foreach`, and `par` (implemented in M8;
+  see §4.1 for the design and §4.2 for an open decision).
 - Errors abort the workflow; the failing step is recorded and the run is
   resumable from that step.
+
+### 4.1 `if` / `foreach` / `par`
+
+Control-flow constructs are **value-producing** and use the same
+`binder <- rhs @id` shape as step calls, so caching, tracing, and resume
+(§8.1/§8.2) stay uniform:
+
+- A block is a brace-delimited statement list with its own scope; its value is
+  the value of its **last statement** (an empty block yields an empty record).
+- `x <- if ${cond} { … } else { … } @id` requires `cond : Bool`. When the
+  construct binds a value, the `else` branch is **mandatory** and both arms must
+  have structurally-equal result types.
+- `xs <- foreach v in ${list} { … } @id` and `xs <- par(max = N) v in ${list}
+  { … } @id` require `list : List<T>`, bind `v : T` in the body scope, and
+  produce `List<U>` where `U` is the body's tail type. `_ <-` discards the list
+  (side-effect-only loop).
+- `par` runs iterations with **bounded concurrency** (default 4, `par(max = N)`
+  overrides), returns results in **input order** regardless of completion order,
+  and aborts on the **lowest-index** failure. The trace writer serialises `emit`
+  so `seq` numbering and on-disk line order stay consistent under concurrency.
+- Resume correctness: each step inside a branch/loop is an ordinary cacheable
+  step, but its step-key is **iteration/branch-scoped** — the executor threads a
+  scope prefix (e.g. `check#2/c`, `mode?then/s`) into the key so dynamically
+  distinct occurrences of the same static step get distinct keys. The scope is
+  also threaded into sub-workflow calls (call-site-prefixed internal keys),
+  favouring per-iteration resume correctness over cross-call cache sharing. The
+  durable-workspace invariant (§8.2) therefore holds through loops/branches: a
+  completed iteration's side effect is not re-applied on resume.
+- Trace: `loop-start`/`loop-iter`/`loop-end` bracket each loop with its kind
+  (`foreach`/`par`) and count; `if-branch` records the taken arm (§8.3.2).
+
+### 4.2 Open decision — identifier scoping in control-flow blocks
+
+**Status: decided for M8, revisit before v1 freeze.**
+
+M8 uses a **flat, per-declaration identifier namespace**: step binders, loop
+variables, and construct `@id`s must all be unique within a declaration —
+*including across sibling `if` branches*. Consequently mirrored branches cannot
+reuse a binder name (e.g. the `then`/`else` arms of a conditional must bind
+`strict_msg` / `lenient_msg`, not both `s`). No binding shadows an outer one.
+
+Rationale: it keeps scope resolution and trace correlation simple (one name →
+one static step) and avoids "which `s`?" ambiguity in step-key scoping.
+
+The alternative is **branch/block-local scoping**: each block is its own scope,
+inner bindings simply do not escape, and sibling branches may reuse names (only
+the outer scope's names must stay unshadowed). This reads more naturally but
+requires the checker and the step-key scope machinery to disambiguate identical
+static ids by their scope path rather than by name alone.
+
+Decision to make before freezing v1: keep the flat namespace, or move to
+block-local scoping. Changing this later is a source-compatibility break for any
+workflow that relied on cross-branch uniqueness diagnostics.
 
 ## 5. Type system (v1)
 

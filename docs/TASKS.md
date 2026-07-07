@@ -16,6 +16,15 @@ performance/hardening, not new surface area:
 - [ ] 8.g (Optional, carried over) serialise agent machine state to skip the
       replay re-walk on resume (§8.2.1) — performance only.
 
+## Decide before v1 freeze
+
+- [ ] **DEC-1 Identifier scoping in control-flow blocks (spec §4.2).** M8 ships a
+      flat per-declaration id namespace (step binders / loop vars / construct
+      `@id`s all unique, including across sibling `if` branches; no shadowing).
+      Reconsider vs. branch/block-local scoping (sibling branches may reuse
+      names; inner binds don't escape). Changing this later is a
+      source-compatibility break. Owner: Daniel.
+
 ## Backlog — M9+: Deferred, per spec §13
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
