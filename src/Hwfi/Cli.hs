@@ -32,17 +32,46 @@ module Hwfi.Cli
 where
 
 import Control.Exception (IOException, try)
+import Data.Aeson (Value (..), eitherDecodeFileStrict', encode)
+import Data.Aeson.Key qualified as K
+import Data.Aeson.KeyMap qualified as KM
+import Data.ByteString.Lazy qualified as BSL
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Check (checkProject, renderCheckErrors)
 import Hwfi.Parse.Project (loadProject)
-import Hwfi.Runtime.ModelCatalog (loadCatalog, renderCatalogError)
+import Hwfi.Project.Manifest (ProjectManifest (..), validateEnvPresence)
+import Hwfi.Runtime.Error (renderRuntimeError)
+import Hwfi.Runtime.Executor (RunResult (..), runEntrypoint)
+import Hwfi.Runtime.Gateways (buildGateways, buildModelStore)
+import Hwfi.Runtime.KeyStore (loadKeyStore)
+import Hwfi.Runtime.ModelCatalog
+  ( ModelCatalogMap,
+    loadCatalog,
+    renderCatalogError,
+    validateProviderKeys,
+  )
+import Hwfi.Runtime.Value (RValue, coerceFromJson, coerceFromString, redactedJson)
+import Hwfi.Runtime.Workspace (newWorkspace)
 import Hwfi.Source (Diagnostic (..), renderDiagnostic)
+import Hwfi.Type (Type)
+import Hwfi.TypedProject
+  ( ResolvedSignature (..),
+    TypedDecl (..),
+    TypedProject (..),
+    lookupTyped,
+  )
 import Options.Applicative
 import System.Exit (ExitCode (ExitFailure), exitWith)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
+import System.Random (randomRIO)
 
 -- | A parsed CLI invocation.
 data Command
@@ -162,7 +191,7 @@ defaultMain = execParser commandParserInfo >>= dispatch
 dispatch :: Command -> IO ()
 dispatch = \case
   Check opts -> runCheck opts
-  Run _ -> notImplemented "run"
+  Run opts -> runRun opts
   Resume _ -> notImplemented "resume"
   Show _ -> notImplemented "show"
 
@@ -205,6 +234,149 @@ readFileOrEmpty :: FilePath -> IO Text
 readFileOrEmpty path = do
   result <- try (TIO.readFile path) :: IO (Either IOException Text)
   pure (either (const "") id result)
+
+-- | Run @hwfi run@ (spec §7, §9): parse, type-check, validate provider keys
+-- (A12) and the @env@ whitelist (A14), build gateways and the model store
+-- (§7.2\/§7.3), then execute the entrypoint over the workspace. Prints the
+-- workflow's output record as JSON on success and exits 0; prints a runtime
+-- error and exits non-zero otherwise.
+runRun :: RunOpts -> IO ()
+runRun opts = do
+  let dir = opts.projectDir
+  eproj <- loadProject dir
+  case eproj of
+    Left ds -> reportAndFail dir ds []
+    Right proj -> do
+      ecat <- loadCatalog dir
+      case (checkProject proj, ecat) of
+        (Left errs, _) -> reportAndFail dir (renderCheckErrors errs) (catMsgs ecat)
+        (Right _, Left ce) -> failMsgs [renderCatalogError ce]
+        (Right tp, Right catalog) -> runChecked opts dir tp catalog
+  where
+    catMsgs = either (\e -> [renderCatalogError e]) (const [])
+
+-- | Everything after parse\/check\/catalog-load has succeeded.
+runChecked :: RunOpts -> FilePath -> TypedProject -> ModelCatalogMap -> IO ()
+runChecked opts dir tp catalog = do
+  keyStore <- loadKeyStore opts.envFile dir
+  let keyErrs = validateProviderKeys catalog keyStore
+  case keyErrs of
+    (_ : _) -> failMsgs (map renderCatalogError keyErrs)
+    [] -> do
+      envResult <- validateEnvPresence tp.tpManifest
+      case envResult of
+        Left missing -> failMsgs (map missingEnvMsg missing)
+        Right envVars -> case buildModelStore (buildGateways keyStore) catalog of
+          Left ce -> failMsgs [renderCatalogError ce]
+          Right models -> do
+            let entry = maybe (qnameFromText tp.tpManifest.entrypoint) qnameFromText opts.entry
+            case entrypointInputs entry tp of
+              Nothing -> failMsgs ["error: entrypoint '" <> renderQName entry <> "' is not a declared workflow"]
+              Just declaredInputs -> do
+                collected <- collectInputs opts
+                case collected >>= resolveInputs declaredInputs of
+                  Left msg -> failMsgs [msg]
+                  Right rootInputs -> do
+                    workspace <- newWorkspace opts.workspace
+                    runId <- genRunId
+                    result <- runEntrypoint tp workspace models envVars runId entry rootInputs
+                    finishRun result
+
+-- | Look up the declared inputs of the entrypoint (in signature order).
+entrypointInputs :: QName -> TypedProject -> Maybe [(Ident, Type)]
+entrypointInputs entry tp = rsigInputs . tdSignature <$> lookupTyped entry tp
+
+-- | Print the outcome and exit.
+finishRun :: RunResult -> IO ()
+finishRun result = case rrOutcome result of
+  Left err -> failMsgs [renderRuntimeError err]
+  Right outputs -> TIO.putStrLn (jsonText (redactedJson outputs))
+
+-- Input assembly (§9) --------------------------------------------------------
+
+-- | The three sources of input values, kept separate so precedence can be
+-- applied per declared field (spec §9): JSON from @--input-json@, JSON from
+-- @--input k=@file.json@, and raw strings from @--input k=v@. @--input@ entries
+-- override @--input-json@.
+data InputSources = InputSources
+  { isBaseJson :: Map Ident Value,
+    isFileJson :: Map Ident Value,
+    isStrings :: Map Ident Text
+  }
+
+collectInputs :: RunOpts -> IO (Either Text InputSources)
+collectInputs opts = do
+  eBase <- case opts.inputJson of
+    Nothing -> pure (Right Map.empty)
+    Just path -> fmap asObjectMap <$> readJsonFile path
+  eFiles <- mapM readFileArg [(k, p) | InputFile k p <- opts.inputs]
+  pure $ do
+    base <- eBase
+    fileEntries <- sequence eFiles
+    pure
+      InputSources
+        { isBaseJson = base,
+          isFileJson = Map.fromList fileEntries,
+          isStrings = Map.fromList [(k, v) | InputString k v <- opts.inputs]
+        }
+  where
+    readFileArg (k, p) = fmap ((,) k) <$> readJsonFile p
+
+-- | Resolve each declared input to a typed 'RValue', applying source
+-- precedence and coercing to the declared type.
+resolveInputs :: [(Ident, Type)] -> InputSources -> Either Text (Map Ident RValue)
+resolveInputs declared srcs =
+  Map.fromList <$> traverse resolveOne declared
+  where
+    resolveOne (name, ty)
+      | Just raw <- Map.lookup name (isStrings srcs) =
+          (,) name <$> tag name (coerceFromString ty raw)
+      | Just v <- Map.lookup name (isFileJson srcs) =
+          (,) name <$> tag name (coerceFromJson ty v)
+      | Just v <- Map.lookup name (isBaseJson srcs) =
+          (,) name <$> tag name (coerceFromJson ty v)
+      | otherwise = Left ("error: missing required input '" <> name <> "'")
+    tag name = either (\m -> Left ("error: input '" <> name <> "': " <> m)) Right
+
+-- Small IO\/JSON helpers ------------------------------------------------------
+
+readJsonFile :: FilePath -> IO (Either Text Value)
+readJsonFile path = do
+  result <- eitherDecodeFileStrict' path
+  pure (either (\e -> Left ("error: could not read JSON from " <> T.pack path <> ": " <> T.pack e)) Right result)
+
+asObjectMap :: Value -> Map Ident Value
+asObjectMap = \case
+  Object o -> Map.fromList [(K.toText k, v) | (k, v) <- KM.toList o]
+  _ -> Map.empty
+
+jsonText :: Value -> Text
+jsonText = TE.decodeUtf8 . BSL.toStrict . encode
+
+missingEnvMsg :: Text -> Text
+missingEnvMsg var =
+  "error: whitelisted env variable '" <> var <> "' is not set in the environment (§5.7)"
+
+-- | Generate a run id. A ULID is planned for M5; for now a sortable timestamp
+-- plus a small random suffix suffices to name a run directory uniquely enough.
+genRunId :: IO Text
+genRunId = do
+  now <- getCurrentTime
+  suffix <- randomRIO (0, 0xffffff :: Int)
+  let stamp = formatTime defaultTimeLocale "%Y%m%dT%H%M%S" now
+  pure ("run-" <> T.pack stamp <> "-" <> T.pack (padHex suffix))
+  where
+    padHex n = let h = showHex' n in replicate (6 - length h) '0' <> h
+    showHex' n
+      | n < 16 = [hexDigit n]
+      | otherwise = showHex' (n `div` 16) <> [hexDigit (n `mod` 16)]
+    hexDigit d = "0123456789abcdef" !! d
+
+-- | Print plain error messages to stderr and exit non-zero.
+failMsgs :: [Text] -> IO ()
+failMsgs msgs = do
+  TIO.hPutStr stderr (T.intercalate "\n\n" msgs <> "\n")
+  exitWith (ExitFailure 1)
 
 notImplemented :: String -> IO ()
 notImplemented name = do

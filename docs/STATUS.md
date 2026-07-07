@@ -4,29 +4,32 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-**M3 (type checker) is complete.** The engine now statically checks a
-whole project and produces a `TypedProject` with resolved signatures,
-per-step cacheability, and Merkle declaration fingerprints. `hwfi check`
-is wired end-to-end and reports spec §9.1 diagnostics. Ready to start
-**M4: runtime and built-in tools**.
+**M4 (runtime and built-in tools) is complete.** `hwfi run` executes a
+type-checked project end-to-end: it evaluates step arguments, injects the
+ambient `ctx` per step, dispatches to built-in tools and sub-workflows,
+and produces workflow outputs. Ready to start **M5: persistence, tracing,
+and resume** (the trace ADT and an in-memory tracer already exist as the
+seam M5 will persist through).
 
 ## Done recently
 
-- `Hwfi.Type`: resolved type representation (distinct from the surface
-  `TypeExpr`), `structEq`, `assignable` (structural + `String`→`FileRef`
-  subtyping), secret tagging, ambient `ctx`/`trace` field types.
-- `Hwfi.Check.Error` (`TypeError`/`TypeErrorKind` → §9.1 diagnostics),
-  `Hwfi.Check.Builtins` (`Callee` signatures for all `builtin/*`,
-  `builtin/introspect` identity), `Hwfi.Check.Alias` (alias expansion +
-  cycle detection).
-- `Hwfi.Check.Graph`: direct call graph, import-cycle detection (SCC),
-  and Merkle fingerprints computed over the acyclic graph.
-- `Hwfi.Check.Expr` (reference/interpolation/`@self#slug` typing),
-  `Hwfi.Check.Decl` (env building, arg checking, return rule, step
-  cacheability), `Hwfi.Check.checkProject` orchestrator, `TypedProject`.
-- `hwfi check` CLI wiring; catalog + project load + check with exit codes.
-- Tests: 71 examples (unit specs + expected-error fixtures under
-  `test/fixtures/check/`). `cabal build all`/`cabal test` green.
+- `Hwfi.Runtime.Value`: `RValue` runtime values, JSON conversion,
+  canonical (sorted-key) JSON, the §3.2.1 render table, secret redaction,
+  and CLI/JSON input coercion by declared type.
+- `Hwfi.Runtime.Error`: `RuntimeError` + `ErrorKind` (§8.3.2 kinds).
+- `Hwfi.Runtime.Trace`: stable `TraceEvent` ADT + JSON encoders (§8.3) and
+  an in-memory `Tracer` (monotonic gap-free `seq`, ISO-8601 `at`).
+- `Hwfi.Runtime.Workspace`: canonicalised root + lexical traversal guard
+  (A5), UTF-8 file read/write/list.
+- `Hwfi.Runtime.Gateways`: gateways from `LLM.Providers.*` + `KeyStore`;
+  `ModelConfig` assembly from the catalog; unknown-model error lists names
+  (A11).
+- `Hwfi.Runtime.{Context,Eval,Builtins,Executor}`: per-step `ctx`, the
+  expression evaluator (with `eval` errors, §8.3.2), all `builtin/*`
+  tools, and the linear step interpreter with sub-workflow recursion (A6).
+- `hwfi run` wired (inputs, entrypoint override, key/env validation);
+  `examples/summarise/`; 102 tests (was 71) incl. an end-to-end file
+  workflow covering A3/A6/A9.
 
 ## Blockers
 
@@ -34,14 +37,17 @@ is wired end-to-end and reports spec §9.1 diagnostics. Ready to start
 
 ## Notes / decisions
 
-- `assignable` adds one deliberate subtyping rule beyond `structEq`: a
-  `String` is accepted where a `FileRef` is expected (literal paths).
-- `Fingerprint` is a `newtype`, so the self-referential fingerprint map
-  MUST be built with `Data.Map.Lazy.mapWithKey`; strict construction
-  forces a callee's hash while the map is still being built and loops.
-- YAML requires quoting type strings containing `:` (record types).
+- Persistence is intentionally out of M4: the executor accumulates the
+  trace in memory via `Tracer`; M5 adds the `trace.jsonl` writer, step-key
+  caching, and resume on the same seam.
+- `run-start`'s `project_hash` is currently the entrypoint's Merkle
+  fingerprint (a stand-in); M5 replaces it with a project-dir content hash.
+- `ctx.trace` is a `List` of per-event JSON values; indexing yields a
+  `TraceEvent` (opaque `Json` at runtime), matching the checker's typing.
+- Errors nest: each failing step in a call chain emits its own `error`
+  event, so every `StepStart` has a terminal (§8.3.3 invariant 3).
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M4: Runtime and built-in tools**. Start with
-4.1 (linear step executor) and 4.2 (ambient `ctx` construction).
+See [TASKS.md](TASKS.md) → **M5**. Start with 5.1 (run directory +
+`run.json`) and 5.4 (persist the existing `Tracer` events to `trace.jsonl`).

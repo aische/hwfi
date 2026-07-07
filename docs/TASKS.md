@@ -5,31 +5,11 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M4: Runtime and built-in tools
+## Now — M5: Persistence, tracing, resume
 
-- [ ] 4.1 Executor: linear step interpreter, binding environment,
-      argument resolution
-- [ ] 4.2 Ambient `ctx` construction and injection into every step;
-      `ctx.env` populated only from whitelisted vars per §7.2
-- [ ] 4.3 Workspace abstraction with canonicalised root + traversal guard
-- [ ] 4.4 Built-in tools: `read-file`, `write-file`, `list-dir`
-- [ ] 4.5 `Hwfi.Runtime.Gateways`: build `Map ProviderName LLMGateway`
-      directly from `LLM.Providers.*` constructors + `KeyStore`;
-      validate provider–key linkage against effective catalog at startup
-      (A12); assemble `ModelConfig` values by joining catalog entries
-      with gateways; wire `builtin/llm-generate`, `builtin/llm-chat`
-      (message-based `GenRequest`, A16), and `builtin/llm-gen-object` on
-      top of `LLM.Generate`; unknown-model error lists available names
-      (A11)
-- [ ] 4.6 Expression evaluator with `eval`-kind runtime errors for list
-      OOB and missing `Json` fields (§8.3.2); interpolation rendering
-      per §3.2.1
-- [ ] 4.7 `builtin/introspect` returning `{ data: Json }`
-- [ ] 4.8 Sub-workflow invocation as a step target
-- [ ] 4.9 End-to-end sample project (`examples/summarise/`) exercising
-      A3 and A9
-
-## Later — M5: Persistence, tracing, resume
+M4 already landed the stable `TraceEvent` ADT + JSON encoders and an
+in-memory `Tracer` (`Hwfi.Runtime.Trace`); M5 extends that seam to persist
+to `trace.jsonl` and reconstruct on resume rather than reinventing the shape.
 
 - [ ] 5.1 Run directory layout (`.hwfi/runs/<id>/`), `run.json` schema
 - [ ] 5.2 Step-key hashing (§8.1): ctx-projection over stable fields,
@@ -81,3 +61,10 @@ _Move items here temporarily, then archive to
       detection, `@self#slug` checks, `Secret<T>`/interpolation rules,
       return rule, step cacheability, Merkle fingerprints; `hwfi check`
       wired; 71 tests + expected-error fixtures. (2026-07-07)
+- [x] M4 Runtime and built-in tools (4.1–4.9): `Hwfi.Runtime.{Value,Error,
+      Trace,Workspace,Gateways,Context,Eval,Builtins,Executor}`; linear step
+      interpreter with per-step ambient `ctx`, sandboxed workspace, all
+      `builtin/*` tools (file I/O + `llm-generate`/`llm-chat`/`llm-gen-object`
+      + `introspect`), sub-workflow calls, in-memory tracer; `hwfi run`
+      wired; `examples/summarise/`; 102 tests (A3/A6/A9/A11 covered).
+      (2026-07-07)

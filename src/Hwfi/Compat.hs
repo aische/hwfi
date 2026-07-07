@@ -5,17 +5,34 @@
 --
 -- @hwfi@ deliberately does /not/ use @LLM.Load.loadGateways@ or the
 -- @*OrThrow@ loaders (spec §7.2); it constructs gateways itself from the
--- provider constructors below.
+-- provider constructors below and joins them with the catalog in
+-- 'Hwfi.Runtime.Gateways'.
 module Hwfi.Compat
   ( -- * Generation entry points
     generateTextWithFallbacks,
     genObject,
     genObjectUntyped,
     ModelConfig (..),
+    ModelWithFallbacks (..),
     GenRequest (..),
+    GenerateError (..),
+    GenerateErrorResult (..),
+    noHooks,
+    llmHooks,
+
+    -- * Core generation types
+    ChatResponse (..),
+    Turn (..),
+    Usage (..),
+    ThinkingMode (..),
+    LLMGateway,
 
     -- * Provider gateways
     openAIGateway,
+    claudeGateway,
+    geminiGateway,
+    deepSeekGateway,
+    ollamaGateway,
 
     -- * Catalog schema
     loadModelCatalog,
@@ -24,16 +41,34 @@ module Hwfi.Compat
   )
 where
 
+import LLM.Core.Types
+  ( ChatResponse (..),
+    LLMGateway,
+    ThinkingMode (..),
+    Turn (..),
+  )
+import LLM.Core.Usage (Usage (..))
 import LLM.Generate
   ( GenRequest (..),
+    GenerateError (..),
+    GenerateErrorResult (..),
     ModelConfig (..),
+    ModelWithFallbacks (..),
     generateTextWithFallbacks,
     genObject,
     genObjectUntyped,
+    llmHooks,
+    noHooks,
   )
 import LLM.Load.ModelCatalog
   ( ModelCatalogItem (..),
     ModelCatalogMap,
     loadModelCatalog,
   )
-import LLM.Providers.OpenAI (openAIGateway)
+import LLM.Providers
+  ( claudeGateway,
+    deepSeekGateway,
+    geminiGateway,
+    ollamaGateway,
+    openAIGateway,
+  )

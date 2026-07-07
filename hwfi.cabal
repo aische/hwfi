@@ -54,10 +54,19 @@ library
         Hwfi.Parse.Type
         Hwfi.Parse.TypeAlias
         Hwfi.Project.Manifest
+        Hwfi.Runtime.Builtins
+        Hwfi.Runtime.Context
+        Hwfi.Runtime.Error
+        Hwfi.Runtime.Eval
+        Hwfi.Runtime.Executor
+        Hwfi.Runtime.Gateways
         Hwfi.Runtime.KeyStore
         Hwfi.Runtime.ModelCatalog
         Hwfi.Runtime.Provider
         Hwfi.Runtime.Secret
+        Hwfi.Runtime.Trace
+        Hwfi.Runtime.Value
+        Hwfi.Runtime.Workspace
         Hwfi.Source
         Hwfi.Type
         Hwfi.TypedProject
@@ -77,8 +86,12 @@ library
         optparse-applicative >=0.16 && <0.19,
         parsec               >=3.1  && <3.2,
         parser-combinators   >=1.2  && <1.4,
+        random               >=1.2  && <1.3,
         scientific           >=0.3  && <0.4,
         text                 >=1.2  && <2.2,
+        time                 >=1.9  && <1.15,
+        unliftio             >=0.2  && <0.3,
+        vector               >=0.12 && <0.14,
         yaml                 >=0.11 && <0.12
 
 executable hwfi
@@ -105,8 +118,13 @@ test-suite hwfi-test
         Hwfi.Parse.StepSpec
         Hwfi.Parse.TypeSpec
         Hwfi.Project.ManifestSpec
+        Hwfi.Runtime.EvalSpec
+        Hwfi.Runtime.ExecutorSpec
+        Hwfi.Runtime.GatewaysSpec
         Hwfi.Runtime.KeyStoreSpec
         Hwfi.Runtime.ProviderSpec
+        Hwfi.Runtime.ValueSpec
+        Hwfi.Runtime.WorkspaceSpec
         Hwfi.SourceSpec
         Hwfi.TypeSpec
     build-depends:
@@ -120,5 +138,6 @@ test-suite hwfi-test
         hwfi,
         megaparsec >=9.0 && <10,
         temporary  >=1.3 && <1.4,
-        text
+        text,
+        vector     >=0.12 && <0.14
     build-tool-depends: hspec-discover:hspec-discover

@@ -1,0 +1,6 @@
+{
+  "name": "file-only",
+  "version": "0.1.0",
+  "entrypoint": "workflows/main",
+  "env": []
+}
