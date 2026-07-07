@@ -34,6 +34,7 @@ import Hwfi.Runtime.Gateways (ModelStore, lookupModel)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
 import Hwfi.Runtime.Workspace (Workspace, listDir, readTextFile, writeTextFile)
+import LLM (defaultDebugHooks)
 
 -- | Everything a builtin needs from the surrounding run.
 data BuiltinEnv = BuiltinEnv
@@ -157,7 +158,7 @@ genReq system messages =
       grMessages = messages,
       grTools = [],
       grAbortSignal = Nothing,
-      grLLMHooks = llmHooks noHooks,
+      grLLMHooks = llmHooks defaultDebugHooks,
       grHooks = noHooks
     }
 
