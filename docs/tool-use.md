@@ -1,12 +1,15 @@
 # LLM tool-use (agentic function calling)
 
-Status: **specified / not yet implemented.** This document is the design
-note and rationale; the normative behaviour it argues for has been promoted
-into the spec — see spec §6.1 (`builtin/llm-agent` / `builtin/llm-agent-object`),
-§5.6.9 (type-check rules), §8.2.1 (intra-step caching), §8.3 (agent trace
-events), and acceptance criteria A17–A21. The implementation backlog is
-TASKS.md → **M6**. This note is kept for the "why" and the prior-art
-analysis (§3) that the spec deliberately omits.
+Status: **M6 implemented; mutation/exec toolset (§8) specified, not yet
+implemented.** This document is the design note and rationale; the
+normative behaviour it argues for has been promoted into the spec — see
+spec §6.1 (`builtin/llm-agent` / `builtin/llm-agent-object`), §5.6.9
+(type-check rules), §8.2.1 (intra-step caching), §8.3 (agent trace events),
+and acceptance criteria A17–A21. The agentic loop (§1–§7) is done; the
+filesystem-mutation and command-execution toolset for coding workflows
+(§8, spec §6.2/§6.3/§7.5) is the next milestone (TASKS.md → **M7**). This
+note is kept for the "why" and the prior-art analysis (§3) that the spec
+deliberately omits.
 
 A working reference for the design exists at `../llm-workflow`; §3 distills
 what to borrow from it and where hwfi must differ.
@@ -603,3 +606,85 @@ tool results — without re-paying LLM calls or re-running side effects. This
 also makes serialized machine state an optional later optimization rather
 than a prerequisite. That caching design is the thing to get right before
 writing code.
+
+## 8. Mutating tools and command execution (coding workflows)
+
+M6 shipped the loop but only over read-only project tools. To build
+workflows that *do coding* — edit files, run a build, react to test
+failures — the engine needs (a) filesystem **mutation** tools beyond
+`write-file`, and (b) a **command-execution** tool. This section records
+the decision for how to add them. Normative behaviour is in spec §6.2,
+§6.3, §7.5.
+
+### 8.1 Decision: rewrite as native builtins, do not wrap `llm-simple`
+
+`llm-simple` ships ~15 ready-made filesystem tools (`LLM.Tools.Readfile`,
+`Writefile`, `Grep`, `FindFiles`, `MoveFile`, `RemoveFile`,
+`ReplaceInFile`, `DirectoryTree`, …) as `TypedTool`s, plus an executor
+(`LLM.Agent.ToolUtils.executeTool`) and a loop (`LLM.Agent.Generate`).
+Reusing them by wrapping each `TypedTool`'s `IO Text` as a hwfi tool reply
+was considered and **rejected**. A wrapped native tool would:
+
+1. **Bypass hwfi's cache fingerprint.** A hwfi tool call is content-
+   addressed by its callee's Merkle `fingerprint` (spec §8.1, A13). A
+   native `TypedTool` has no AST and no fingerprint; we'd hand it a
+   hard-coded version stamp. Forget to bump it after an upstream change and
+   a resumed run silently replays stale results — or, worse, skips a
+   mutation it should re-apply.
+2. **Run under a second, weaker sandbox.** hwfi's `Workspace` guard is
+   lexical (no symlink following, A5). `llm-simple`'s `FsConfig.sandboxPath`
+   is `canonicalizePath` + a symlink re-walk whose own docstring says it
+   "narrows but does not fully close the TOCTOU window." Wrapping routes
+   file access through the weaker of the two, and gives us two sandboxes to
+   audit.
+3. **Skip hwfi tracing and redaction.** Native tools do their I/O
+   invisibly and return a raw `Text` blob that never passes hwfi's
+   `file-io` events or secret redaction (§8.3.4). File effects wouldn't
+   appear in `trace.jsonl`; sensitive output could leak into the trace and
+   the intra-step cache.
+4. **Fork `AdvertisedTool`.** It currently means "a checked project callee
+   with typed inputs/outputs and a fingerprint." A native-closure variant
+   forks every downstream invariant (schema, coercion, trace, cache,
+   eligibility). That fork is the smell.
+
+So the decision: **implement the mutation and exec tools directly against
+`Hwfi.Runtime.Workspace`**, as ordinary `builtin/*` tools. Where a
+non-trivial *pure* algorithm is worth reusing (glob matching, binary
+detection, byte caps, the find/replace core, the regex matcher), port that
+logic, but keep the effectful shell — path resolution, tracing, caching —
+hwfi's. One sandbox, one trace stream, one fingerprint scheme.
+
+### 8.2 Why resume + mutation is already solved
+
+The obvious worry — "mutating tools plus resume-by-cache is dangerous" —
+does not actually introduce anything new. hwfi already ships a mutating,
+cacheable builtin: `write-file`. Its resume rule (A4) is that a cache hit
+means *the effect is already present in the workspace*, so the write is not
+re-applied. The workspace is durable state carried across the crash. Every
+new mutation builtin (`edit-file`/`move-file`/…/`remove-dir`) and `exec`
+inherits this **unchanged**, both as a top-level step and as an agent tool
+call (§8.2.1 sub-keys). Spec §8.2 states the invariant explicitly.
+
+`exec` is the only genuinely new hazard, and it is handled the same way the
+loop already handles nondeterministic model calls: its captured
+output/exit is cached and *replayed* on resume, so a resumed agent loop
+follows the same branch instead of re-running (and possibly diverging on) a
+build. Consistent with §8.2.1, not a special case.
+
+### 8.3 Command execution posture
+
+`exec` is fail-closed and opt-in via `project.json.exec` (§2, §7.5). Two
+deliberate design choices worth calling out:
+
+- **argv, not `sh -c`.** `exec` takes `program` + `args : List<String>`
+  and runs the program directly — no shell, hence no word-splitting/glob/
+  injection surface. A project that wants a shell must allowlist one and
+  pass `["-c", …]` on purpose.
+- **Non-zero exit is a value, not an error.** `{ exit_code, stdout,
+  stderr, timed_out }` lets a coding agent read a failing build and try
+  again next round. Only allowlist violations and spawn/timeout-kill
+  failures are engine errors.
+
+We are **not** attempting OS-level containment (namespaces/seccomp) in v1;
+the allowlist + empty-environment model is the boundary, and stronger
+isolation is left to the surrounding container/VM (spec §7.5, §13).

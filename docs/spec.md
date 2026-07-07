@@ -55,7 +55,13 @@ types/
   "name": "example",
   "version": "0.1.0",
   "entrypoint": "workflows/main",
-  "env": []
+  "env": [],
+  "exec": {
+    "allow": ["git", "cabal", "ghc"],
+    "env": ["PATH", "HOME"],
+    "timeout_ms": 120000,
+    "max_output_bytes": 1048576
+  }
 }
 ```
 
@@ -65,6 +71,22 @@ Anything not listed is not visible to the workflow. Provider API keys
 (`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`)
 do **not** need to be in `env`: they are consumed by `hwfi`'s own
 gateway loader and never flow through `ctx.env` — see §7.2.
+
+`exec` is optional and **absent by default, in which case `builtin/exec`
+is disabled** (any call to it fails at `hwfi check`). It is the opt-in
+policy for command execution (§6.3, §7.5):
+
+- `allow` — the whitelist of program **basenames** that `builtin/exec`
+  may run (e.g. `"git"`, not `"/usr/bin/git"`). An empty or absent list
+  disables `exec` entirely. There is no wildcard in v1.
+- `env` — process environment variable names passed through to spawned
+  commands (defaults to `[]`; the child otherwise gets an empty
+  environment). Provider API keys are never passed unless explicitly
+  listed here, which is discouraged.
+- `timeout_ms` — default wall-clock timeout applied to each `exec` call
+  when the call does not specify its own (defaults to `120000`).
+- `max_output_bytes` — cap on captured `stdout`/`stderr` per stream;
+  output beyond the cap is truncated and flagged (defaults to `1048576`).
 
 ### 2.1 Shared type declarations
 
@@ -468,6 +490,36 @@ Provided by the engine, addressed as `builtin/<name>`:
 - `builtin/read-file` : `{ path: FileRef } -> { text: String }`
 - `builtin/write-file` : `{ path: FileRef, text: String } -> {}`
 - `builtin/list-dir` : `{ path: FileRef } -> { entries: List<String> }`
+- `builtin/read-file-slice` :
+  `{ path: FileRef, offset: Int, limit: Int }
+   -> { text: String, next_offset: Int, eof: Bool }` — line-windowed read
+  for large files (offset/limit are 0-based line counts); see §6.2.
+- `builtin/find-files` :
+  `{ path: FileRef, glob: String } -> { paths: List<String> }` — list
+  workspace files under `path` matching a glob; see §6.2.
+- `builtin/grep` :
+  `{ pattern: String, path: FileRef }
+   -> { matches: List<Record<{ file: String, line: Int, text: String }>> }`
+  — regex search over workspace files; see §6.2.
+- `builtin/edit-file` :
+  `{ path: FileRef, find: String, replace: String, expect: Int }
+   -> { replacements: Int }` — replaces every non-overlapping literal
+  occurrence of `find` with `replace`; `expect` (≥ 0) asserts the number of
+  occurrences and the step **fails** if the actual count differs (guards
+  blind edits). Mutating; see §6.2.
+- `builtin/move-file` : `{ from: FileRef, to: FileRef } -> {}` — mutating.
+- `builtin/copy-file` : `{ from: FileRef, to: FileRef } -> {}` — mutating.
+- `builtin/remove-file` : `{ path: FileRef } -> {}` — mutating.
+- `builtin/make-dir` : `{ path: FileRef } -> {}` — create a directory and
+  any missing parents inside the workspace; mutating.
+- `builtin/remove-dir` : `{ path: FileRef } -> {}` — remove a directory and
+  its contents (recursively) inside the workspace; mutating.
+- `builtin/exec` :
+  `{ program: String, args: List<String>, stdin: String, timeout_ms: Int }
+   -> { exit_code: Int, stdout: String, stderr: String, timed_out: Bool }`
+  — run an allowlisted program in the workspace (§6.3, §7.5). Disabled
+  unless `project.json.exec.allow` lists `program`. A non-zero exit is a
+  **value**, not a run error, so a workflow (or agent) can react to it.
 - `builtin/llm-generate` : `{ system: String, prompt: String, model: String }
   -> { text: String }` (single-shot; backed by `llm-simple`
   `Generate.generateTextWithFallbacks`)
@@ -511,7 +563,14 @@ metadata come from the catalog entry, not from tool arguments.
 non-cacheable as a black box, but each internal model call and tool call is
 individually content-addressed so a crash mid-loop resumes cheaply (§8.2).
 
-**[deferred v1.1]** shell/exec tool.
+The filesystem-mutation tools (`edit-file`, `move-file`, `copy-file`,
+`remove-file`, `make-dir`, `remove-dir`) and `exec` exist so that
+prompt-authored workflows — and agents (§6.1) — can **modify the
+workspace**, e.g. to write and test code. They are ordinary cacheable
+builtins (§8.1) and rely on hwfi's durable-workspace resume invariant
+(§8.2): a cache hit means "this effect is already present in the
+workspace." All of them are eligible to be advertised as agent tools
+(§6.1.1) — that is the point of adding them.
 
 ### 6.1 Agentic tool-use loop (`builtin/llm-agent`)
 
@@ -642,6 +701,90 @@ posture (§4, §13). Failures are classified:
   Passing a callee that (transitively) calls `builtin/introspect` as an
   agent tool is rejected at `hwfi check`.
 
+### 6.2 Filesystem mutation and navigation tools
+
+The read (`read-file`, `list-dir`, `read-file-slice`, `find-files`,
+`grep`) and mutation (`write-file`, `edit-file`, `move-file`,
+`copy-file`, `remove-file`, `make-dir`, `remove-dir`) builtins all
+resolve their `FileRef` arguments through the **same** workspace guard as
+`read-file`/`write-file` (§7.1): every path is resolved lexically against
+the canonical workspace root and rejected if it is absolute or escapes the
+root. There is exactly one sandbox, one `file-io` trace event stream
+(§8.3.2), and one cache/fingerprint scheme for all of them.
+
+**Implementation note (native, not wrapped).** These are implemented
+directly against `Hwfi.Runtime.Workspace`; `hwfi` does **not** wrap
+`llm-simple`'s `LLM.Tools.*` / `TypedTool` implementations. Wrapping them
+would route file access through a second, weaker sandbox
+(`LLM.Tools.FsConfig`, whose own docs note an unclosed TOCTOU window) and
+bypass hwfi's `file-io` tracing, secret redaction, and step-key
+fingerprinting. Where a non-trivial algorithm is worth reusing (glob
+matching, binary-file detection, size caps, regex search), its **pure
+logic** may be ported, but the effectful shell is hwfi's. See
+[tool-use.md](tool-use.md) §8 for the rationale.
+
+Semantics worth pinning:
+
+- `edit-file` performs a literal (non-regex) whole-string replacement of
+  `find`. `expect` is the caller's asserted occurrence count; a mismatch
+  fails the step with an `eval` error rather than silently editing the
+  wrong number of sites. This makes model-driven edits auditable.
+- `grep` uses the same regex dialect as the `Grep` tool used elsewhere in
+  the toolchain (RE2-style); a malformed pattern is an `eval` error.
+- `read-file-slice` returns a window of `limit` lines starting at line
+  `offset` (0-based), plus the `next_offset` to continue from and whether
+  end-of-file was reached, so an agent can page through a file larger than
+  a single tool result.
+- `remove-dir` is recursive but confined to the workspace; like all
+  mutations it cannot affect the read-only project directory (§7.1).
+- Reads that hit a binary file or exceed the byte cap fail as an `io`
+  error (v1 is text-only, §12), consistent with `read-file`.
+
+All of these are **cacheable** ordinary builtins (§8.1). Their resume
+behaviour is governed by the durable-workspace invariant (§8.2): a cache
+hit means the effect (or observation) is already reflected in the
+workspace as the interrupted attempt left it, so it is not re-applied.
+
+### 6.3 Command execution (`builtin/exec`)
+
+`builtin/exec` runs an external program so that workflows and agents can
+build, test, format, or otherwise operate on the code in the workspace.
+It is the one built-in with authority beyond the filesystem, so it is
+governed by an explicit, opt-in policy (§7.5) and is **disabled unless
+`project.json` declares an `exec` policy** whose `allow` list contains the
+requested `program`.
+
+- **argv, not a shell.** `exec` takes a `program` basename and an explicit
+  `args : List<String>`. It does **not** run a shell (`sh -c`), so there
+  is no shell-word-splitting, globbing, or injection surface: arguments are
+  passed verbatim. (A workflow that genuinely wants shell semantics must
+  allowlist a shell and pass `["-c", "…"]` deliberately.)
+- **Working directory** is the workspace root (§7.1). `program` is looked
+  up on the policy-provided `PATH`; a relative/absolute path for `program`
+  is rejected — only allowlisted basenames run.
+- **Environment** is empty except for the variables named in
+  `project.json.exec.env`. Provider API keys are never injected.
+- **Non-zero exit is a value.** The result carries `exit_code`, captured
+  `stdout`/`stderr` (each truncated to `max_output_bytes`, with
+  `timed_out` set if the wall-clock `timeout_ms` fired). A failed build is
+  therefore something an agent can read and react to, not a run abort.
+  Genuine engine-level failures (program not allowlisted, spawn failure)
+  are fatal `sandbox`/`io` errors.
+- **Determinism / caching.** `exec` is a cacheable builtin keyed like any
+  step (§8.1) and, as an agent tool call, sub-keyed per §8.2.1. On resume,
+  a cache hit **replays the recorded `exit_code`/output without re-running
+  the command**, which (a) keeps an agent's nondeterministic loop on the
+  same branch it originally took and (b) avoids re-paying an expensive
+  build/test. Its file effects are covered by the durable-workspace
+  invariant (§8.2). The key hashes `program`, `args`, `stdin`, and the ctx
+  projection — **not** the current contents of the workspace; the standard
+  "resume assumes the workspace is as the interrupted run left it" caveat
+  (§8.2) applies, exactly as it already does to `read-file`.
+
+Because `exec` output is fed back to the model when used as an agent tool,
+it participates in redaction (§8.3.4) and tracing (§8.3.2, the `exec`
+event) like every other tool.
+
 ## 7. Workspace, project, and sandboxing
 
 ### 7.1 Filesystem layout at runtime
@@ -651,6 +794,9 @@ posture (§4, §13). Failures are classified:
 - Path traversal outside the workspace is rejected at runtime; the
   workspace root is canonicalised once at start.
 - The workspace is the **only** filesystem area the workflow may write to.
+  Every read and mutation builtin (§6.2) and every `builtin/exec` child
+  (§6.3, §7.5) is confined to it by the same guard; there is no second
+  sandbox.
 - The project directory (workflows/tools/types/project.json) is read-only
   during execution.
 
@@ -744,8 +890,47 @@ error: model 'gpt_4_1' in model-catalog.json requires provider 'openai',
 
 ### 7.4 Network access
 
-Network access is available only via `llm-simple` calls invoked by
-`builtin/llm-*`; no arbitrary HTTP tool in v1.
+`hwfi` itself makes no network calls except `llm-simple` calls invoked by
+`builtin/llm-*`; there is no arbitrary HTTP tool in v1. Note that
+`builtin/exec` (§6.3, §7.5) can run a program that itself performs network
+I/O (e.g. `git fetch`, a package install). This is an inherent consequence
+of command execution: the `exec` allowlist in `project.json` is the
+control point — a project that must forbid network access should not
+allowlist network-capable programs. `hwfi` does not attempt per-process
+network sandboxing in v1.
+
+### 7.5 Command execution sandbox
+
+`builtin/exec` (§6.3) is governed entirely by the optional `exec` policy in
+`project.json` (§2). The policy is **fail-closed**: with no `exec` block,
+or an empty `allow` list, any `builtin/exec` call is rejected at
+`hwfi check` (a `sandbox` category check error), so a project cannot run
+commands unless it opts in.
+
+Enforcement rules:
+
+- **Program allowlist.** Only a program whose basename is in
+  `exec.allow` may run. `program` must be a bare basename (no `/`); an
+  absolute or relative path is rejected. Resolution uses the policy `PATH`.
+- **Working directory** is the canonical workspace root; the child cannot
+  be given a different cwd.
+- **Environment.** The child receives only the variables named in
+  `exec.env` (read from `hwfi`'s process environment), never provider API
+  keys or the full ambient environment.
+- **Resource limits.** Each call is bounded by `timeout_ms` (the call's
+  argument, else the policy default) and each captured stream is truncated
+  to `max_output_bytes`. Exceeding the timeout kills the process group and
+  returns `timed_out = true` with whatever output was captured.
+- **Auditing.** Every call emits an `exec` trace event (§8.3.2) recording
+  `program`, `args`, `exit_code`, `timed_out`, and captured byte sizes;
+  secrets are redacted per §8.3.4.
+
+Known v1 limitations (documented, not silently accepted): `hwfi` relies on
+the allowlist and empty environment rather than OS-level containment
+(namespaces/seccomp). A determined allowlisted program can still exhaust
+CPU/disk or reach the network (§7.4). Projects that need stronger
+isolation should run `hwfi` inside their own container/VM. Stronger
+per-process sandboxing is a possible later refinement.
 
 ## 8. Persistence and resumability
 
@@ -830,6 +1015,27 @@ units are cached instead (§8.2.1).
 - On resume the runtime appends one `Resumed` marker (§8.3.2) before any
   new events, then continues numbering `seq` from the last value + 1.
 - A run is resumable if `run.json.status ∈ {running, crashed, aborted}`.
+
+**Durable-workspace invariant.** Resume treats the workspace directory as
+**durable state carried over from the interrupted attempt**. A cache hit
+therefore means "this step's effect is already present in the workspace"
+(for a mutation like `write-file`/`edit-file`/`move-file`/`exec`) or "this
+observation was valid as of the interrupted attempt" (for a read like
+`read-file`/`grep`). Consequently:
+
+- A cached **mutating** step is skipped and its effect is **not
+  re-applied** — this is exactly why A4 (a marker-writing step must not
+  double-write on resume) holds, and it extends unchanged to the new
+  mutation builtins (§6.2) and to `exec` (§6.3).
+- A cached **read/exec** step replays its recorded result rather than
+  re-reading/re-running, so an agent loop follows the same branch
+  deterministically (§8.2.1).
+- The step-key hashes arguments and the ctx projection, **not** the live
+  contents of the workspace. If the workspace is mutated out-of-band
+  between the interrupted attempt and `hwfi resume`, cached reads/execs may
+  no longer match reality. This is the same, already-documented assumption
+  that governs `read-file` today; it is a property of content-addressing
+  by inputs, not a new risk introduced by mutation/exec.
 
 ### 8.2.1 Intra-step caching of agent loops
 
@@ -942,9 +1148,23 @@ TraceEvent =
   | FileIo {
       tag     : "file-io",
       seq, at, qname, step_id,
-      op      : "read" | "write" | "list",
-      path    : String,            -- workspace-relative
-      bytes   : Int                -- payload size; 0 for "list"
+      op      : "read" | "write" | "list"
+              | "read-slice" | "find" | "grep"
+              | "edit" | "move" | "copy" | "remove"
+              | "make-dir" | "remove-dir",
+      path    : String,            -- workspace-relative (the primary path;
+                                   --   for move/copy this is the source)
+      bytes   : Int                -- payload size; 0 where not meaningful
+    }
+  | Exec {
+      tag        : "exec",
+      seq, at, qname, step_id,
+      program    : String,         -- allowlisted basename
+      args       : Json,           -- argv, secrets redacted
+      exit_code  : Int,
+      timed_out  : Bool,
+      stdout_bytes : Int,          -- captured (post-truncation) sizes
+      stderr_bytes : Int
     }
   | Error {
       tag     : "error",
@@ -1123,7 +1343,9 @@ available, the source location of the step block.
   `filepath`, `directory`, `unliftio`, `megaparsec` (for the step DSL and
   `TypeExpr`), `optparse-applicative`, `ulid` or `uuid`, `cryptonite` or
   `hashable` for step-key hashing, `dotenv` (used directly via
-  `Configuration.Dotenv.parseFile`, see §7.2).
+  `Configuration.Dotenv.parseFile`, see §7.2), `typed-process` (for
+  `builtin/exec`, §6.3), and `Glob`/`regex` support for `find-files`/`grep`
+  (§6.2; the pure matcher may be ported from `llm-simple`'s `LLM.Tools.*`).
 - `llm-simple` API surface consumed by `hwfi`: `LLM.Generate` (all
   generation entry points), `LLM.Providers.*` (individual gateway
   constructors), `LLM.Load.ModelCatalog` (catalog parser). `hwfi` does
@@ -1197,6 +1419,25 @@ A21. A tool name the model emits that resolves to no advertised ref, and
     malformed tool arguments, are fed back as recoverable tool messages and
     the loop continues; reaching `max_rounds` without termination aborts
     with an `Error` of kind `llm` (§6.1.4).
+A22. The filesystem-mutation builtins (§6.2) confine writes to the
+    workspace: `edit-file`/`move-file`/`copy-file`/`remove-file`/`make-dir`/
+    `remove-dir` targeting a path outside the workspace fail with a
+    `sandbox` error recorded in the trace (as A5 for `write-file`).
+A23. `builtin/edit-file` with an `expect` count that does not match the
+    actual number of `find` occurrences fails the step with an `eval` error
+    and does not modify the file (§6.2).
+A24. `builtin/exec` is rejected at `hwfi check` when `program` is absent
+    from `project.json.exec.allow` (or no `exec` policy is declared);
+    an allowlisted program runs in the workspace and a non-zero exit is
+    returned as `exit_code` rather than aborting the run (§6.3, §7.5).
+A25. Killing the process mid-run and invoking `hwfi resume` does not
+    re-apply a cached mutating step (`edit-file`/`move-file`/…/`exec`) and
+    does not re-run a cached `exec` command — its recorded output is
+    replayed (§8.2 durable-workspace invariant, §8.2.1).
+A26. An agent (`builtin/llm-agent`) advertised the mutation and `exec`
+    tools can edit a source file and run an allowlisted build/test command,
+    reacting to a non-zero `exit_code` in a subsequent round (§6.1, §6.2,
+    §6.3).
 
 ## 12. Edge cases and known tricky bits
 
@@ -1216,7 +1457,6 @@ A21. A tool name the model emits that resolves to no advertised ref, and
 ## 13. Explicitly deferred to v1.1+
 
 - Control flow (`if`, `foreach`, `par`).
-- Shell/exec tool with sandbox policy.
 - Dynamic workflow synthesis by agents. The type checker is already
   factored as a pure function (§5.6) so it can be re-invoked at runtime
   on a freshly-parsed workflow; what remains is a built-in tool along the
@@ -1226,6 +1466,12 @@ A21. A tool name the model emits that resolves to no advertised ref, and
   project's *existing* declarations in a loop — is a distinct, weaker
   capability and is **no longer deferred**: it is specified in §6.1 as
   `builtin/llm-agent` / `builtin/llm-agent-object`.)
+- OS-level command-execution isolation (namespaces/seccomp/cgroups) for
+  `builtin/exec`. (Note: a **filesystem-mutation and command-execution
+  toolset** — `edit-file`/`move-file`/…/`exec` gated by an allowlist — is
+  **no longer deferred**: it is specified in §6.2/§6.3/§7.5. What remains
+  deferred is only stronger per-process containment beyond the allowlist +
+  empty-environment model.)
 - Cross-run trace reading (reading prior runs' `trace.jsonl`).
 - Skill extraction from traces.
 - `Bytes`-typed file I/O.

@@ -10,8 +10,9 @@ step the model is advertised the project's own eligible tools/workflows
 and autonomously issues tool calls until it yields a final answer
 (free-text) or calls the terminating `submit` tool (typed output). The
 agent step is a non-cacheable black box, but every model round and tool
-call inside it is content-addressed and reused on resume (§8.2.1). Ready
-to start **M7** (control flow), which reuses the same loop shape.
+call inside it is content-addressed and reused on resume (§8.2.1). Next is
+**M7** (mutation + `exec` tools) so workflows/agents can do coding; control
+flow moves to M8.
 
 ## Done recently
 
@@ -54,6 +55,13 @@ to start **M7** (control flow), which reuses the same loop shape.
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M7: control flow** (`if`/`foreach`/`par`),
-which shares the M6 loop. 6.g (serialise machine state to skip the replay
-re-walk) remains an optional performance follow-up.
+See [TASKS.md](TASKS.md) → **M7: mutation + exec tools (coding
+workflows)**. Now specified in spec §6.2 (`edit-file`/`move-file`/
+`copy-file`/`remove-file`/`make-dir`/`remove-dir` + `read-file-slice`/
+`find-files`/`grep`), §6.3/§7.5 (`builtin/exec`: allowlisted, argv-only,
+non-zero exit as value), with the durable-workspace resume invariant
+(§8.2) and new criteria A22–A26. Decision (tool-use.md §8): implement as
+**native builtins over `Hwfi.Runtime.Workspace`**, not by wrapping
+`llm-simple`'s FS tools — one sandbox, one trace, one fingerprint scheme;
+port pure algorithms only. Control flow (`if`/`foreach`/`par`) moves to
+M8; 6.g (state serialisation) remains an optional performance follow-up.
