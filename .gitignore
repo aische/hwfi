@@ -3,3 +3,4 @@ dist-newstyle/
 *.o
 .ghc.environment.*
 .DS_Store
+.env
