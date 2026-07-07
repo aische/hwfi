@@ -1,0 +1,29 @@
+[
+  {
+    "modelConfigName": "smart",
+    "providerName": "ollama",
+    "modelName": "mistral:latest",
+    "pricing": { "pricePerMillionInput": 0.0, "pricePerMillionOutput": 0.0 },
+    "maxTokens": 8192,
+    "temperature": 0.3,
+    "requestTimeout": 180000,
+    "throttleDelay": 0,
+    "retryCount": 2,
+    "jitterBackoff": 1000
+  },
+  {
+      "modelConfigName": "deepseek4flash",
+      "providerName": "deepseek",
+      "modelName": "deepseek-v4-flash",
+      "pricing": {
+          "pricePerMillionInput": 0.14,
+          "pricePerMillionOutput": 0.28
+      },
+      "maxTokens": 10000,
+      "temperature": 0.5,
+      "requestTimeout": 300000,
+      "throttleDelay": 3000,
+      "retryCount": 3,
+      "jitterBackoff": 1000
+  }  
+]
