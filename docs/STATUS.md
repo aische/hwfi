@@ -4,31 +4,32 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-Spec written from `idea.md`; tasks broken into milestones M1–M5 (v1) + M6
-backlog. Next actionable work is **M1: project skeleton** — cabal init,
-`llm-simple` path dependency, test framework, CLI stub.
+Spec v1 is complete: all `[open]` markers resolved, grammar and trace
+schema pinned, `llm-simple` integration path verified against source.
+Ready to start **M1: project skeleton**.
 
 ## Done recently
 
-- Concretised `docs/spec.md`: project layout, markdown workflow syntax,
-  v1 type system, built-in tools, workspace sandboxing, content-addressed
-  step-key persistence and resume semantics, CLI surface, acceptance
-  criteria
-- Second pass on spec: replaced JSON step blocks with a small DSL
-  (`bind <- qname(args)`); added `@self#heading` markdown-section refs;
-  added ambient typed `Context` (`workspace`, `run`, `self`, `inputs`,
-  `trace`, `env`); added `Secret<T>` with trace redaction; added
-  `builtin/introspect` escape hatch; refined step-key hashing to split
-  stable vs. volatile ctx access and mark trace-reading steps
-  non-cacheable; factored type checker as a pure function so v1.1 dynamic
-  workflow evaluation can reuse it. Acceptance criteria now A1–A9.
-- Rewrote `docs/TASKS.md` into milestones M1–M6 with cross-cutting items
+- Concretised `docs/spec.md` from `idea.md`: layout, syntax, type system,
+  built-in tools, sandbox, persistence, CLI, acceptance A1–A11.
+- Locked step DSL and expression grammar (§3.4 EBNF); locked trace event
+  schema with ordering invariants (§8.3).
+- Ambient typed `Context` (`workspace`, `run`, `self`, `inputs`, `trace`,
+  `env`) + `builtin/introspect` escape hatch + `Secret<T>` with trace
+  redaction + non-cacheable classification for volatile-ctx steps.
+- Read `llm-simple` `Load` module; confirmed `.env`-based key flow.
+  Decision: `hwfi` chdirs to project dir at startup; keys never flow
+  through `ctx.env`.
+- Final decisions: binary `hwfi`, run dir `.hwfi/`, test `hspec`, md
+  parser `commonmark-hs`, shared types under `types/*.md` in v1, model
+  arg names a catalog entry, CLI structured inputs, `file:line:col`
+  error format.
 
 ## Blockers
 
-- None. Several `[open]` design questions in the spec must be resolved
-  before their owning milestone starts (tracked as task X.2).
+- None.
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **Now (M1)**.
+See [TASKS.md](TASKS.md) → **Now (M1)**. Start with 1.1 (cabal init)
+and 1.2 (`../llm-simple` local package).

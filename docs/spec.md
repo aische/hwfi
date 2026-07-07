@@ -1,7 +1,7 @@
 # Specification
 
 Concrete requirements derived from [idea.md](idea.md). This spec pins v1 scope.
-Anything marked **[open]** is an unresolved design decision.
+Anything marked **[deferred v1.1]** is intentionally out of scope for v1.
 
 ## 1. Product summary
 
@@ -28,18 +28,21 @@ a package registry for workflows.
 A workflow project is a directory with:
 
 ```
-project.json                # project manifest (name, entrypoint, env whitelist, version)
+project.json                # project manifest
+.env                        # provider API keys (loaded by llm-simple, see §7)
+model-catalog.json          # optional: overrides the engine's default catalog
 workflows/
   main.md                   # a workflow definition
   <name>.md                 # more workflows, addressable by relative path
 tools/
   <name>.md                 # tool definitions (prompt-backed or built-in ref)
-types/                      # [open] optional shared type declarations
-  <name>.json
+types/
+  <name>.md                 # shared type declarations (see §2.1)
 ```
 
 - Every `.md` file is a single top-level declaration (one workflow, one tool,
-  or one prompt fragment). Multiple declarations per file are rejected.
+  one prompt fragment, or one type alias). Multiple declarations per file
+  are rejected.
 - File path (relative to project root, without extension) is the declaration's
   fully-qualified name. Renaming a file changes the qualified name; callers
   must be updated. This is the intended semantics (analogous to renaming a
@@ -52,13 +55,40 @@ types/                      # [open] optional shared type declarations
   "name": "example",
   "version": "0.1.0",
   "entrypoint": "workflows/main",
-  "env": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+  "env": []
 }
 ```
 
-`env` is optional; when present, it whitelists process environment variables
-that will be readable via `ctx.env` at runtime. Anything not listed is not
-visible to the workflow.
+`env` is optional (defaults to `[]`); when present, it whitelists process
+environment variables that will be readable via `ctx.env` at runtime.
+Anything not listed is not visible to the workflow. Provider API keys
+(`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`)
+do **not** need to be in `env`: they are consumed directly by
+`llm-simple`'s gateway loader and never flow through `ctx.env` — see §7.
+
+### 2.1 Shared type declarations
+
+Files under `types/` declare reusable type aliases. Each is a markdown
+file with a specific frontmatter shape and no body-level step blocks:
+
+```markdown
+---
+kind: type-alias
+name: types/message
+definition: Record<{ role: String, content: String }>
+---
+
+Optional prose documentation.
+```
+
+- `kind` must equal `type-alias`.
+- `name` must equal the file's qualified name (path minus extension).
+- `definition` is a `TypeExpr` (see §3.4 grammar), which may reference
+  other type aliases by qname.
+- Aliases are resolved during type-checking; cycles are rejected.
+- Aliases may be referenced from any workflow or tool signature or from
+  another alias by writing the qname where a `TypeExpr` is expected
+  (e.g. `inputs: { m: types/message }`).
 
 ## 3. Markdown workflow syntax (v1)
 
@@ -347,7 +377,7 @@ sensitive value. Rules:
 6. Cycles in the direct call graph across workflows are detected and
    rejected. Indirect references via `WorkflowRef` values are allowed.
 7. The checker is a pure function `Project -> Either [TypeError] TypedProject`
-   so the same checker runs both at load time (`wfe check`) and at runtime
+   so the same checker runs both at load time (`hwfi check`) and at runtime
    over dynamically synthesized workflows (see §13).
 
 ## 6. Built-in tools (v1)
@@ -357,12 +387,16 @@ Provided by the engine, addressed as `builtin/<name>`:
 - `builtin/read-file` : `{ path: FileRef } -> { text: String }`
 - `builtin/write-file` : `{ path: FileRef, text: String } -> {}`
 - `builtin/list-dir` : `{ path: FileRef } -> { entries: List<String> }`
-- `builtin/llm-generate` : `{ system: String, prompt: String, model?: String }
+- `builtin/llm-generate` : `{ system: String, prompt: String, model: String }
   -> { text: String }` (backed by `llm-simple`
   `Generate.generateTextWithFallbacks`)
 - `builtin/llm-gen-object` : `{ system: String, prompt: String, schema: Json,
-  model?: String } -> { value: Json }` (backed by `genObject` /
+  model: String } -> { value: Json }` (backed by `genObject` /
   `genObjectUntyped`)
+
+For both LLM tools, `model` names an entry in the **model catalog** (§7),
+not a raw provider model id. Retry, timeout, temperature, and pricing
+metadata come from the catalog entry, not from tool arguments.
 - `builtin/introspect` : `{} -> { data: Json }` — escape hatch returning a
   JSON dump of everything the runtime knows about the current run
   (including full trace, all bindings, workspace path, project metadata).
@@ -370,22 +404,58 @@ Provided by the engine, addressed as `builtin/<name>`:
 
 **[deferred v1.1]** shell/exec tool.
 
-## 7. Workspace and sandboxing
+## 7. Workspace, project, and sandboxing
+
+### 7.1 Filesystem layout at runtime
 
 - Engine receives `--workspace <dir>` on the CLI.
 - All `FileRef` values are resolved relative to the workspace root.
 - Path traversal outside the workspace is rejected at runtime; the
   workspace root is canonicalised once at start.
 - The workspace is the **only** filesystem area the workflow may write to.
-- The project directory (workflows/tools) is read-only during execution.
-- Network access is available only via `llm-simple` calls invoked by
-  `builtin/llm-*`; no arbitrary HTTP tool in v1.
-- `ctx.env` contains only variables whitelisted in `project.json`.
+- The project directory (workflows/tools/types/project.json) is read-only
+  during execution.
+
+### 7.2 Working directory and `.env`
+
+At startup, `hwfi` sets the process working directory to the project
+directory. This is required so that `llm-simple`'s gateway loader, which
+calls `Configuration.Dotenv.loadFile` on the default path, discovers
+`<project>/.env` for provider API keys. Consequences:
+
+- Provider API keys live in `<project>/.env` (or the user's exported
+  environment). `.env` is loaded once at startup, before any workflow
+  step runs.
+- API keys never appear in `ctx.env` and cannot be observed by
+  workflows. They are consumed inside `llm-simple` gateway closures and
+  are opaque to `hwfi` and to workflows alike.
+- The `env` whitelist in `project.json` only governs what workflows can
+  read via `ctx.env`. Adding `OPENAI_API_KEY` to that whitelist would
+  make it readable by workflow code — do not do this unless you
+  intentionally want the key visible to steps (secrets flagged in §5.5
+  still apply).
+
+### 7.3 Model catalog
+
+`hwfi` ships with a default `model-catalog.json`. If the project
+directory contains a `model-catalog.json`, it is used instead (no
+merging in v1: project override replaces default entirely). The catalog
+format is the one defined by `llm-simple` (see
+`../llm-simple/model-catalog.json`).
+
+The `model` argument to `builtin/llm-*` must name an entry
+(`modelConfigName`) in the effective catalog. Unknown names fail at
+runtime with a clear error listing available names.
+
+### 7.4 Network access
+
+Network access is available only via `llm-simple` calls invoked by
+`builtin/llm-*`; no arbitrary HTTP tool in v1.
 
 ## 8. Persistence and resumability
 
 Every run has a `run id` (ULID). Run artifacts are stored under
-`<workspace>/.wfe/runs/<run-id>/` (name **[open]**: `.wfe` placeholder):
+`<workspace>/.hwfi/runs/<run-id>/`:
 
 ```
 run.json          # run metadata: project hash, entrypoint, inputs, status
@@ -535,39 +605,66 @@ happens once, at the writer, before the line is appended.
 
 ## 9. CLI
 
-Minimal v1 surface (command name `wfe` **[open]**):
+Binary name: `hwfi`. Minimal v1 surface:
 
 ```
-wfe check   <project-dir>
-wfe run     <project-dir> --workspace <dir> [--input k=v]... [--entry <name>]
-wfe resume  <workspace-dir> <run-id>
-wfe show    <workspace-dir> <run-id>          # pretty-print trace
+hwfi check   <project-dir>
+hwfi run     <project-dir> --workspace <dir>
+             [--input <k>=<v>]... [--input <k>=@<file.json>]...
+             [--input-json <file.json>]
+             [--entry <qname>]
+hwfi resume  <workspace-dir> <run-id>
+hwfi show    <workspace-dir> <run-id>          # pretty-print trace
 ```
 
-`wfe check` performs parse + type-check only, exits non-zero on any error.
+- `hwfi check` performs parse + type-check only, exits non-zero on any
+  error.
+- Structured inputs: `--input k=v` sets a string; `--input k=@file.json`
+  reads a JSON value from `file.json` and binds it at `k`; `--input-json
+  <file>` supplies the whole inputs record. Multiple `--input` flags
+  compose; `--input-json` is applied first and individual `--input`
+  entries override.
+- `--entry <qname>` overrides `project.json`'s `entrypoint` for this run.
+
+### 9.1 Error message format
+
+All parse and type errors are formatted as:
+
+```
+<relative-path>:<line>:<col>: <message>
+  |
+N | <source line>
+  |     ^^^^
+```
+
+so output is copy-pasteable into editor jump-to-location. Runtime errors
+include the same `qname`/`step_id` used in the trace and, where
+available, the source location of the step block.
 
 ## 10. Dependencies and tooling
 
 - GHC2021.
 - Cabal project. `llm-simple` referenced as a local `packages:` entry
   pointing at `../llm-simple` via `cabal.project`.
-- Libraries expected: `aeson`, `text`, `bytestring`, `containers`,
-  `filepath`, `directory`, `unliftio` or `async`, `megaparsec` (for the
-  step DSL), a markdown parser (**[open]**: `commonmark-hs` recommended),
-  `optparse-applicative`, `ulid` or `uuid`, `cryptonite` or `hashable` for
-  step-key hashing.
+- Test framework: `hspec`.
+- Markdown parser: `commonmark-hs`.
+- Other libraries expected: `aeson`, `text`, `bytestring`, `containers`,
+  `filepath`, `directory`, `unliftio`, `megaparsec` (for the step DSL and
+  `TypeExpr`), `optparse-applicative`, `ulid` or `uuid`, `cryptonite` or
+  `hashable` for step-key hashing. `dotenv` is pulled in transitively via
+  `llm-simple`.
 
 ## 11. Acceptance criteria (v1)
 
-A1. `wfe check` on a well-formed project exits 0 and prints nothing on
+A1. `hwfi check` on a well-formed project exits 0 and prints nothing on
     stderr.
-A2. `wfe check` on a project with an undeclared reference, type mismatch,
-    or import cycle exits non-zero with a message pointing at file and
-    step id.
-A3. `wfe run` on a two-step sample workflow
+A2. `hwfi check` on a project with an undeclared reference, type
+    mismatch, or import cycle exits non-zero with a message in
+    `file:line:col:` format (§9.1).
+A3. `hwfi run` on a two-step sample workflow
     (`read-file` → `llm-generate`) produces the expected output file in
-    the workspace and a populated `.wfe/runs/<id>/` directory.
-A4. Killing the process mid-run and invoking `wfe resume` completes the
+    the workspace and a populated `.hwfi/runs/<id>/` directory.
+A4. Killing the process mid-run and invoking `hwfi resume` completes the
     run without re-executing already-persisted cacheable steps (verified
     by a step that writes a marker file and would double-write on
     re-execution).
@@ -580,7 +677,13 @@ A7. A step whose args reference `${ctx.trace}` is re-executed on resume;
 A8. `Secret<String>` values loaded from `ctx.env` never appear in
     `trace.jsonl` in cleartext; they render as `<secret:$name>`.
 A9. `@self#heading` in a step arg resolves to the current file's markdown
-    content under that heading; mismatched slug fails at `wfe check`.
+    content under that heading; mismatched slug fails at `hwfi check`.
+A10. A shared type alias declared under `types/` and referenced from a
+    workflow signature is resolved during type-checking; a cyclic alias
+    is rejected at `hwfi check`.
+A11. An unknown model name passed to `builtin/llm-generate` fails with an
+    error that lists the available model names from the effective
+    catalog.
 
 ## 12. Edge cases and known tricky bits
 
@@ -592,7 +695,7 @@ A9. `@self#heading` in a step arg resolves to the current file's markdown
 - Renaming a workflow file mid-project changes qualified names and
   invalidates cached step keys — acceptable, documented.
 - Concurrent runs sharing a workspace: v1 requires an exclusive lock file
-  under `.wfe/`; second `run` fails fast.
+  under `.hwfi/`; second `run` fails fast.
 - Circular tool imports: rejected at type-check.
 - Trace growth over long runs: `trace.jsonl` is append-only text; v1
   imposes no size cap. Rotation deferred to v1.1.
