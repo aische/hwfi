@@ -18,10 +18,13 @@ roughly ordered but can be reshuffled.
       flags); commands print "not implemented" and exit appropriately
 - [ ] 1.5 `project.json` schema module + parser (fields: `name`, `version`,
       `entrypoint`, optional `env` whitelist)
-- [ ] 1.6 Startup: `setCurrentDirectory <project-dir>` before any
-      `llm-simple` `Load` call, so `.env` at `<project>/.env` is picked up
-- [ ] 1.7 Model catalog resolution: use project-local
-      `<project>/model-catalog.json` if present, else the engine's default
+- [ ] 1.6 `Hwfi.Runtime.KeyStore`: parse `.env` files via
+      `Configuration.Dotenv.parseFile` (no process-env injection), merge
+      `--env-file` > `<project>/.env` > process environment into
+      `Map ProviderName (Secret Text)`
+- [ ] 1.7 Model catalog loader: require `<project>/model-catalog.json`;
+      parse via `LLM.Load.ModelCatalog.loadModelCatalog`; fail with a
+      clear error if missing (A10-adjacent, A11, A12)
 
 ## Next — M2: Parsing and AST
 
@@ -78,9 +81,13 @@ roughly ordered but can be reshuffled.
       `ctx.env` populated only from whitelisted vars per §7.2
 - [ ] 4.3 Workspace abstraction with canonicalised root + traversal guard
 - [ ] 4.4 Built-in tools: `read-file`, `write-file`, `list-dir`
-- [ ] 4.5 Integrate `llm-simple`: `builtin/llm-generate`,
-      `builtin/llm-gen-object`; model catalog loaded via `LLM.Load`;
-      unknown-model error lists available names (A11)
+- [ ] 4.5 `Hwfi.Runtime.Gateways`: build `Map ProviderName LLMGateway`
+      directly from `LLM.Providers.*` constructors + `KeyStore`;
+      validate provider–key linkage against effective catalog at startup
+      (A12); assemble `ModelConfig` values by joining catalog entries
+      with gateways; wire `builtin/llm-generate` and
+      `builtin/llm-gen-object` on top of `LLM.Generate`; unknown-model
+      error lists available names (A11)
 - [ ] 4.6 `builtin/introspect` returning `{ data: Json }`
 - [ ] 4.7 Sub-workflow invocation as a step target
 - [ ] 4.8 End-to-end sample project (`examples/summarise/`) exercising
@@ -111,8 +118,8 @@ roughly ordered but can be reshuffled.
 - [ ] 6.5 Skill extraction from traces
 - [ ] 6.6 `Bytes`-typed file I/O
 - [ ] 6.7 `trace.jsonl` rotation
-- [ ] 6.8 Model-catalog merging (project overlays engine default instead
-      of full replacement)
+- [ ] 6.8 User-level key store (e.g. `$XDG_CONFIG_HOME/hwfi/.env`) as
+      a lower-precedence source in §7.2
 
 ## Done
 

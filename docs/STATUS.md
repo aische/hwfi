@@ -18,8 +18,12 @@ Ready to start **M1: project skeleton**.
   `env`) + `builtin/introspect` escape hatch + `Secret<T>` with trace
   redaction + non-cacheable classification for volatile-ctx steps.
 - Read `llm-simple` `Load` module; confirmed `.env`-based key flow.
-  Decision: `hwfi` chdirs to project dir at startup; keys never flow
-  through `ctx.env`.
+- Revised decision after review: `hwfi` builds its own gateway map
+  from `LLM.Providers.*` and its own key store from `--env-file`,
+  `<project>/.env`, and process env (in that precedence). No chdir;
+  no engine-default model catalog (every project ships one). Keys
+  typed as `Secret Text` throughout. Startup validates provider–key
+  linkage against the catalog (A12).
 - Final decisions: binary `hwfi`, run dir `.hwfi/`, test `hspec`, md
   parser `commonmark-hs`, shared types under `types/*.md` in v1, model
   arg names a catalog entry, CLI structured inputs, `file:line:col`

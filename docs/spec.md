@@ -29,8 +29,8 @@ A workflow project is a directory with:
 
 ```
 project.json                # project manifest
-.env                        # provider API keys (loaded by llm-simple, see §7)
-model-catalog.json          # optional: overrides the engine's default catalog
+.env                        # optional: provider API keys (see §7.2)
+model-catalog.json          # required: model + provider config (see §7.3)
 workflows/
   main.md                   # a workflow definition
   <name>.md                 # more workflows, addressable by relative path
@@ -63,8 +63,8 @@ types/
 environment variables that will be readable via `ctx.env` at runtime.
 Anything not listed is not visible to the workflow. Provider API keys
 (`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`)
-do **not** need to be in `env`: they are consumed directly by
-`llm-simple`'s gateway loader and never flow through `ctx.env` — see §7.
+do **not** need to be in `env`: they are consumed by `hwfi`'s own
+gateway loader and never flow through `ctx.env` — see §7.2.
 
 ### 2.1 Shared type declarations
 
@@ -416,36 +416,93 @@ metadata come from the catalog entry, not from tool arguments.
 - The project directory (workflows/tools/types/project.json) is read-only
   during execution.
 
-### 7.2 Working directory and `.env`
+### 7.2 Provider API keys and `.env`
 
-At startup, `hwfi` sets the process working directory to the project
-directory. This is required so that `llm-simple`'s gateway loader, which
-calls `Configuration.Dotenv.loadFile` on the default path, discovers
-`<project>/.env` for provider API keys. Consequences:
+`hwfi` does not use `llm-simple`'s `LLM.Load.loadGateways`. Instead, it
+constructs provider gateways itself from the `LLM.Providers.*` modules,
+using its own key store. This avoids relying on the process working
+directory and keeps API keys typed as `Secret Text` throughout the
+engine.
 
-- Provider API keys live in `<project>/.env` (or the user's exported
-  environment). `.env` is loaded once at startup, before any workflow
-  step runs.
-- API keys never appear in `ctx.env` and cannot be observed by
-  workflows. They are consumed inside `llm-simple` gateway closures and
-  are opaque to `hwfi` and to workflows alike.
+Key sources, in order of precedence (highest wins):
+
+1. File named by `--env-file <path>` on the CLI, if given.
+2. `<project>/.env`, if the file exists.
+3. The existing process environment (`OPENAI_API_KEY` etc. exported by
+   the user's shell or a wrapper like `direnv`).
+
+`.env` files are parsed with `Configuration.Dotenv.parseFile`, which
+returns key/value pairs **without** injecting them into the process
+environment. `hwfi` merges the sources into an internal `KeyStore ::
+Map ProviderName (Secret Text)`. A missing `.env` at levels 1 or 2 is
+never an error on its own — only a missing key that is actually
+required by the effective model catalog (§7.3) fails startup.
+
+Recognised provider keys:
+
+| Provider  | Env var             |
+|-----------|---------------------|
+| openai    | `OPENAI_API_KEY`    |
+| claude    | `CLAUDE_API_KEY`    |
+| gemini    | `GEMINI_API_KEY`    |
+| deepseek  | `DEEPSEEK_API_KEY`  |
+| ollama    | *(no key required)* |
+
+Semantics:
+
+- Provider API keys never appear in `ctx.env` and are never observable
+  by workflows. They live in gateway closures inside the runtime.
 - The `env` whitelist in `project.json` only governs what workflows can
-  read via `ctx.env`. Adding `OPENAI_API_KEY` to that whitelist would
+  read via `ctx.env`. Adding `OPENAI_API_KEY` to the whitelist would
   make it readable by workflow code — do not do this unless you
-  intentionally want the key visible to steps (secrets flagged in §5.5
-  still apply).
+  intentionally want the key visible to steps (see §5.5 for how such
+  values would be redacted in traces).
+- `hwfi` does **not** change the process working directory. Relative
+  paths on the CLI are resolved against the shell's cwd, as expected.
 
 ### 7.3 Model catalog
 
-`hwfi` ships with a default `model-catalog.json`. If the project
-directory contains a `model-catalog.json`, it is used instead (no
-merging in v1: project override replaces default entirely). The catalog
-format is the one defined by `llm-simple` (see
-`../llm-simple/model-catalog.json`).
+Every project **must** provide a `model-catalog.json` at its root. There
+is no engine-bundled default. Rationale:
+
+- The catalog is a manifest of the project's LLM dependencies (which
+  provider, which model id, retry/timeout/temperature/pricing). Making
+  it explicit matches the typed-workflow ethos and avoids the "why did
+  my workflow break when the engine updated its default catalog"
+  problem.
+- Missing `model-catalog.json` fails at `hwfi check` with a clear
+  message.
+
+The catalog format is the JSON schema defined by `llm-simple`:
+
+```
+[
+  { "modelConfigName": "gpt_4_1",
+    "providerName":    "openai",
+    "modelName":       "gpt-4.1",
+    "pricing": { "pricePerMillionInput": ..., "pricePerMillionOutput": ... },
+    "maxTokens": 8192, "temperature": 0.5,
+    "requestTimeout": 30000, "throttleDelay": 500,
+    "retryCount": 3, "jitterBackoff": 1000
+  },
+  ...
+]
+```
 
 The `model` argument to `builtin/llm-*` must name an entry
-(`modelConfigName`) in the effective catalog. Unknown names fail at
-runtime with a clear error listing available names.
+(`modelConfigName`) in the catalog. Unknown names fail at runtime with a
+clear error listing available names (A11).
+
+Provider–key linking is validated at startup: for every model referenced
+in the catalog, the corresponding provider key must be available from
+the sources in §7.2 (except `ollama`, which requires no key). Missing
+keys fail startup with:
+
+```
+error: model 'gpt_4_1' in model-catalog.json requires provider 'openai',
+  but OPENAI_API_KEY was not found in --env-file, <project>/.env, or the
+  process environment.
+```
 
 ### 7.4 Network access
 
@@ -610,6 +667,7 @@ Binary name: `hwfi`. Minimal v1 surface:
 ```
 hwfi check   <project-dir>
 hwfi run     <project-dir> --workspace <dir>
+             [--env-file <path>]
              [--input <k>=<v>]... [--input <k>=@<file.json>]...
              [--input-json <file.json>]
              [--entry <qname>]
@@ -625,6 +683,8 @@ hwfi show    <workspace-dir> <run-id>          # pretty-print trace
   compose; `--input-json` is applied first and individual `--input`
   entries override.
 - `--entry <qname>` overrides `project.json`'s `entrypoint` for this run.
+- `--env-file <path>` supplies provider API keys; takes precedence over
+  `<project>/.env` and the process environment (§7.2).
 
 ### 9.1 Error message format
 
@@ -651,8 +711,13 @@ available, the source location of the step block.
 - Other libraries expected: `aeson`, `text`, `bytestring`, `containers`,
   `filepath`, `directory`, `unliftio`, `megaparsec` (for the step DSL and
   `TypeExpr`), `optparse-applicative`, `ulid` or `uuid`, `cryptonite` or
-  `hashable` for step-key hashing. `dotenv` is pulled in transitively via
-  `llm-simple`.
+  `hashable` for step-key hashing, `dotenv` (used directly via
+  `Configuration.Dotenv.parseFile`, see §7.2).
+- `llm-simple` API surface consumed by `hwfi`: `LLM.Generate` (all
+  generation entry points), `LLM.Providers.*` (individual gateway
+  constructors), `LLM.Load.ModelCatalog` (catalog parser). `hwfi` does
+  **not** use `LLM.Load.loadGateways` or the `*OrThrow` model loaders;
+  see §7.2 for why.
 
 ## 11. Acceptance criteria (v1)
 
@@ -682,8 +747,11 @@ A10. A shared type alias declared under `types/` and referenced from a
     workflow signature is resolved during type-checking; a cyclic alias
     is rejected at `hwfi check`.
 A11. An unknown model name passed to `builtin/llm-generate` fails with an
-    error that lists the available model names from the effective
-    catalog.
+    error that lists the available model names from the catalog.
+A12. A project whose `model-catalog.json` references provider `openai`
+    but for which no `OPENAI_API_KEY` is discoverable via `--env-file`,
+    `<project>/.env`, or the process environment fails at `hwfi run`
+    startup with a message naming the offending model and provider.
 
 ## 12. Edge cases and known tricky bits
 
