@@ -13,9 +13,9 @@
 -- hwfi show    \<workspace-dir> \<run-id>
 -- @
 --
--- In this milestone every command is a stub that reports "not implemented"
--- and exits non-zero. The parser itself is complete so later milestones only
--- fill in the dispatch bodies.
+-- @hwfi check@ is implemented end-to-end (parse + model-catalog presence +
+-- type-check, spec §9, §7.3, A1/A2). The remaining commands are stubs that
+-- report "not implemented" and exit non-zero until their milestones land.
 module Hwfi.Cli
   ( Command (..),
     CheckOpts (..),
@@ -27,13 +27,21 @@ module Hwfi.Cli
     parseInputArg,
     defaultMain,
     dispatch,
+    runCheck,
   )
 where
 
+import Control.Exception (IOException, try)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Hwfi.Check (checkProject, renderCheckErrors)
+import Hwfi.Parse.Project (loadProject)
+import Hwfi.Runtime.ModelCatalog (loadCatalog, renderCatalogError)
+import Hwfi.Source (Diagnostic (..), renderDiagnostic)
 import Options.Applicative
 import System.Exit (ExitCode (ExitFailure), exitWith)
+import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
 -- | A parsed CLI invocation.
@@ -150,13 +158,53 @@ showOpts =
 defaultMain :: IO ()
 defaultMain = execParser commandParserInfo >>= dispatch
 
--- | Dispatch a parsed 'Command'. All bodies are stubs in this milestone.
+-- | Dispatch a parsed 'Command'.
 dispatch :: Command -> IO ()
 dispatch = \case
-  Check _ -> notImplemented "check"
+  Check opts -> runCheck opts
   Run _ -> notImplemented "run"
   Resume _ -> notImplemented "resume"
   Show _ -> notImplemented "show"
+
+-- | Run @hwfi check@ (spec §9): parse the project, require a parseable
+-- @model-catalog.json@ (§7.3), and type-check. Prints nothing and exits 0 on
+-- success (A1); prints §9.1 diagnostics to stderr and exits non-zero on any
+-- error (A2).
+runCheck :: CheckOpts -> IO ()
+runCheck opts = do
+  let dir = opts.projectDir
+  eproj <- loadProject dir
+  case eproj of
+    Left ds -> reportAndFail dir ds []
+    Right proj -> do
+      ecat <- loadCatalog dir
+      let catMsgs = either (\e -> [renderCatalogError e]) (const []) ecat
+      case checkProject proj of
+        Left errs -> reportAndFail dir (renderCheckErrors errs) catMsgs
+        Right _
+          | null catMsgs -> pure ()
+          | otherwise -> reportAndFail dir [] catMsgs
+
+-- | Render diagnostics against their source files and any plain messages to
+-- stderr, then exit with a failure code.
+reportAndFail :: FilePath -> [Diagnostic] -> [Text] -> IO ()
+reportAndFail projectDir diags msgs = do
+  rendered <- mapM (renderOne projectDir) diags
+  let blocks = rendered <> msgs
+  TIO.hPutStr stderr (T.intercalate "\n\n" blocks <> "\n")
+  exitWith (ExitFailure 1)
+
+-- | Render one diagnostic, quoting the offending source line when the file is
+-- readable (spec §9.1).
+renderOne :: FilePath -> Diagnostic -> IO Text
+renderOne projectDir d = do
+  src <- readFileOrEmpty (projectDir </> diagPath d)
+  pure (renderDiagnostic src d)
+
+readFileOrEmpty :: FilePath -> IO Text
+readFileOrEmpty path = do
+  result <- try (TIO.readFile path) :: IO (Either IOException Text)
+  pure (either (const "") id result)
 
 notImplemented :: String -> IO ()
 notImplemented name = do

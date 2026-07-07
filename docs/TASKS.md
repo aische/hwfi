@@ -5,36 +5,7 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M3: Type checker
-
-- [ ] 3.1 Type representation (`Hwfi.Type`) including `Context`, `Trace`,
-      `TraceEvent`, `Secret<T>`, `WorkflowRef`, `ToolRef`
-- [ ] 3.2 Type-alias resolution: expand alias references, detect cyclic
-      aliases (spec A10)
-- [ ] 3.3 Environment building (inputs + step binds + ambient `ctx`),
-      scope rules
-- [ ] 3.4 Check step calls against callee signatures; unification for
-      records/lists; error format per spec §9.1
-- [ ] 3.5 `@self#slug` existence check against parsed markdown
-- [ ] 3.6 Import-cycle detection over direct call graph
-- [ ] 3.7 Static classification: mark each step **cacheable** or
-      **non-cacheable** by scanning arg expressions for volatile `ctx.*`
-      references and calls to `builtin/introspect`
-- [ ] 3.8 `Secret<T>` flow rules: forbid interpolation of `Secret<_>`
-      and `Bytes`, auto-tag `ctx.env.*` fields matching secret name
-      patterns
-- [ ] 3.9 Interpolation rendering typing (§3.2.1): allow any non-Secret,
-      non-Bytes type in an interpolation position; enforce return rule
-      (§5.6.5, explicit vs implicit `return`)
-- [ ] 3.10 Declaration fingerprinting (`fingerprint(d)` Merkle over the
-      acyclic direct call graph, §8.1) — computed in the checker, stored
-      on `TypedProject` for the runtime to consume
-- [ ] 3.11 Factor checker as `Project -> Either [TypeError] TypedProject`
-      (pure, no IO) — required for v1.1 dynamic workflow eval
-- [ ] 3.12 `hwfi check` end-to-end, integration tests with
-      expected-error fixtures
-
-## Later — M4: Runtime and built-in tools
+## Now — M4: Runtime and built-in tools
 
 - [ ] 4.1 Executor: linear step interpreter, binding environment,
       argument resolution
@@ -104,3 +75,9 @@ _Move items here temporarily, then archive to
       frontmatter/type/expr/step/type-alias/section/project parsers on
       `commonmark-hs` + `megaparsec`; §9.1 diagnostics; 41 tests + parse
       fixtures. (2026-07-07)
+- [x] M3 Type checker (3.1–3.12): `Hwfi.Type` (resolved types,
+      `structEq`/`assignable`); `Hwfi.Check.{Error,Builtins,Alias,Graph,
+      Expr,Decl}` + `checkProject`/`TypedProject`; alias + import cycle
+      detection, `@self#slug` checks, `Secret<T>`/interpolation rules,
+      return rule, step cacheability, Merkle fingerprints; `hwfi check`
+      wired; 71 tests + expected-error fixtures. (2026-07-07)

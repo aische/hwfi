@@ -1,0 +1,1 @@
+{ "name": "secret-interp", "version": "0.1.0", "entrypoint": "workflows/main", "env": ["API_KEY"] }

@@ -4,30 +4,29 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-**M2 (parsing and AST) is complete.** The engine now parses a whole
-project — frontmatter signatures, the step DSL, expressions, type
-expressions, type aliases, and markdown sections — into a typed AST, with
-spec §9.1 diagnostics. Ready to start **M3: type checker**.
+**M3 (type checker) is complete.** The engine now statically checks a
+whole project and produces a `TypedProject` with resolved signatures,
+per-step cacheability, and Merkle declaration fingerprints. `hwfi check`
+is wired end-to-end and reports spec §9.1 diagnostics. Ready to start
+**M4: runtime and built-in tools**.
 
 ## Done recently
 
-- AST modules: `Hwfi.Ast.{Name,Type,Expr,Step,Workflow,Tool,TypeAlias,Project}`
-  and `Hwfi.Source` (positions, spans, §9.1 diagnostic renderer).
-- `Hwfi.Parse.Markdown` on `commonmark-hs`: custom `IsInline`/`IsBlock`
-  instances capture headings and fenced `step` blocks with absolute source
-  lines; frontmatter is blanked (not removed) to keep positions aligned.
-- `Hwfi.Parse.Lexer`: shared megaparsec lexer with two space consumers
-  (`sc` intra-statement, `scn` inside brackets); `runParserAt` for
-  file-absolute positions; error-bundle → `[Diagnostic]`.
-- Parsers: `Type` (incl. `QName` alias refs), `Expr` (bare-ref vs
-  in-string interpolation per §3.2.1, short/long strings, escapes),
-  `Step` (binders, `@id`, discard rule, `return`, comments).
-- `Hwfi.Parse.Frontmatter` (YAML → `Signature`, TypeExpr sub-parser),
-  `Hwfi.Parse.TypeAlias`, `Hwfi.Parse.Section` (slug + `@self#slug` raw
-  content), `Hwfi.Parse.Project` (walks dirs, classifies by kind, builds
-  `Map QName Declaration`).
-- Tests: 41 examples (parsers, sections, §9.1 renderer, fixture projects
-  under `test/fixtures/parse/`). `cabal build`/`cabal test` green.
+- `Hwfi.Type`: resolved type representation (distinct from the surface
+  `TypeExpr`), `structEq`, `assignable` (structural + `String`→`FileRef`
+  subtyping), secret tagging, ambient `ctx`/`trace` field types.
+- `Hwfi.Check.Error` (`TypeError`/`TypeErrorKind` → §9.1 diagnostics),
+  `Hwfi.Check.Builtins` (`Callee` signatures for all `builtin/*`,
+  `builtin/introspect` identity), `Hwfi.Check.Alias` (alias expansion +
+  cycle detection).
+- `Hwfi.Check.Graph`: direct call graph, import-cycle detection (SCC),
+  and Merkle fingerprints computed over the acyclic graph.
+- `Hwfi.Check.Expr` (reference/interpolation/`@self#slug` typing),
+  `Hwfi.Check.Decl` (env building, arg checking, return rule, step
+  cacheability), `Hwfi.Check.checkProject` orchestrator, `TypedProject`.
+- `hwfi check` CLI wiring; catalog + project load + check with exit codes.
+- Tests: 71 examples (unit specs + expected-error fixtures under
+  `test/fixtures/check/`). `cabal build all`/`cabal test` green.
 
 ## Blockers
 
@@ -35,14 +34,14 @@ spec §9.1 diagnostics. Ready to start **M3: type checker**.
 
 ## Notes / decisions
 
-- YAML requires quoting type strings that contain `:` (record types),
-  e.g. `definition: "Record<{ role: String }>"`. Spec §2.1/§3.4 examples
-  show them unquoted; treat quoting as required in real files.
-- `Tool` mirrors `Workflow` structurally in v1 (distinct type, shared
-  `Signature`/`Section`). `DeclPrompt` is supported (kind: prompt) though
-  v1 has no cross-file prompt reference.
+- `assignable` adds one deliberate subtyping rule beyond `structEq`: a
+  `String` is accepted where a `FileRef` is expected (literal paths).
+- `Fingerprint` is a `newtype`, so the self-referential fingerprint map
+  MUST be built with `Data.Map.Lazy.mapWithKey`; strict construction
+  forces a callee's hash while the map is still being built and loops.
+- YAML requires quoting type strings containing `:` (record types).
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M3: Type checker**. Start with 3.1 (type
-representation) and 3.2 (alias resolution + cycle detection).
+See [TASKS.md](TASKS.md) → **M4: Runtime and built-in tools**. Start with
+4.1 (linear step executor) and 4.2 (ambient `ctx` construction).
