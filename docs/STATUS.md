@@ -54,5 +54,10 @@ run. Ready to start **M6+** (deferred features, spec §13).
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M6+**. Nothing is required before starting;
-control flow (`if`/`foreach`/`par`) is the natural next milestone.
+See [TASKS.md](TASKS.md) → **M6: LLM tool-use**. The `tool-use.md` design
+note has been promoted to normative spec: `builtin/llm-agent` /
+`builtin/llm-agent-object` (spec §6.1), intra-step content-addressed caching
+(§8.2.1), agent trace events (§8.3), type-check rules (§5.6.9), and
+acceptance criteria A17–A21. Start with the pure `Type -> JSON Schema`
+translation (6.a) and the reified step/continuation evaluator (6.b), which
+the later control-flow milestone (M7) reuses.

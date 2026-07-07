@@ -431,6 +431,16 @@ sensitive value. Rules:
 8. The checker is a pure function `Project -> Either [TypeError] TypedProject`
    so the same checker runs both at load time (`hwfi check`) and at runtime
    over dynamically synthesized workflows (see §13).
+9. `builtin/llm-agent` / `builtin/llm-agent-object` (§6.1): every element of
+   the `tools` argument must be a `ToolRef`/`WorkflowRef` value in scope,
+   and every referenced callee must be **agent-eligible** — none of its
+   declared inputs may be `Secret<_>`, `WorkflowRef`, `ToolRef`, or `Bytes`
+   (§6.1.1), and it must not (transitively) call `builtin/introspect`
+   (§6.1.5). Ineligible callees are rejected here, not at runtime. The round
+   cap `max_rounds` is a static `Int` and must be ≥ 1. Model-driven call
+   cycles (the model lets A call B which calls A) are bounded at runtime by
+   `max_rounds`, not by the acyclic-call-graph rule of §5.6.6, which only
+   covers *static* calls.
 
 ### 5.7 Environment access (`ctx.env`)
 
@@ -476,12 +486,161 @@ Provided by the engine, addressed as `builtin/<name>`:
   JSON dump of everything the runtime knows about the current run
   (including full trace, all bindings, workspace path, project metadata).
   Marks the calling step non-cacheable (§8.2).
+- `builtin/llm-agent` :
+  `{ system: String, prompt: String, model: String,
+     tools: List<ToolRef<_, _> | WorkflowRef<_, _>>,
+     max_rounds: Int } -> { text: String, rounds: Int }` — an
+  **LLM-driven** step: the model is advertised the given tools and
+  autonomously issues tool calls in a loop (each backed by a declared hwfi
+  tool/sub-workflow, run through the normal executor) until it produces a
+  final free-text answer or `max_rounds` is reached. See §6.1.
+- `builtin/llm-agent-object` :
+  `{ system: String, prompt: String, model: String,
+     tools: List<ToolRef<_, _> | WorkflowRef<_, _>>,
+     schema: Json, max_rounds: Int } -> { value: Json, rounds: Int }` — the
+  typed-output variant of `builtin/llm-agent`. The model may call tools to
+  gather information, then must terminate by calling a synthesized `submit`
+  tool whose parameters are `schema` (§6.1.3). `builtin/llm-gen-object` is
+  the zero-tool degenerate case of this builtin.
 
 For all LLM tools, `model` names an entry in the **model catalog** (§7.3),
 not a raw provider model id. Retry, timeout, temperature, and pricing
 metadata come from the catalog entry, not from tool arguments.
 
+`builtin/llm-agent` and `builtin/llm-agent-object` mark the calling step
+non-cacheable as a black box, but each internal model call and tool call is
+individually content-addressed so a crash mid-loop resumes cheaply (§8.2).
+
 **[deferred v1.1]** shell/exec tool.
+
+### 6.1 Agentic tool-use loop (`builtin/llm-agent`)
+
+Where `builtin/llm-generate`/`-chat`/`-gen-object` are *workflow-driven*
+(the workflow orchestrates and the model is called one-shot per step; it
+never decides to call anything), `builtin/llm-agent` is *LLM-driven*:
+within a single step the model is handed a set of callable tools and
+autonomously issues tool calls in a loop until it yields a final answer.
+The tools it may call are **the project's own declarations**, so a
+prompt-authored workflow can expose e.g. `tools/search` and
+`workflows/extract` to a model and let the model decide when to use them.
+
+The full design rationale (and the prior art it draws on) is in
+[tool-use.md](tool-use.md); this section pins the normative behaviour.
+
+Loop semantics:
+
+1. **Advertised tools.** The `tools` argument is a list of first-class
+   `ToolRef`/`WorkflowRef` values (§5.1). Each is resolved to its
+   declaration and exposed to the provider as a tool whose JSON-Schema
+   parameters are derived from the callee's declared inputs (§6.1.1).
+2. **Rounds.** Each round the model is called with the conversation so far
+   and the advertised tools. If it emits one or more tool calls, the engine
+   runs each targeted ref through the normal executor as a nested step
+   (§6.1.2), serialises each typed result back to JSON, appends it as a
+   tool message, and starts the next round. If it emits a final answer with
+   no tool calls (or, for `builtin/llm-agent-object`, a `submit` call,
+   §6.1.3), the loop ends.
+3. **Round cap.** `max_rounds` bounds the number of model rounds. Reaching
+   it without termination aborts the step with an `Error` of kind `llm`
+   (§8.3.2). `max_rounds` must be ≥ 1.
+4. **Result.** `builtin/llm-agent` returns `{ text, rounds }`, where `text`
+   is the model's final free-text answer and `rounds` is the number of
+   model rounds executed. `builtin/llm-agent-object` returns
+   `{ value, rounds }`, where `value` is the decoded `submit` payload.
+
+#### 6.1.1 Signature → JSON-Schema translation
+
+Each advertised ref is turned into a provider tool whose parameter schema
+is a total translation of the callee's resolved input types
+(`inputs : Map<Ident, TypeExpr>`) into JSON Schema:
+
+| hwfi type                         | JSON Schema                              |
+|-----------------------------------|------------------------------------------|
+| `String`                          | `{"type":"string"}`                      |
+| `Int`                             | `{"type":"integer"}`                     |
+| `Double`                          | `{"type":"number"}`                      |
+| `Bool`                            | `{"type":"boolean"}`                     |
+| `FileRef`                         | `{"type":"string"}` (workspace path)     |
+| `List<T>`                         | `{"type":"array","items": T}`            |
+| `Record<{…}>`                     | `{"type":"object","properties": …, "required": …}` |
+| `Json`                            | unconstrained (`{}`)                     |
+| type-alias qname                  | schema of the resolved alias             |
+
+The following input types make a callee **ineligible** as an agent tool
+and are rejected at `hwfi check` (§5.6):
+
+- `Secret<_>` — must never be model-supplied or exposed to the model (§5.5).
+- `WorkflowRef<_, _>` / `ToolRef<_, _>` — refs are not model-supplied.
+- `Bytes` — no implicit text/JSON encoding (cf. §3.2.1).
+
+The same translation drives the `submit` tool of §6.1.3, applied to the
+`schema` argument of `builtin/llm-agent-object`.
+
+#### 6.1.2 Tool calls run through the executor
+
+When the model emits `ToolCall { name, arguments }`:
+
+1. `name` is resolved to one of the advertised refs. An **unknown** name is
+   a *recoverable* error: the engine appends a tool message describing the
+   error and continues the loop (the model may retry). It is **not** a run
+   abort.
+2. `arguments` (a JSON object) is coerced into the callee's declared input
+   types via the same `coerceFromJson` used to reconstruct inputs on resume.
+   A parse/type failure is likewise recoverable — fed back as a tool
+   message, not a run abort.
+3. The callee is run through `Hwfi.Runtime.Executor` as a **nested step**,
+   so its `step-start`/`step-end`, `llm-call`, and `file-io` events nest
+   under the agent step (§8.3.3.6) and its effects go through the sandboxed
+   `Workspace` (§7.1). The model never touches the filesystem directly.
+4. The result `RValue` is serialised to JSON as the tool-message content
+   for the next round.
+
+#### 6.1.3 Terminating `submit` tool for typed output
+
+`builtin/llm-agent-object` synthesizes an extra `submit` tool from its
+`schema` argument (§6.1.1) and advertises it alongside the caller's tools:
+
+- **Calling `submit` ends the loop**, and its arguments — coerced against
+  `schema` — become the step's `value`.
+- **`submit` is mandatory.** Finishing with plain text instead of a
+  `submit` call is a hard error (`llm` kind). (This is what makes the typed
+  variant type-safe; the free-text `builtin/llm-agent` has no `submit` and
+  terminates on a text answer.)
+- A **decode failure** of the `submit` arguments is *recoverable*: it is
+  returned to the model as a tool message so it can correct itself and call
+  `submit` again — not a run abort.
+
+`submit` must be called on its own. The engine advertises this in the
+tool's description, and enforces it: a round that mixes `submit` with other
+tool calls is **rejected** — the engine feeds back a tool message telling
+the model to call `submit` alone, and runs none of that round's calls. This
+avoids executing side-effecting tools whose results the model would never
+see (see [tool-use.md](tool-use.md) §3.3).
+
+#### 6.1.4 Error posture
+
+The agent loop introduces a **localized, recoverable error boundary**
+inside the step, which does not change the global "abort on first error"
+posture (§4, §13). Failures are classified:
+
+- **Recoverable** (turned into a tool message; loop continues): unknown
+  tool name, malformed/ill-typed tool arguments, a tool result the callee
+  itself surfaces as an error, and `submit` decode failures.
+- **Fatal** (abort the run with an `Error` event): `max_rounds` exhaustion,
+  provider/auth/generation failures (`llm`), lost workspace lock, and any
+  `internal` engine fault.
+
+#### 6.1.5 Sandbox, secrets, and readonly
+
+- Every model-chosen call is routed through the executor, so workspace
+  path-traversal protection (§7.1) and `file-io` tracing hold with no
+  special casing. `llm-simple`'s own filesystem tools are **not** exposed.
+- `Secret<_>` inputs are never model-supplied or interpolated (§5.5),
+  enforced at type-check (§6.1.1, §5.6).
+- `builtin/introspect` must not be reachable as an agent tool: it would
+  hand the whole run (including the full trace) to the model's context.
+  Passing a callee that (transitively) calls `builtin/introspect` as an
+  agent tool is rejected at `hwfi check`.
 
 ## 7. Workspace, project, and sandboxing
 
@@ -649,6 +808,13 @@ A step that references any volatile `ctx` field, or calls
 resume. This is statically decidable at type-check time and recorded on
 the AST node.
 
+An agent step (`builtin/llm-agent` / `builtin/llm-agent-object`, §6.1) is
+**also non-cacheable as a whole**: its behaviour — which tools it calls, in
+what order, with what arguments — is chosen by the model and is not a
+function of its resolved arguments, so it cannot be a cacheable black box.
+`classifyCacheable` treats it like `builtin/introspect`. Its *internal*
+units are cached instead (§8.2.1).
+
 ### 8.2 Resume semantics
 
 - Cacheable steps: skipped on resume if their `step-key` has a persisted
@@ -664,6 +830,55 @@ the AST node.
 - On resume the runtime appends one `Resumed` marker (§8.3.2) before any
   new events, then continues numbering `seq` from the last value + 1.
 - A run is resumable if `run.json.status ∈ {running, crashed, aborted}`.
+
+### 8.2.1 Intra-step caching of agent loops
+
+An agent step is non-cacheable as a whole (§8.1), but re-running the
+**entire** loop on resume — re-issuing every model call (cost) and
+re-executing every tool call (side effects like `builtin/write-file`) —
+is unacceptable. Therefore the loop's internal units are **individually
+content-addressed and cached**, reusing the existing store (`RunStore`'s
+`cacheStepResult` / `lookupCachedResult`; the sub-keys are just more
+entries under `steps/`, so no new storage layer is needed). This is a
+requirement, not an optimization.
+
+Two kinds of unit are cached under the enclosing agent step-key:
+
+- **Tool calls** (each model-chosen call is a nested step, §6.1.2):
+  `hash(agent-step-key, round-index, call-index-in-round,
+  callee-fingerprint, canonical(resolved-args))`. `call-index-in-round`
+  disambiguates multiple tool calls in one assistant turn (provider order
+  is stable). `submit` is just another tool call and needs no special
+  handling.
+- **Model calls** (each round's generation):
+  `hash(agent-step-key, round-index, canonical(messages-so-far),
+  model-catalog-fingerprint, advertised-tools-fingerprint)`. The
+  `messages-so-far` already encode every prior round's assistant turn and
+  tool results, so the key chain is self-consistent.
+
+**Canonicalization caveat.** Sub-keys hash the **actual** message content
+and resolved args (as stored in `steps/*.json`, non-redacted, §8.3.4 /
+STATUS notes), never the trace's `redactedJson` form, and use
+`canonicalJson` so turn ordering, tool-result serialisation, and JSON
+field order do not perturb the key. Any instability here silently turns
+cache hits into misses on resume.
+
+**Resume behaviour.** The loop re-drives from round 0 but consults the
+cache (only on resume, per §8.2):
+
+- Each model call: on a hit, reuse the cached assistant turn *including the
+  tool calls it chose*, without paying the provider — this makes the
+  nondeterministic replay follow the **same branch** deterministically.
+- Each tool call: on a hit, reuse the cached result without re-running its
+  side effects.
+- A miss anywhere re-runs from that point; every downstream sub-key then
+  changes and re-runs too — exactly the existing "cacheable ⇒ skip, else
+  re-run" rule applied one level down.
+
+Because a cached replay does no provider calls and no side effects (only
+re-walks the loop, hashing and looking up), serialising the loop's
+in-memory state to disk is a *possible later optimization*, not a
+prerequisite for correct, cheap resume.
 
 ### 8.3 Trace event schema
 
@@ -738,6 +953,34 @@ TraceEvent =
       kind    : "type" | "eval" | "io" | "sandbox"
               | "llm" | "user" | "internal"
     }
+  | AgentRoundStart {
+      tag     : "agent-round-start",
+      seq, at, qname, step_id,
+      round   : Int                -- 0-based round index within the step
+    }
+  | AgentToolCall {
+      tag        : "agent-tool-call",
+      seq, at, qname, step_id,
+      round      : Int,
+      call_index : Int,            -- index of this call within the round
+      tool       : String,         -- resolved ref qname (or "submit")
+      args       : Json            -- decoded call args, secrets redacted
+    }
+  | AgentToolResult {
+      tag        : "agent-tool-result",
+      seq, at, qname, step_id,
+      round      : Int,
+      call_index : Int,
+      tool       : String,
+      result     : Json,           -- serialised tool result, secrets redacted
+      recoverable_error : Bool     -- true if this result is a fed-back error
+    }
+  | AgentRoundEnd {
+      tag      : "agent-round-end",
+      seq, at, qname, step_id,
+      round    : Int,
+      finished : Bool              -- true if the model terminated this round
+    }
   | Resumed {
       tag      : "resumed",
       seq, at,
@@ -788,6 +1031,17 @@ A trace represents one *logical run*, which may span several execution
 6. Sub-workflow calls nest: the callee's events appear between the
    caller's `StepStart` and terminal. Consumers reconstruct the call tree
    from `(qname, step_id)` chronology within an attempt.
+7. An agent step (§6.1) emits, between its `StepStart` and terminal, one
+   `AgentRoundStart`/`AgentRoundEnd` pair per model round (with strictly
+   increasing `round`), and within a round zero or more
+   `AgentToolCall`/`AgentToolResult` pairs matched by `(round,
+   call_index)`. Each round's model generation appears as an `LlmCall`
+   between its `AgentRoundStart` and the round's first tool call (or
+   `AgentRoundEnd`). Each tool call runs a nested step (§6.1.2), so that
+   callee's own `StepStart`/inner/`StepEnd` events appear between the
+   corresponding `AgentToolCall` and `AgentToolResult`. On resume, model
+   calls and tool calls served from the intra-step cache (§8.2.1) emit no
+   new events; their original events remain earlier in the file.
 
 #### 8.3.4 Redaction
 
@@ -797,7 +1051,8 @@ replaced with the string `"<secret:$name>"` on serialisation, where
 happens once, at the writer, before the line is appended.
 
 `Secret<_>`-typed values in `args`, `result`, `system`, `prompt`,
-`response` are redacted per §5.5.
+`response`, and in the `args`/`result` of `AgentToolCall`/`AgentToolResult`
+are redacted per §5.5.
 
 #### 8.3.5 `ctx.trace` construction
 
@@ -920,6 +1175,28 @@ A15. A downstream step's `ctx.trace` contains the same detailed events
     freshly executed or served from cache on resume (§8.3.5).
 A16. `builtin/llm-chat` conducts a multi-turn exchange from a `messages`
     history and returns assistant text.
+A17. `builtin/llm-agent` runs a multi-round loop in which the model calls an
+    advertised `ToolRef`/`WorkflowRef`, receives that callee's typed result
+    as a tool message, and then produces a final answer; the callee's
+    nested `step-start`/`step-end` events appear between the corresponding
+    `agent-tool-call` and `agent-tool-result` (§6.1, §8.3.3.7).
+A18. Passing a callee whose declared inputs include a `Secret<_>`,
+    `ToolRef`/`WorkflowRef`, or `Bytes` — or a callee that transitively
+    calls `builtin/introspect` — in the `tools` argument fails at
+    `hwfi check` (§6.1.1, §6.1.5).
+A19. `builtin/llm-agent-object` returns the typed record decoded from a
+    terminating `submit` call; a `submit` decode failure is fed back to the
+    model as a tool message rather than aborting the run, and finishing
+    without calling `submit` aborts with an `llm` error (§6.1.3).
+A20. Killing the process mid agent-loop and invoking `hwfi resume` completes
+    the loop reusing cached model calls and tool-call results — no
+    provider calls are re-paid and no tool side effects are re-run (verified
+    by an advertised tool that writes a marker file and would double-write
+    on re-execution) (§8.2.1).
+A21. A tool name the model emits that resolves to no advertised ref, and
+    malformed tool arguments, are fed back as recoverable tool messages and
+    the loop continues; reaching `max_rounds` without termination aborts
+    with an `Error` of kind `llm` (§6.1.4).
 
 ## 12. Edge cases and known tricky bits
 
@@ -942,14 +1219,20 @@ A16. `builtin/llm-chat` conducts a multi-turn exchange from a `messages`
 - Shell/exec tool with sandbox policy.
 - Dynamic workflow synthesis by agents. The type checker is already
   factored as a pure function (§5.6) so it can be re-invoked at runtime
-  on a freshly-parsed workflow; what remains for v1.1 is a built-in tool
-  along the lines of `builtin/eval-workflow(source: String, inputs: Json)
+  on a freshly-parsed workflow; what remains is a built-in tool along the
+  lines of `builtin/eval-workflow(source: String, inputs: Json)
   -> { outputs: Json }` that parses, type-checks, and runs a workflow
-  produced by another step.
+  produced by another step. (Note: **LLM tool-use** — a model calling the
+  project's *existing* declarations in a loop — is a distinct, weaker
+  capability and is **no longer deferred**: it is specified in §6.1 as
+  `builtin/llm-agent` / `builtin/llm-agent-object`.)
 - Cross-run trace reading (reading prior runs' `trace.jsonl`).
 - Skill extraction from traces.
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
-- Control-flow-driven error handling (`try`/recover); v1 aborts on the
-  first error.
+- Control-flow-driven error handling (`try`/recover); the engine aborts on
+  the first error. The one exception is the agent loop's **localized**
+  recoverable-error boundary (§6.1.4), which turns a bad tool call into a
+  tool message the model can retry; it does not expose a general
+  `try`/recover construct to workflows.

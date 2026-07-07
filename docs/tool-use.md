@@ -1,9 +1,12 @@
 # LLM tool-use (agentic function calling)
 
-Status: **goal / not implemented.** This document describes a feature we
-want and an analysis of what it would take. It is a design note, not a spec
-change yet. The current spec lists the closest version of this ("dynamic
-workflow synthesis by agents") as deferred to v1.1+ (spec §13).
+Status: **specified / not yet implemented.** This document is the design
+note and rationale; the normative behaviour it argues for has been promoted
+into the spec — see spec §6.1 (`builtin/llm-agent` / `builtin/llm-agent-object`),
+§5.6.9 (type-check rules), §8.2.1 (intra-step caching), §8.3 (agent trace
+events), and acceptance criteria A17–A21. The implementation backlog is
+TASKS.md → **M6**. This note is kept for the "why" and the prior-art
+analysis (§3) that the spec deliberately omits.
 
 A working reference for the design exists at `../llm-workflow`; §3 distills
 what to borrow from it and where hwfi must differ.
