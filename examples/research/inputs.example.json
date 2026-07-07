@@ -1,0 +1,14 @@
+{
+  "doc": "docs/quantum-computing.md",
+  "docs_dir": "docs",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "title": { "type": "string" },
+      "topics": { "type": "array", "items": { "type": "string" } },
+      "difficulty": { "type": "string", "enum": ["intro", "intermediate", "advanced"] },
+      "one_line": { "type": "string" }
+    },
+    "required": ["title", "topics", "difficulty", "one_line"]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "research",
+  "version": "0.1.0",
+  "entrypoint": "workflows/main",
+  "env": ["RESEARCHER_NAME", "RESEARCH_API_TOKEN"]
+}
