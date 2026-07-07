@@ -30,6 +30,11 @@ sampleEvents =
     q (FileIo wf "w" OpWrite "out.txt" 7),
     q (FileIo wf "l" OpList "dir" 0),
     q (ErrorEvent wf "x" "boom" KEval),
+    q (AgentRoundStart wf "agent" 0),
+    q (AgentToolCall wf "agent" 0 1 "tools/search" (object ["query" .= ("q" :: String)])),
+    q (AgentToolResult wf "agent" 0 1 "tools/search" (object ["hits" .= (2 :: Int)]) False),
+    q (AgentToolResult wf "agent" 1 0 "submit" (String "bad args") True),
+    q (AgentRoundEnd wf "agent" 1 True),
     q (Resumed "run-1" 12),
     q (RunEnd "run-1" Completed)
   ]

@@ -93,6 +93,18 @@ data EventBody
     FileIo QName Ident FileOp Text Int
   | -- | @error@: qname, step id, message, kind.
     ErrorEvent QName Ident Text ErrorKind
+  | -- | @agent-round-start@ (§8.3.2): qname, step id, 0-based round index.
+    AgentRoundStart QName Ident Int
+  | -- | @agent-tool-call@ (§8.3.2): qname, step id, round, call index within
+    -- the round, resolved tool qname (or @"submit"@), decoded args (redacted).
+    AgentToolCall QName Ident Int Int Text Value
+  | -- | @agent-tool-result@ (§8.3.2): qname, step id, round, call index, tool,
+    -- serialised result (redacted), and whether it is a fed-back recoverable
+    -- error (§6.1.4).
+    AgentToolResult QName Ident Int Int Text Value Bool
+  | -- | @agent-round-end@ (§8.3.2): qname, step id, round, whether the model
+    -- terminated the loop this round.
+    AgentRoundEnd QName Ident Int Bool
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int
   | -- | @run-end@: run id, terminal status.
@@ -161,6 +173,38 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "message" .= message,
           "kind" .= errorKindText kind
         ]
+      AgentRoundStart q sid round_ ->
+        [ "tag" .= ("agent-round-start" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "round" .= round_
+        ]
+      AgentToolCall q sid round_ callIx tool args ->
+        [ "tag" .= ("agent-tool-call" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "round" .= round_,
+          "call_index" .= callIx,
+          "tool" .= tool,
+          "args" .= args
+        ]
+      AgentToolResult q sid round_ callIx tool result recoverable ->
+        [ "tag" .= ("agent-tool-result" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "round" .= round_,
+          "call_index" .= callIx,
+          "tool" .= tool,
+          "result" .= result,
+          "recoverable_error" .= recoverable
+        ]
+      AgentRoundEnd q sid round_ finished ->
+        [ "tag" .= ("agent-round-end" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "round" .= round_,
+          "finished" .= finished
+        ]
       Resumed runId fromSeq ->
         [ "tag" .= ("resumed" :: Text),
           "run_id" .= runId,
@@ -209,6 +253,27 @@ parseEvent = withObject "TraceEvent" $ \o -> do
         FileIo <$> qn o <*> o .: "step_id" <*> (fileOpFromText <$> o .: "op") <*> o .: "path" <*> o .: "bytes"
       "error" ->
         ErrorEvent <$> qn o <*> o .: "step_id" <*> o .: "message" <*> (errorKindFromText <$> o .: "kind")
+      "agent-round-start" ->
+        AgentRoundStart <$> qn o <*> o .: "step_id" <*> o .: "round"
+      "agent-tool-call" ->
+        AgentToolCall
+          <$> qn o
+          <*> o .: "step_id"
+          <*> o .: "round"
+          <*> o .: "call_index"
+          <*> o .: "tool"
+          <*> o .: "args"
+      "agent-tool-result" ->
+        AgentToolResult
+          <$> qn o
+          <*> o .: "step_id"
+          <*> o .: "round"
+          <*> o .: "call_index"
+          <*> o .: "tool"
+          <*> o .: "result"
+          <*> o .: "recoverable_error"
+      "agent-round-end" ->
+        AgentRoundEnd <$> qn o <*> o .: "step_id" <*> o .: "round" <*> o .: "finished"
       "resumed" ->
         Resumed <$> o .: "run_id" <*> o .: "from_seq"
       "run-end" ->
@@ -238,6 +303,23 @@ renderEvent (TraceEvent s at body) =
         "file-io     " <> step q sid <> "  " <> fileOpText op <> " " <> path <> " (" <> T.pack (show bytes) <> "B)"
       ErrorEvent q sid msg _ ->
         "error       " <> step q sid <> "  " <> msg
+      AgentRoundStart q sid round_ ->
+        "agent-round " <> step q sid <> "  round=" <> T.pack (show round_) <> " start"
+      AgentToolCall q sid round_ callIx tool _ ->
+        "agent-call  " <> step q sid <> "  round=" <> T.pack (show round_) <> " #" <> T.pack (show callIx) <> "  " <> tool
+      AgentToolResult q sid round_ callIx tool _ recoverable ->
+        "agent-result"
+          <> " "
+          <> step q sid
+          <> "  round="
+          <> T.pack (show round_)
+          <> " #"
+          <> T.pack (show callIx)
+          <> "  "
+          <> tool
+          <> (if recoverable then "  [recoverable]" else "")
+      AgentRoundEnd q sid round_ finished ->
+        "agent-round " <> step q sid <> "  round=" <> T.pack (show round_) <> (if finished then " end [final]" else " end")
       Resumed runId fromSeq ->
         "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
       RunEnd runId status ->

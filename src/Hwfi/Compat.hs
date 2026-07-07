@@ -22,10 +22,15 @@ module Hwfi.Compat
 
     -- * Core generation types
     ChatResponse (..),
+    ContentBlock (..),
     Turn (..),
+    ToolDef (..),
+    ToolCall (..),
+    ToolResult (..),
+    mkToolCall,
     Usage (..),
     ThinkingMode (..),
-    LLMGateway,
+    LLMGateway (..),
 
     -- * Provider gateways
     openAIGateway,
@@ -43,9 +48,14 @@ where
 
 import LLM.Core.Types
   ( ChatResponse (..),
-    LLMGateway,
+    ContentBlock (..),
+    LLMGateway (..),
     ThinkingMode (..),
+    ToolCall (..),
+    ToolDef (..),
+    ToolResult (..),
     Turn (..),
+    mkToolCall,
   )
 import LLM.Core.Usage (Usage (..))
 import LLM.Generate

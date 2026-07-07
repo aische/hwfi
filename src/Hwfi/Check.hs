@@ -32,10 +32,11 @@ import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Type (TypeExpr)
 import Hwfi.Ast.Workflow (Signature (..), Workflow (..), emptySignature)
 import Hwfi.Check.Alias (resolveAliasDefs, resolveSigTypeExpr)
-import Hwfi.Check.Builtins (Callee (..), isBuiltin, lookupBuiltin)
+import Hwfi.Check.Builtins (Callee (..), introspectQName, isBuiltin, lookupBuiltin)
 import Hwfi.Check.Decl (CheckCtx (..), checkDeclBody)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), renderTypeErrors, typeError)
-import Hwfi.Check.Graph (computeFingerprints, detectImportCycles, lookupCalleeFingerprint)
+import Hwfi.Check.Graph (computeFingerprints, detectImportCycles, directCallees, lookupCalleeFingerprint, projectCallees)
+import Data.Set qualified as Set
 import Hwfi.Project.Manifest (ProjectManifest (..))
 import Hwfi.Source (Diagnostic, Pos (..))
 import Hwfi.TypedProject
@@ -70,7 +71,7 @@ checkProject proj
     entrypointErrs = entrypointError decls manifest
 
     -- Phase 3: declaration bodies.
-    ctx = mkCtx decls sigMap manifest
+    ctx = mkCtx decls sigMap manifest (reachesIntrospect decls)
     bodyResults =
       [ (q, checkDeclBody ctx q d (sigLookup q))
       | (q, d) <- Map.toList decls
@@ -156,12 +157,13 @@ entrypointError decls manifest =
 
 -- Context assembly -----------------------------------------------------------
 
-mkCtx :: Map QName Declaration -> Map QName ResolvedSignature -> ProjectManifest -> CheckCtx
-mkCtx decls sigMap manifest =
+mkCtx :: Map QName Declaration -> Map QName ResolvedSignature -> ProjectManifest -> (QName -> Bool) -> CheckCtx
+mkCtx decls sigMap manifest reaches =
   CheckCtx
     { ccCallee = \q -> Map.lookup q calleeMap <|> lookupBuiltin q,
       ccRefType = \q -> Map.lookup q refMap <|> builtinRefType q,
-      ccEnvRecord = envRecordType manifest
+      ccEnvRecord = envRecordType manifest,
+      ccReachesIntrospect = reaches
     }
   where
     calleeMap =
@@ -183,6 +185,21 @@ mkCtx decls sigMap manifest =
     builtinRefType q = case lookupBuiltin q of
       Just c -> Just (TyToolRef (TyRecord (calleeInputs c)) (TyRecord (calleeOutputs c)))
       Nothing -> Nothing
+
+-- | Whether a callee (transitively) reaches @builtin/introspect@ (§6.1.5). The
+-- walk carries a visited set so it terminates even before the acyclic-graph
+-- invariant is established (this predicate is consulted during body checking,
+-- which also runs on a project that has import cycles).
+reachesIntrospect :: Map QName Declaration -> QName -> Bool
+reachesIntrospect decls = go Set.empty
+  where
+    go seen q
+      | q `Set.member` seen = False
+      | otherwise = case Map.lookup q decls of
+          Nothing -> False
+          Just d ->
+            introspectQName `elem` directCallees d
+              || any (go (Set.insert q seen)) (projectCallees decls d)
 
 -- | Build the @ctx.env@ record type from the project's @env@ whitelist
 -- (§5.7), auto-tagging secret-named variables as @Secret<String>@ (§5.5).

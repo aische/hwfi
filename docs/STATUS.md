@@ -4,33 +4,36 @@ Last updated: 2026-07-07
 
 ## Current focus
 
-**M5 (persistence, tracing, resume) is complete.** Every `hwfi run`
-now writes a durable run directory under `<workspace>/.hwfi/runs/<id>/`
-(`run.json`, `steps/<step-key>.json`, append-only `trace.jsonl`), and
-`hwfi resume` re-executes an interrupted run: cacheable steps with a
-persisted result are skipped (no new trace events), non-cacheable steps
-always re-run, and `ctx.trace` is reconstructed from the file so
-downstream behaviour is caching-independent. `hwfi show` pretty-prints a
-run. Ready to start **M6+** (deferred features, spec §13).
+**M6 (LLM tool-use) is complete.** `builtin/llm-agent` and
+`builtin/llm-agent-object` drive an agentic tool-use loop: within one
+step the model is advertised the project's own eligible tools/workflows
+and autonomously issues tool calls until it yields a final answer
+(free-text) or calls the terminating `submit` tool (typed output). The
+agent step is a non-cacheable black box, but every model round and tool
+call inside it is content-addressed and reused on resume (§8.2.1). Ready
+to start **M7** (control flow), which reuses the same loop shape.
 
 ## Done recently
 
-- `Hwfi.Runtime.Trace`: append-only file sink on `emit` (flushed per
-  line), resume preload + `seq` continuation, `eventFromJson` decoder
-  (inverse of `eventToJson`), `renderEvent` for `hwfi show`.
-- `Hwfi.Runtime.StepKey`: §8.1 step-key = hash(qname, step-id, canonical
-  resolved-args with `Ref` args contributing target fingerprints, stable
-  `ctx` projection, callee fingerprint). Secrets hashed by actual value.
-- `Hwfi.Runtime.RunStore`: run-dir layout, `run.json` schema + atomic
-  read/write, content-addressed step cache, strict `trace.jsonl` reader,
-  and the exclusive `<workspace>/.hwfi/lock` (§12).
-- `Hwfi.Runtime.Executor`: cache-aware `execStep`; `performRun` /
-  `performResume` orchestrating lock + `run.json` phase + persistent
-  tracer; real `projectContentHash`; runtime fingerprint-by-qname.
-- `TypedStep` gained `tsResultType` (threaded through `Check.Decl` /
-  `Check`) so a cached result reconstructs to a typed `RValue`.
-- `hwfi run/resume/show` wired; 128 tests (was 102) incl. A4/A7/A13/A15
-  and a truncated-trace crash-resume test.
+- `Hwfi.Runtime.Schema`: pure `Type -> JSON Schema` with secret/ref/
+  `Bytes` rejection; `ineligibilityReasons` for agent-eligibility (§6.1.1).
+- `Hwfi.Runtime.Agent`: the reified round/tool-call state machine over
+  `RValue` (modelled on `../llm-workflow`, no `unsafeCoerce`). Model calls
+  and tool calls sub-keyed under the agent step-key and cached in
+  `RunStore`; `submit` validation, mixed-submit rejection, recoverable vs
+  fatal tool errors (§6.1.3–6.1.4).
+- `Hwfi.Check.{Builtins,Decl,Check}`: agent builtins registered; bespoke
+  `checkAgentCall`/`checkToolElem` (eligible inputs, no `introspect`
+  reachability via cycle-safe `reachesIntrospect`); non-cacheable (§8.1).
+- `Hwfi.Runtime.Trace`: `agent-round-start/-tool-call/-tool-result/
+  -round-end` events + JSON round-trip + `hwfi show` rendering (§8.3).
+- `Hwfi.Runtime.Executor`: agent step wired via `runAgentStep` with the
+  agent step-key namespacing nested tool steps; `Gateways` gained
+  `modelCatalogFingerprint` for the model sub-key.
+- `examples/research`: `workflows/investigate` (llm-agent) + `answer`
+  (llm-agent-object) advertising read-only `tools/corpus`, `tools/lookup`.
+- 152 tests (was 128): schema unit, trace round-trip, A18 check fixtures,
+  and an end-to-end agent loop over a fake gateway incl. resume (A17–A21).
 
 ## Blockers
 
@@ -38,26 +41,19 @@ run. Ready to start **M6+** (deferred features, spec §13).
 
 ## Notes / decisions
 
-- Caching is consulted **only on resume** (spec §8.2); every attempt
-  still *writes* cache entries so a later resume can use them.
-- Step classification is per-call-site and static: a cacheable step that
-  calls a sub-workflow is skipped wholesale on a cache hit, even if the
-  sub-workflow contains non-cacheable steps (its result was persisted).
-- `run.json.inputs` and `steps/*.json` store **actual** (non-redacted)
-  values — resume must re-evaluate with the real inputs/results — while
-  `trace.jsonl` redacts secrets (§8.3.4, A8). Both live under `.hwfi/`.
-- `run.json` records `project_dir` so `hwfi resume <ws> <id>` can
-  re-parse and re-check the project (a code edit re-invalidates step
-  keys, A13) without the user re-supplying the path.
-- The workspace lock is an advisory OS `flock`; a second in-process open
-  of the lock file (GHC single-writer) is caught and reported as busy.
+- Scope decision: M6 uses a **dedicated agent-loop** state machine rather
+  than refactoring the whole executor into a CEK machine. The general
+  control-flow unification is deferred to M7, which provides the second
+  consumer that justifies it.
+- Tool results are cached as **redacted** JSON: no secrets reach the
+  intra-step cache, and a resumed call feeds back the same redacted
+  content the model originally saw. (Agent tools returning secrets is an
+  accepted rare-case limitation.)
+- `AgentRoundStart`/`RoundEnd` are emitted lazily so a resumed round whose
+  model + tool calls are all cache hits emits no new events (§8.3.3.7).
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → **M6: LLM tool-use**. The `tool-use.md` design
-note has been promoted to normative spec: `builtin/llm-agent` /
-`builtin/llm-agent-object` (spec §6.1), intra-step content-addressed caching
-(§8.2.1), agent trace events (§8.3), type-check rules (§5.6.9), and
-acceptance criteria A17–A21. Start with the pure `Type -> JSON Schema`
-translation (6.a) and the reified step/continuation evaluator (6.b), which
-the later control-flow milestone (M7) reuses.
+See [TASKS.md](TASKS.md) → **M7: control flow** (`if`/`foreach`/`par`),
+which shares the M6 loop. 6.g (serialise machine state to skip the replay
+re-walk) remains an optional performance follow-up.

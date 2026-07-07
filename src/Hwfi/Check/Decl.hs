@@ -26,9 +26,10 @@ import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), introspectQName)
+import Hwfi.Check.Builtins (Callee (..), introspectQName, isAgentBuiltin, llmAgentObjectQName)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr)
+import Hwfi.Runtime.Schema (ineligibilityReasons)
 import Hwfi.Source (Pos (..), Span (..))
 import Hwfi.Type
 import Hwfi.TypedProject (ResolvedSignature (..))
@@ -41,7 +42,10 @@ data CheckCtx = CheckCtx
     -- | Resolve a bare qname value to its @ToolRef@/@WorkflowRef@ type.
     ccRefType :: QName -> Maybe Type,
     -- | The @ctx.env@ record type (§5.7).
-    ccEnvRecord :: Type
+    ccEnvRecord :: Type,
+    -- | Whether a callee (transitively) reaches @builtin/introspect@ (§6.1.5).
+    -- Used to reject an introspect-reaching callee advertised as an agent tool.
+    ccReachesIntrospect :: QName -> Bool
   }
 
 -- | Check a declaration's body. Aliases and prompts have no body and yield no
@@ -124,12 +128,16 @@ checkStep ctx path sections st s =
     -- Resolve the call target to a callee signature.
     (mCallee, targetErrs) = resolveTarget ctx env path pos target
 
-    (argErrs, resultType) = case mCallee of
-      Nothing -> ([], Nothing)
-      Just callee ->
-        ( checkArgs env callee (stepArgs s),
-          Just (TyRecord (calleeOutputs callee))
-        )
+    (argErrs, resultType)
+      -- Agent builtins take a heterogeneous @tools@ list and need bespoke
+      -- checking (§5.6.9); the generic 'checkArgs' path cannot express it.
+      | isAgentBuiltin target = checkAgentCall ctx env path pos target (stepArgs s)
+      | otherwise = case mCallee of
+          Nothing -> ([], Nothing)
+          Just callee ->
+            ( checkArgs env callee (stepArgs s),
+              Just (TyRecord (calleeOutputs callee))
+            )
 
     cacheable = classifyCacheable target (stepArgs s)
 
@@ -191,6 +199,87 @@ resolveTarget ctx env path pos target
                 ("ref target '" <> renderQName target <> "' does not have record input/output types")
             ]
           )
+
+-- Agent tool-use checking (§5.6.9, §6.1.1, §6.1.5, A18) ----------------------
+
+-- | Check a call to @builtin/llm-agent@\/@builtin/llm-agent-object@ (§6.1). The
+-- scalar arguments are checked normally, @max_rounds@ must be a static @Int@
+-- ≥ 1, and each element of the @tools@ list must be a bare tool\/workflow name
+-- that is **agent-eligible**: none of its declared inputs may be @Secret<_>@,
+-- @ToolRef@\/@WorkflowRef@, or @Bytes@ (§6.1.1), and it must not (transitively)
+-- reach @builtin/introspect@ (§6.1.5). Ineligible callees are rejected here.
+checkAgentCall :: CheckCtx -> Env -> FilePath -> Pos -> QName -> [Arg] -> ([TypeError], Maybe Type)
+checkAgentCall ctx env path pos target args =
+  (missingExtra <> scalarErrs <> toolsErrs, Just resultTy)
+  where
+    isObject = target == llmAgentObjectQName
+    resultTy = TyRecord (maybe [] calleeOutputs (ccCallee ctx target))
+
+    expected =
+      [("system", TyString), ("prompt", TyString), ("model", TyString)]
+        <> [("schema", TyJson) | isObject]
+        <> [("max_rounds", TyInt)]
+    -- @tools@ is validated separately (not a plain typed field).
+    expectedNames = "tools" : map fst expected
+
+    argNames = map argName args
+    missingExtra =
+      [ typeError path pos ArgMismatch ("missing argument '" <> n <> "'")
+      | n <- expectedNames,
+        n `notElem` argNames
+      ]
+        <> [ typeError path (spanStart (argSpan a)) ArgMismatch ("unexpected argument '" <> argName a <> "'")
+           | a <- args,
+             argName a `notElem` expectedNames
+           ]
+
+    scalarErrs =
+      concat
+        [ fromLeft [] (checkExpr env (spanStart (argSpan a)) t (argValue a))
+        | a <- args,
+          Just t <- [lookup (argName a) expected]
+        ]
+        <> maxRoundsErrs
+
+    maxRoundsErrs = case lookup "max_rounds" argMap of
+      Just (Arg _ (EInt n) sp)
+        | n < 1 ->
+            [typeError path (spanStart sp) ArgMismatch "'max_rounds' must be >= 1 (§6.1)"]
+      _ -> []
+
+    toolsErrs = case lookup "tools" argMap of
+      Nothing -> []
+      Just a -> case argValue a of
+        EList elems -> concatMap (checkToolElem ctx path (spanStart (argSpan a))) elems
+        _ ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              ArgMismatch
+              "the 'tools' argument must be a list literal of tool/workflow references (§6.1.1)"
+          ]
+
+    argMap = [(argName a, a) | a <- args]
+
+-- | Check one element of the @tools@ list: it must be a bare tool\/workflow
+-- name resolving to an agent-eligible callee.
+checkToolElem :: CheckCtx -> FilePath -> Pos -> Expr -> [TypeError]
+checkToolElem ctx path pos = \case
+  EQName q
+    | isAgentBuiltin q ->
+        [err ("'" <> renderQName q <> "' is an agent builtin and cannot be advertised as a tool")]
+    | q == introspectQName || ccReachesIntrospect ctx q ->
+        [err ("advertised tool '" <> renderQName q <> "' (transitively) calls builtin/introspect, which must not be reachable by the model (§6.1.5)")]
+    | otherwise -> case ccCallee ctx q of
+        Nothing ->
+          [err ("advertised tool '" <> renderQName q <> "' does not resolve to a workflow, tool, or builtin")]
+        Just callee ->
+          [ err ("advertised tool '" <> renderQName q <> "' is not agent-eligible: " <> reason)
+          | reason <- ineligibilityReasons (calleeInputs callee)
+          ]
+  _ -> [err "each advertised tool must be a bare tool/workflow name (§6.1.1)"]
+  where
+    err = typeError path pos ArgMismatch
 
 -- | Check a step's arguments against a callee's declared inputs (§5.6.2):
 -- every input must be supplied with a matching type, and no unexpected
@@ -342,12 +431,17 @@ checkImplicitReturn path outputs mLastResult =
 
 -- Cacheable classification (§8.1, 3.7) --------------------------------------
 
--- | A step is non-cacheable if it calls @builtin/introspect@ or any of its
--- argument expressions references a volatile @ctx@ field (@ctx.trace@ or
--- @ctx.run.started_at@). This is a purely syntactic scan.
+-- | A step is non-cacheable if it calls @builtin/introspect@, is an agent
+-- builtin (a model-driven black box, §8.1), or any of its argument expressions
+-- references a volatile @ctx@ field (@ctx.trace@ or @ctx.run.started_at@). This
+-- is a purely syntactic scan.
 classifyCacheable :: QName -> [Arg] -> Bool
 classifyCacheable target args =
-  not (target == introspectQName || any (any refPathVolatile . refPaths . argValue) args)
+  not
+    ( target == introspectQName
+        || isAgentBuiltin target
+        || any (any refPathVolatile . refPaths . argValue) args
+    )
 
 -- | Whether a reference path reads a volatile @ctx@ field (§8.1).
 refPathVolatile :: RefPath -> Bool

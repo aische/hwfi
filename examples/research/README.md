@@ -37,6 +37,9 @@ Given a target document and a corpus directory, it:
 | `builtin/llm-generate` (§6)                        | `main` step `@summary`                            |
 | `builtin/llm-chat` multi-turn (§6, A16)            | `tools/converse`                                  |
 | `builtin/llm-gen-object` with `Json` schema (§6)   | `workflows/extract`                               |
+| `builtin/llm-agent` tool-use loop (§6.1, A17)      | `workflows/investigate` advertises `tools/corpus`, `tools/lookup` |
+| `builtin/llm-agent-object` typed `submit` (§6.1.3) | `workflows/answer` with a caller-supplied schema  |
+| Agent tool eligibility + non-cacheable step (§6.1.1, §8.1) | `tools/corpus`, `tools/lookup` (read-only, `String` inputs) |
 | `builtin/introspect` (non-cacheable, §8.1)         | `workflows/audit`                                 |
 | `@self#heading` prompt references (§3.2, A9)       | `summariser`, `extractor`, `reviewer` sections    |
 | `ctx.env` string value (§5.7)                      | `RESEARCHER_NAME`                                 |
@@ -51,6 +54,40 @@ Given a target document and a corpus directory, it:
 | Explicit `return { … }`                            | every workflow/tool                               |
 | Discard binder `_` and explicit `@step-id`s        | throughout `main`                                 |
 | Step-DSL comments (`--`)                           | throughout `main`                                 |
+
+## LLM tool-use (agentic workflows, spec §6.1)
+
+Two alternate entrypoints demonstrate LLM-driven tool use, where the model — not
+a fixed script — decides which of the project's own declarations to call:
+
+- **`workflows/investigate`** (`builtin/llm-agent`): advertises the read-only
+  `tools/corpus` and `tools/lookup` tools and lets the model explore the corpus
+  and answer a free-text question.
+- **`workflows/answer`** (`builtin/llm-agent-object`): the same tools plus a
+  synthetic `submit` tool whose parameters are a caller-supplied JSON schema; the
+  loop ends only when the model calls `submit` alone, yielding a typed `Json`.
+
+Only agent-eligible declarations may be advertised: a candidate tool's inputs
+must not contain `Secret<_>`, `ToolRef`/`WorkflowRef`, or `Bytes`, and it must
+not (transitively) reach `builtin/introspect` (spec §6.1.1, §6.1.5). The agent
+step itself is a non-cacheable black box (§8.1), but each model round and tool
+call inside it is content-addressed, so a resumed run replays the model's prior
+choices and tool results without re-paying the LLM (§8.2.1).
+
+```bash
+# Free-text agent (choose the entrypoint with --entry):
+cabal run hwfi -- run examples/research \
+  --workspace /tmp/research-ws \
+  --entry workflows/investigate \
+  --input question="How does quantum error correction relate to fault tolerance?"
+
+# Typed-output agent (submit conforms to schema.json):
+cabal run hwfi -- run examples/research \
+  --workspace /tmp/research-ws \
+  --entry workflows/answer \
+  --input question="Summarise the distributed-systems doc." \
+  --input schema=@examples/research/schema.json
+```
 
 > **Note on first-class refs.** `ToolRef`/`WorkflowRef` types exist in v1
 > (§5.1) but, as currently implemented, cannot be *invoked* as a call target:

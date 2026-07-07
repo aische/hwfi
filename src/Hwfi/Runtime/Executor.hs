@@ -46,9 +46,24 @@ import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step (Arg (..), Binder (..), Statement (..), StepStmt (..))
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (isBuiltin)
+import Hwfi.Check.Builtins
+  ( Callee (..),
+    isAgentBuiltin,
+    isBuiltin,
+    llmAgentObjectQName,
+    lookupBuiltin,
+  )
 import Hwfi.Check.Decl (classifyCacheable)
 import Hwfi.Check.Graph (builtinFingerprint)
+import Hwfi.Runtime.Agent
+  ( AdvertisedTool (..),
+    AgentEnv (..),
+    AgentSpec (..),
+    SubmitSpec (..),
+    advertisedToolDef,
+    runAgent,
+    submitToolDef,
+  )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord, contextValue)
 import Hwfi.Runtime.Error
@@ -59,7 +74,7 @@ import Hwfi.Runtime.Error
     internalError,
   )
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
-import Hwfi.Runtime.Gateways (ModelStore)
+import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),
@@ -350,7 +365,13 @@ execStep rt typedSteps q sections bindings s = do
         Nothing -> do
           _ <- emit (rtTracer rt) (StepStart q sid (redactedJson (VRecord argMap)) cacheable)
           start <- getCurrentTime
-          dr <- dispatch rt stepRef bindings target argMap
+          dr <-
+            if isAgentBuiltin target
+              then -- The agent step is a non-cacheable black box, but its
+              -- intra-step model\/tool cache is namespaced under an
+              -- agent step-key computed the same way (§8.1, §8.2.1).
+                runAgentStep rt bindings stepRef target argMap (stepKeyFor rt env bindings mts q sid target argMap s)
+              else dispatch rt stepRef bindings target argMap
           case dr of
             Left e -> Left <$> failWith rt stepRef e
             Right result -> do
@@ -435,6 +456,113 @@ dispatchResolved rt stepRef bindings target argMap
       Just td
         | isExecutable (tdDeclaration td) -> runWorkflow rt target argMap
       _ -> pure (Left (internalError ("cannot dispatch to " <> renderQName target)))
+
+-- Agent step (§6.1) ----------------------------------------------------------
+
+-- | Run a @builtin/llm-agent@\/@builtin/llm-agent-object@ step (spec §6.1). The
+-- loop lives in 'Hwfi.Runtime.Agent'; the executor supplies the effectful seams
+-- — the tracer, the intra-step cache store, and a dispatcher that runs a
+-- model-chosen ref as a nested step (so its effects go through the sandboxed
+-- workspace and its events nest under the agent step, §6.1.2, §8.3.3.7).
+runAgentStep ::
+  Runtime ->
+  Map Ident RValue ->
+  StepRef ->
+  QName ->
+  Map Ident RValue ->
+  -- | The enclosing agent step-key namespacing every sub-key (§8.2.1).
+  Text ->
+  IO (Either RuntimeError RValue)
+runAgentStep rt bindings stepRef target argMap agentKey =
+  case buildAgentSpec rt target argMap of
+    Left e -> pure (Left e)
+    Right spec -> runAgent (mkAgentEnv rt bindings stepRef agentKey) spec
+
+mkAgentEnv :: Runtime -> Map Ident RValue -> StepRef -> Text -> AgentEnv
+mkAgentEnv rt bindings stepRef agentKey =
+  AgentEnv
+    { aeTracer = rtTracer rt,
+      aeStore = rtStore rt,
+      aeResume = rtResume rt,
+      aeQName = srQName stepRef,
+      aeStepId = srStepId stepRef,
+      aeStepKey = agentKey,
+      -- A model-chosen call runs through the normal resolved dispatch, tagged
+      -- with the tool's qname and the loop-supplied nested step id.
+      aeDispatch = \tq tsid targs -> dispatchResolved rt (StepRef tq tsid) bindings tq targs
+    }
+
+-- | Assemble the 'AgentSpec' from the resolved step arguments (spec §6.1). The
+-- checker (§5.6.9) has already validated the shape, so a mismatch here is an
+-- internal error.
+buildAgentSpec :: Runtime -> QName -> Map Ident RValue -> Either RuntimeError AgentSpec
+buildAgentSpec rt target argMap = do
+  system <- reqText "system"
+  prompt <- reqText "prompt"
+  modelName <- reqText "model"
+  model <- lookupModel modelName (rtModels rt)
+  maxRounds <- reqInt "max_rounds"
+  tools <- traverse (buildTool rt) =<< reqList "tools"
+  submit <-
+    if target == llmAgentObjectQName
+      then Just . mkSubmit . valueToJson <$> reqValue "schema"
+      else Right Nothing
+  Right
+    AgentSpec
+      { asSystem = system,
+        asPrompt = prompt,
+        asModelName = modelName,
+        asModel = model,
+        asModelFingerprint = modelCatalogFingerprint modelName (rtModels rt),
+        asTools = tools,
+        asMaxRounds = maxRounds,
+        asSubmit = submit
+      }
+  where
+    reqValue name = case Map.lookup name argMap of
+      Just v -> Right v
+      Nothing -> Left (internalError ("agent argument '" <> name <> "' is missing at runtime"))
+    reqText name =
+      reqValue name >>= \case
+        VString t -> Right t
+        VFileRef t -> Right t
+        _ -> Left (internalError ("agent argument '" <> name <> "' is not text"))
+    reqInt name =
+      reqValue name >>= \case
+        VInt n -> Right (fromInteger n)
+        _ -> Left (internalError ("agent argument '" <> name <> "' is not an integer"))
+    reqList name =
+      reqValue name >>= \case
+        VList xs -> Right xs
+        _ -> Left (internalError ("agent argument '" <> name <> "' is not a list"))
+    mkSubmit schema = SubmitSpec {ssSchema = schema, ssToolDef = submitToolDef schema}
+
+-- | Build one 'AdvertisedTool' from a first-class ref value: its declared input
+-- types drive the JSON-Schema tool parameters (§6.1.1) and its fingerprint
+-- namespaces that tool's intra-step cache (§8.2.1).
+buildTool :: Runtime -> RValue -> Either RuntimeError AdvertisedTool
+buildTool rt = \case
+  VRef _ q -> do
+    ins <- calleeInputTypes rt q
+    Right
+      AdvertisedTool
+        { atQName = q,
+          atToolDef = advertisedToolDef q ins,
+          atInputs = ins,
+          atFingerprint = maybe "" fpText (fingerprintOfQName (rtProject rt) q)
+        }
+  _ -> Left (internalError "agent 'tools' element is not a ref value")
+
+-- | The declared input types of an advertised callee (a builtin or a project
+-- declaration).
+calleeInputTypes :: Runtime -> QName -> Either RuntimeError [(Ident, Type)]
+calleeInputTypes rt q
+  | isBuiltin q = case lookupBuiltin q of
+      Just c -> Right (calleeInputs c)
+      Nothing -> Left (internalError ("no such builtin: " <> renderQName q))
+  | otherwise = case lookupTyped q (rtProject rt) of
+      Just td -> Right (rsigInputs (tdSignature td))
+      Nothing -> Left (internalError ("advertised tool not found: " <> renderQName q))
 
 builtinEnv :: Runtime -> StepRef -> Map Ident RValue -> BuiltinEnv
 builtinEnv rt stepRef bindings =

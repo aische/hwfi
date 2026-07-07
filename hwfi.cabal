@@ -54,6 +54,7 @@ library
         Hwfi.Parse.Type
         Hwfi.Parse.TypeAlias
         Hwfi.Project.Manifest
+        Hwfi.Runtime.Agent
         Hwfi.Runtime.Builtins
         Hwfi.Runtime.Context
         Hwfi.Runtime.Error
@@ -64,6 +65,7 @@ library
         Hwfi.Runtime.ModelCatalog
         Hwfi.Runtime.Provider
         Hwfi.Runtime.RunStore
+        Hwfi.Runtime.Schema
         Hwfi.Runtime.Secret
         Hwfi.Runtime.StepKey
         Hwfi.Runtime.Trace
@@ -120,12 +122,14 @@ test-suite hwfi-test
         Hwfi.Parse.StepSpec
         Hwfi.Parse.TypeSpec
         Hwfi.Project.ManifestSpec
+        Hwfi.Runtime.AgentSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.ExecutorSpec
         Hwfi.Runtime.GatewaysSpec
         Hwfi.Runtime.KeyStoreSpec
         Hwfi.Runtime.ProviderSpec
         Hwfi.Runtime.RunStoreSpec
+        Hwfi.Runtime.SchemaSpec
         Hwfi.Runtime.StepKeySpec
         Hwfi.Runtime.TraceSpec
         Hwfi.Runtime.ValueSpec
@@ -141,6 +145,7 @@ test-suite hwfi-test
         filepath   >=1.4 && <1.6,
         hspec      >=2.10 && <2.12,
         hwfi,
+        llm-simple,
         megaparsec >=9.0 && <10,
         temporary  >=1.3 && <1.4,
         text,

@@ -95,6 +95,25 @@ spec = do
       res <- checkFixture "subworkflow-bad"
       errKinds res `shouldContain` [TypeMismatch]
 
+  describe "checkProject — agent builtins (§6.1, A18)" $ do
+    it "accepts an agent advertising eligible tools" $ do
+      res <- checkFixture "agent-ok"
+      res `shouldSatisfy` isRight
+
+    it "classifies an agent step as non-cacheable (§8.1)" $ do
+      res <- checkFixture "agent-ok"
+      case res of
+        Right tp -> map tsCacheable (declSteps "workflows/main" tp) `shouldBe` [False]
+        Left errs -> expectationFailure (show errs)
+
+    it "rejects advertising a tool with a Secret<_> input (§6.1.1)" $ do
+      res <- checkFixture "agent-secret-tool"
+      errKinds res `shouldContain` [ArgMismatch]
+
+    it "rejects advertising an introspect-reaching workflow (§6.1.5)" $ do
+      res <- checkFixture "agent-introspect-tool"
+      errKinds res `shouldContain` [ArgMismatch]
+
 -- Helpers --------------------------------------------------------------------
 
 declSteps :: String -> TypedProject -> [TypedStep]

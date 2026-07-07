@@ -11,6 +11,9 @@ module Hwfi.Check.Builtins
     lookupBuiltin,
     isBuiltin,
     introspectQName,
+    llmAgentQName,
+    llmAgentObjectQName,
+    isAgentBuiltin,
     engineVersion,
     builtinIdentity,
   )
@@ -35,6 +38,21 @@ data Callee = Callee
 -- be non-cacheable (§8.1).
 introspectQName :: QName
 introspectQName = qnameFromText "builtin/introspect"
+
+-- | The @builtin/llm-agent@ qname (§6.1): the free-text agentic loop.
+llmAgentQName :: QName
+llmAgentQName = qnameFromText "builtin/llm-agent"
+
+-- | The @builtin/llm-agent-object@ qname (§6.1.3): the typed-output variant.
+llmAgentObjectQName :: QName
+llmAgentObjectQName = qnameFromText "builtin/llm-agent-object"
+
+-- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
+-- bespoke argument checking (the @tools@ argument is a heterogeneous list of
+-- refs, §5.6.9) and are non-cacheable black boxes (§8.1), so they are handled
+-- specially rather than through the generic callee path.
+isAgentBuiltin :: QName -> Bool
+isAgentBuiltin q = q == llmAgentQName || q == llmAgentObjectQName
 
 -- | The engine version string that seeds builtin fingerprints (§8.1). Bumping
 -- this invalidates every cached step that (transitively) calls a builtin.
@@ -63,7 +81,30 @@ builtinCallees =
         "builtin/llm-gen-object"
         [("system", TyString), ("prompt", TyString), ("schema", TyJson), ("model", TyString)]
         [("value", TyJson)],
-      builtin "builtin/introspect" [] [("data", TyJson)]
+      builtin "builtin/introspect" [] [("data", TyJson)],
+      -- The @tools@ input is a heterogeneous list of ToolRef/WorkflowRef values
+      -- with no v1 union type; it is represented here as @List<Json>@ purely so
+      -- the builtin has a fixed identity\/fingerprint (§8.1). Argument checking
+      -- is bespoke (§5.6.9), never the generic 'checkArgs' path.
+      builtin
+        "builtin/llm-agent"
+        [ ("system", TyString),
+          ("prompt", TyString),
+          ("model", TyString),
+          ("tools", TyList TyJson),
+          ("max_rounds", TyInt)
+        ]
+        [("text", TyString), ("rounds", TyInt)],
+      builtin
+        "builtin/llm-agent-object"
+        [ ("system", TyString),
+          ("prompt", TyString),
+          ("model", TyString),
+          ("tools", TyList TyJson),
+          ("schema", TyJson),
+          ("max_rounds", TyInt)
+        ]
+        [("value", TyJson), ("rounds", TyInt)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

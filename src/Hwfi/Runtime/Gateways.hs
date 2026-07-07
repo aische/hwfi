@@ -15,6 +15,7 @@ module Hwfi.Runtime.Gateways
     buildModelStore,
     lookupModel,
     availableModelNames,
+    modelCatalogFingerprint,
   )
 where
 
@@ -112,3 +113,28 @@ lookupModel name store = case Map.lookup name store of
 -- | The model-config names available in the store, sorted.
 availableModelNames :: ModelStore -> [Text]
 availableModelNames = Map.keys
+
+-- | A stable fingerprint of a model-catalog entry, used to sub-key an agent
+-- round's model call (§8.2.1). Derived from the catalog scalar fields (not the
+-- gateway closure) so editing an entry — provider model id, token cap,
+-- temperature, timeouts, retry policy — changes it and invalidates cached
+-- model calls on resume. Unknown names fall back to the bare name (the model
+-- lookup itself fails later with a listing, A11).
+modelCatalogFingerprint :: Text -> ModelStore -> Text
+modelCatalogFingerprint name store = case Map.lookup name store of
+  Nothing -> name
+  Just mc ->
+    T.intercalate
+      "|"
+      [ name,
+        mc.mcModel,
+        tshow mc.mcMaxTokens,
+        tshow mc.mcTemperature,
+        tshow mc.mcRequestTimeout,
+        tshow mc.mcThrottleDelay,
+        tshow mc.mcRetryCount,
+        tshow mc.mcJitterBackoff
+      ]
+  where
+    tshow :: (Show a) => a -> Text
+    tshow = T.pack . show
