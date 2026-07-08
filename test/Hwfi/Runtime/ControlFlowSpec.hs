@@ -1,5 +1,7 @@
 module Hwfi.Runtime.ControlFlowSpec (spec) where
 
+import Control.Exception (ErrorCall (ErrorCall), throwIO)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -7,14 +9,18 @@ import Data.Text.IO qualified as TIO
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Check.Error (TypeError (..), TypeErrorKind (..))
+import Hwfi.Compat (ModelConfig (..))
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), reKind)
 import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
+import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.RunStore (RunPhase (..), openRunStore, updateRunPhase)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..))
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
 import Hwfi.TypedProject (TypedProject)
+import LLM.Core.Types (ChatResponse (..), ContentBlock (..), LLMError (..), LLMGateway (..))
+import LLM.Core.Usage (PricingInfo (..), Usage (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -101,15 +107,26 @@ checkOnlyWithSubs mainMd subs =
 
 runThenResumeWithSubs :: Text -> Map.Map Text Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
 runThenResumeWithSubs mainMd subs inputs k =
+  runThenResumeWithSubsModels mainMd subs inputs Map.empty Map.empty k
+
+runThenResumeWithSubsModels ::
+  Text ->
+  Map.Map Text Text ->
+  Map.Map Ident RValue ->
+  ModelStore ->
+  ModelStore ->
+  (RunResult -> RunResult -> FilePath -> IO a) ->
+  IO a
+runThenResumeWithSubsModels mainMd subs inputs models1 models2 k =
   withSystemTempDirectory "hwfi-cf-proj" $ \proj ->
     withSystemTempDirectory "hwfi-cf-ws" $ \ws -> do
       writeProjectWithSubs proj mainMd subs
       tp <- loadChecked proj
       workspace <- newWorkspace ws
-      r1 <- expectRun =<< performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
+      r1 <- expectRun =<< performRun tp workspace models1 Map.empty proj "run-1" mainQ inputs
       Right store <- openRunStore (workspaceRoot workspace) "run-1"
       updateRunPhase store PhaseAborted
-      r2 <- expectRun =<< performResume tp workspace Map.empty Map.empty "run-1"
+      r2 <- expectRun =<< performResume tp workspace models2 Map.empty "run-1"
       k r1 r2 ws
   where
     expectRun = either (\e -> error ("run failed: " <> T.unpack e)) pure
@@ -363,6 +380,68 @@ whileSubs =
 whileStopSubs :: Map.Map Text Text
 whileStopSubs = Map.fromList [("pred.md", predStopMd), ("body.md", bodyMd)]
 
+-- | Predicate sub-workflow whose decision comes from @builtin/llm-agent@ (A32).
+predAgentMd :: Text
+predAgentMd =
+  T.unlines
+    [ "---",
+      "name: workflows/pred",
+      "inputs: {}",
+      "outputs:",
+      "  continue: Bool",
+      "  reason: String",
+      "imports:",
+      "  - builtin/llm-agent",
+      "---",
+      "",
+      "## sys",
+      "",
+      "Decide whether the loop should continue. Keep your answer brief.",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "r <- builtin/llm-agent(",
+      "  system = @self#sys,",
+      "  prompt = \"Return a short reason for continuing.\",",
+      "  model = \"fast\",",
+      "  tools = [],",
+      "  max_rounds = 2",
+      ") @decide",
+      "return { continue = true, reason = ${r.text} }",
+      "```"
+    ]
+
+whileAgentSubs :: Map.Map Text Text
+whileAgentSubs = Map.fromList [("pred.md", predAgentMd), ("body.md", bodyMd)]
+
+whileAgentMainMd :: Text
+whileAgentMainMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs: {}",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - workflows/pred",
+      "  - workflows/body",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rs <- while(",
+      "  predicate = workflows/pred,",
+      "  predicate_args = {},",
+      "  body = workflows/body,",
+      "  body_args = {},",
+      "  max_iterations = 1",
+      ") @loop",
+      "return { got = ${rs[0].ok} }",
+      "```"
+    ]
+
 foreverSubs :: Map.Map Text Text
 foreverSubs = Map.fromList [("pred.md", foreverPredMd), ("body.md", bodyMd)]
 
@@ -469,8 +548,54 @@ resumedStepStarts sid evs = stepStarts sid afterResume
     isResumed (TraceEvent _ _ (Resumed {})) = True
     isResumed _ = False
 
+llmCalls :: [TraceEvent] -> Int
+llmCalls evs = length [() | TraceEvent _ _ (LlmCall {}) <- evs]
+
 lineCount :: FilePath -> IO Int
 lineCount p = length . filter (not . T.null) . T.lines <$> TIO.readFile p
+
+-- Fake LLM gateways (A32) ----------------------------------------------------
+
+llmUsage :: Usage
+llmUsage = Usage 1 1 0
+
+llmStore :: LLMGateway -> Double -> ModelStore
+llmStore gw temp = Map.singleton "fast" (llmConfig gw temp)
+
+llmConfig :: LLMGateway -> Double -> ModelConfig
+llmConfig gw temp =
+  ModelConfig
+    { mcGateway = gw,
+      mcModel = "fake",
+      mcPricing = PricingInfo 0 0,
+      mcMaxTokens = 256,
+      mcTemperature = Just temp,
+      mcThinking = Nothing,
+      mcRequestTimeout = Just 30000,
+      mcThrottleDelay = Just 0,
+      mcRetryCount = 3,
+      mcJitterBackoff = 1000
+    }
+
+countingGateway :: IORef Int -> LLMGateway
+countingGateway calls =
+  LLMGateway
+    { gwName = "fake",
+      gwGenerateText = \_ _ -> do
+        modifyIORef' calls (+ 1)
+        pure (Right (ChatResponse "go" [TextBlock "go"] (Just llmUsage) Nothing)),
+      gwStreamText = \_ _ _ -> pure (Left EmptyResponse),
+      gwGenerateObject = \_ _ _ -> pure (Left EmptyResponse)
+    }
+
+explodingGateway :: LLMGateway
+explodingGateway =
+  LLMGateway
+    { gwName = "fake",
+      gwGenerateText = \_ _ -> throwIO (ErrorCall "llm invoked during a pinned while-pred resume"),
+      gwStreamText = \_ _ _ -> throwIO (ErrorCall "llm invoked during a pinned while-pred resume"),
+      gwGenerateObject = \_ _ _ -> throwIO (ErrorCall "llm invoked during a pinned while-pred resume")
+    }
 
 spec :: Spec
 spec = do
@@ -692,6 +817,24 @@ spec = do
       runThenResumeWithSubs whileMainMd whileSubs Map.empty $ \r1 r2 ws -> do
         lineCount (ws </> "log.txt") `shouldReturn` 1
         resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
+        length [() | TraceEvent _ _ (WhilePred {}) <- drop (length (rrEvents r1)) (rrEvents r2)] `shouldBe` 0
+
+    it "replays pinned agent predicate decisions on resume without re-invoking llm-agent (A32)" $ do
+      calls <- newIORef (0 :: Int)
+      let store1 = llmStore (countingGateway calls) 0.1
+          store2 = llmStore explodingGateway 0.1
+      runThenResumeWithSubsModels whileAgentMainMd whileAgentSubs Map.empty store1 store2 $ \r1 r2 ws -> do
+        readIORef calls `shouldReturn` 2
+        case rrOutcome r1 of
+          Left err -> reKind err `shouldBe` KUser
+          Right _ -> expectationFailure "expected max_iterations user error"
+        case rrOutcome r2 of
+          Left err -> reKind err `shouldBe` KUser
+          Right _ -> expectationFailure "expected max_iterations user error on resume"
+        lineCount (ws </> "log.txt") `shouldReturn` 1
+        resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
+        llmCalls (rrEvents r1) `shouldBe` 2
+        llmCalls (drop (length (rrEvents r1)) (rrEvents r2)) `shouldBe` 0
         length [() | TraceEvent _ _ (WhilePred {}) <- drop (length (rrEvents r1)) (rrEvents r2)] `shouldBe` 0
 
     it "rejects carry outside while predicate_args/body_args at check time (A33)" $ do

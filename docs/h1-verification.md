@@ -70,6 +70,7 @@ cabal test hwfi --test-options='--match "A13|A15"'
 | `ctx.trace` stable across cache hits on resume | `ExecutorSpec` → `shows cached upstream events (A15)` | Resume preloads `trace.jsonl`; spec §8.3.5 |
 | Durable workspace (mutations not re-applied) | `ExecutorSpec` → `Durable-workspace resume (A25)` | |
 | `while` decision pinning on resume | `ControlFlowSpec` → A31 | |
+| `while` agent predicate pinned on resume | `ControlFlowSpec` → A32 | §4.3.5 + §4.3.8 |
 
 ## Still open (from code review; not H1)
 

@@ -18,15 +18,14 @@ M1–M9 complete. Near-term work is optional / perf:
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
 
-- [ ] A32 integration test: `while` predicate containing `builtin/llm-agent`
-      replays pinned decision on resume (mechanism implemented; covered by A31
-      pinning tests today)
-
 ## Done
 
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] A32 integration test (2026-07-09): `while` predicate with
+      `builtin/llm-agent` replays pinned decision on resume without
+      re-invoking the model (`ControlFlowSpec`; 245 tests).
 - [x] 8.g (Optional) serialise agent machine state to skip the replay re-walk
       on resume (§8.2.1, 2026-07-09): checkpoint `{messages, next_round}`
       under agent step-key; reload on resume; cleared on success; 244 tests.

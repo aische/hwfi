@@ -4,11 +4,14 @@ Last updated: 2026-07-09
 
 ## Current focus
 
-**8.g complete.** Spec §6.4 (`eval-workflow`) added. Optional items next:
-9.1–9.6.
+**M9 acceptance complete (A32).** Optional items next: 9.1–9.6.
 
 ## Done recently
 
+- **A32 while + llm-agent resume (2026-07-09):** Integration test in
+  `ControlFlowSpec` — predicate sub-workflow uses `builtin/llm-agent`;
+  resume replays pinned decisions without new `LlmCall`/`while-pred` events.
+  245 tests green.
 - **§6.4 eval-workflow spec (2026-07-09):** Dynamic workflow evaluation
   specified — `{ ok, outputs, errors }` result; parse/check failures
   non-fatal; recoverable in agent loop (A34/A35).
