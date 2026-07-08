@@ -10,8 +10,8 @@ roughly ordered but can be reshuffled.
 Normative requirements in [spec.md](spec.md) §4.1, §6.2, §7.1/§7.3/§7.6,
 §8.1/§8.2/§8.3.2; gap table in spec §14. Source: [code-issues.md](code-issues.md).
 
-- [ ] H1.1 Threaded RTS: `-threaded -rtsopts "-with-rtsopts=-N"` on executable
-      and test-suite stanzas (§7.6)
+- [x] H1.1 Threaded RTS: `-threaded -rtsopts "-with-rtsopts=-N"` on executable
+      and test-suite stanzas (§7.6) (2026-07-08)
 - [ ] H1.2 Symlink sandbox containment: `canonicalizePath` + root-prefix check
       on all direct file ops; regression test (§7.1, §6.2)
 - [ ] H1.3 Model-catalog fingerprint in one-shot `builtin/llm-*` step-keys

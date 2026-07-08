@@ -1603,7 +1603,7 @@ what remains to implement.
 
 | ID | Spec | Gap | Fix |
 |----|------|-----|-----|
-| H1.1 | §7.6 | `hwfi` executable and test suite are built without `-threaded`; `par`, subprocess timeouts, and LLM I/O can block the whole process on safe FFI (e.g. DNS). | Add `ghc-options: -threaded -rtsopts "-with-rtsopts=-N"` to both stanzas in `hwfi.cabal`. |
+| H1.1 | §7.6 | ~~`hwfi` executable and test suite are built without `-threaded`~~ **done** (2026-07-08). | — |
 | H1.2 | §7.1, §6.2 | Workspace guard is lexical only; `read-file` / mutation builtins follow symlinks and can escape the root. Module comment overstates the guarantee. | After lexical resolve, `canonicalizePath` and verify prefix ⊆ workspace root; regression test with `ln -s`. |
 | H1.3 | §8.1, §7.3 | One-shot `builtin/llm-*` step-keys omit the model-catalog fingerprint; editing `model-catalog.json` does not invalidate cached LLM results on resume (agent path is correct). | Fold `modelCatalogFingerprint` into `stepKeyFor` for LLM builtins. |
 | H1.4 | §4.1 | `runWorkflow` resets scope to `""` at sub-workflow entry; two `par` iterations with identical args share internal step caches. | Thread caller `scope` into `runWorkflow` / `dispatchResolved`. |
