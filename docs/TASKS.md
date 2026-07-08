@@ -14,8 +14,8 @@ Normative requirements in [spec.md](spec.md) §4.1, §6.2, §7.1/§7.3/§7.6,
       and test-suite stanzas (§7.6) (2026-07-08)
 - [x] H1.2 Symlink sandbox containment: `canonicalizePath` + root-prefix check
       on all direct file ops; regression test (§7.1, §6.2) (2026-07-08)
-- [ ] H1.3 Model-catalog fingerprint in one-shot `builtin/llm-*` step-keys
-      (§8.1, §7.3)
+- [x] H1.3 Model-catalog fingerprint in one-shot `builtin/llm-*` step-keys
+      (§8.1, §7.3) (2026-07-08)
 - [ ] H1.4 Thread control-flow scope into `runWorkflow` at sub-workflow calls
       (§4.1)
 - [ ] H1.5 Crash handler: `run-end` (`crashed`) + `PhaseCrashed` on unexpected

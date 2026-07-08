@@ -15,6 +15,7 @@ module Hwfi.Check.Builtins
     llmAgentQName,
     llmAgentObjectQName,
     isAgentBuiltin,
+    isOneShotLlmBuiltin,
     engineVersion,
     builtinIdentity,
   )
@@ -59,6 +60,22 @@ llmAgentObjectQName = qnameFromText "builtin/llm-agent-object"
 -- specially rather than through the generic callee path.
 isAgentBuiltin :: QName -> Bool
 isAgentBuiltin q = q == llmAgentQName || q == llmAgentObjectQName
+
+-- | Whether a qname is a cacheable one-shot LLM builtin (§8.1). These need the
+-- resolved model-catalog entry folded into the step-key, not just the model
+-- name in @resolved-args@.
+isOneShotLlmBuiltin :: QName -> Bool
+isOneShotLlmBuiltin q =
+  q == llmGenerateQName || q == llmChatQName || q == llmGenObjectQName
+
+llmGenerateQName :: QName
+llmGenerateQName = qnameFromText "builtin/llm-generate"
+
+llmChatQName :: QName
+llmChatQName = qnameFromText "builtin/llm-chat"
+
+llmGenObjectQName :: QName
+llmGenObjectQName = qnameFromText "builtin/llm-gen-object"
 
 -- | The engine version string that seeds builtin fingerprints (§8.1). Bumping
 -- this invalidates every cached step that (transitively) calls a builtin.

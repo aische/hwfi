@@ -4,21 +4,21 @@ Last updated: 2026-07-08
 
 ## Current focus
 
-**H1 runtime hardening** in progress. **H1.1–H1.2 done:** threaded RTS (§7.6);
-symlink sandbox containment via `canonicalizePath` + root-prefix check on all
-direct file ops (§7.1, §6.2). Remaining: model-catalog step keys (H1.3),
-sub-workflow scope (H1.4), crash handler (H1.5). See spec §14 and
-[TASKS.md](TASKS.md) → H1.
+**H1 runtime hardening** in progress. **H1.1–H1.3 done:** threaded RTS (§7.6); symlink
+sandbox containment (§7.1, §6.2); model-catalog fingerprint in one-shot
+`builtin/llm-*` step-keys (§8.1, §7.3). Remaining: sub-workflow scope (H1.4),
+crash handler (H1.5). See spec §14 and [TASKS.md](TASKS.md) → H1.
 
 ## Done recently
 
-- **H1.2:** `Hwfi.Runtime.Workspace` — `resolveContainedPath` (lexical +
-  canonical containment) on read/write/list/mutation/navigation roots; module
-  comment aligned with spec §7.1; symlink escape regression tests; 213 tests
-  green.
-- **H1.1:** `hwfi.cabal` — `-threaded -rtsopts "-with-rtsopts=-N"` on
-  `executable hwfi` and `test-suite hwfi-test`.
-- M8 control flow complete; spec aligned for H1 backlog (§14).
+- **H1.3:** `stepKeyFor` folds `model-catalog-fp` into `ctx-projection` for
+  `builtin/llm-generate`/`llm-chat`/`llm-gen-object` via
+  `Gateways.oneShotLlmCtxProjection`; resume test + fingerprint unit tests; 216
+  tests green.
+- **H1.2:** `Hwfi.Runtime.Workspace` — `resolveContainedPath` on all direct file
+  ops; symlink escape regression tests.
+- **H1.1:** `hwfi.cabal` — `-threaded -rtsopts "-with-rtsopts=-N"` on executable
+  and test-suite.
 
 ## Blockers
 
@@ -26,4 +26,4 @@ sub-workflow scope (H1.4), crash handler (H1.5). See spec §14 and
 
 ## Next up
 
-[TASKS.md](TASKS.md) → H1.3–H1.5, then optional items.
+[TASKS.md](TASKS.md) → H1.4–H1.5, then optional items.

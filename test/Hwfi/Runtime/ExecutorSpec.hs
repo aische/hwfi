@@ -1,11 +1,14 @@
 module Hwfi.Runtime.ExecutorSpec (spec) where
 
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
 import Hwfi.Check (checkProject)
+import Hwfi.Compat (ModelConfig (..))
+import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
 import Hwfi.Runtime.RunStore (RunPhase (..), RunStore, openRunStore, rsTracePath, updateRunPhase)
@@ -13,6 +16,8 @@ import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), RunStatus (..), TraceEve
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
 import Hwfi.TypedProject (TypedProject)
+import LLM.Core.Types (ChatResponse (..), ContentBlock (..), LLMError (..), LLMGateway (..))
+import LLM.Core.Usage (PricingInfo (..), Usage (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -154,6 +159,66 @@ writeExecProject dir = do
           "return { code = ${r.exit_code} }",
           "```"
         ]
+
+writeLlmResumeProject :: FilePath -> IO ()
+writeLlmResumeProject dir = do
+  createDirectoryIfMissing True (dir </> "workflows")
+  TIO.writeFile (dir </> "project.json") projectJson
+  TIO.writeFile (dir </> "model-catalog.json") "[]\n"
+  TIO.writeFile (dir </> "workflows/main.md") mainMd
+  where
+    projectJson =
+      "{\n  \"name\": \"llm-resume\",\n  \"version\": \"0.1.0\",\n  \"entrypoint\": \"workflows/main\",\n  \"env\": []\n}\n"
+    mainMd =
+      T.unlines
+        [ "---",
+          "name: workflows/main",
+          "inputs: {}",
+          "outputs:",
+          "  answer: String",
+          "imports:",
+          "  - builtin/llm-generate",
+          "---",
+          "",
+          "## flow",
+          "",
+          "```step",
+          "g <- builtin/llm-generate(system = \"s\", prompt = \"p\", model = \"fast\") @gen",
+          "return { answer = ${g.text} }",
+          "```"
+        ]
+
+llmStore :: LLMGateway -> Double -> ModelStore
+llmStore gw temp = Map.singleton "fast" (llmConfig gw temp)
+
+llmConfig :: LLMGateway -> Double -> ModelConfig
+llmConfig gw temp =
+  ModelConfig
+    { mcGateway = gw,
+      mcModel = "fake",
+      mcPricing = PricingInfo 0 0,
+      mcMaxTokens = 256,
+      mcTemperature = Just temp,
+      mcThinking = Nothing,
+      mcRequestTimeout = Just 30000,
+      mcThrottleDelay = Just 0,
+      mcRetryCount = 3,
+      mcJitterBackoff = 1000
+    }
+
+countingGateway :: IORef Int -> LLMGateway
+countingGateway calls =
+  LLMGateway
+    { gwName = "fake",
+      gwGenerateText = \_ _ -> do
+        modifyIORef' calls (+ 1)
+        pure (Right (ChatResponse "ok" [TextBlock "ok"] (Just usage) Nothing)),
+      gwStreamText = \_ _ _ -> pure (Left EmptyResponse),
+      gwGenerateObject = \_ _ _ -> pure (Left EmptyResponse)
+    }
+
+usage :: Usage
+usage = Usage 1 1 0
 
 -- | Run the durable-workspace fixture to completion, abort it, then resume.
 runExecThenResume :: FilePath -> FilePath -> IO (RunResult, RunResult, FilePath)
@@ -314,6 +379,24 @@ spec = do
         -- key is unchanged and it stays served from cache.
         stepStarts "cached" (rrEvents r2) `shouldBe` 1
         readFileT (ws </> "sub-marker.txt") `shouldReturn` "EDIT SEED"
+
+  describe "Model-catalog invalidation (§8.1, H1.3)" $
+    it "recomputes a cached one-shot LLM step when the catalog fingerprint changes" $
+      withResumeDirs $ \proj ws -> do
+        calls <- newIORef (0 :: Int)
+        let gw = countingGateway calls
+            store1 = llmStore gw 0.1
+            store2 = llmStore gw 0.9
+        writeLlmResumeProject proj
+        workspace <- newWorkspace ws
+        tp <- loadChecked proj
+        _ <- expectRun =<< performRun tp workspace store1 Map.empty proj "run-1" mainQ Map.empty
+        readIORef calls `shouldReturn` 1
+        Right store <- openRunStore (workspaceRoot workspace) "run-1"
+        updateRunPhase store PhaseAborted
+        r2 <- expectRun =<< performResume tp workspace store2 Map.empty "run-1"
+        readIORef calls `shouldReturn` 2
+        stepStarts "gen" (rrEvents r2) `shouldBe` 2
   where
     base = "${inputs.note}"
     edited = "\"EDIT ${inputs.note}\""

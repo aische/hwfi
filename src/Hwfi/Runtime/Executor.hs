@@ -58,6 +58,7 @@ import Hwfi.Check.Builtins
   ( Callee (..),
     isAgentBuiltin,
     isBuiltin,
+    isOneShotLlmBuiltin,
     llmAgentObjectQName,
     lookupBuiltin,
   )
@@ -83,7 +84,7 @@ import Hwfi.Runtime.Error
   )
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
 import Hwfi.Project.Manifest (ProjectManifest (..))
-import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint)
+import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint, oneShotLlmCtxProjection)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),
@@ -584,11 +585,15 @@ stepKeyFor rt scope env bindings mts q sid target argMap s =
   where
     tp = rtProject rt
     refFp qn = fpText <$> fingerprintOfQName tp qn
-    ctxProj =
+    ctxProj = baseCtxProj <> modelCatalogProj
+    baseCtxProj =
       [ (renderRefPath rp, canonicalJson (valueToJson v))
       | rp <- stableCtxPaths s,
         Right v <- [resolveRefPath env rp]
       ]
+    modelCatalogProj
+      | isOneShotLlmBuiltin target = oneShotLlmCtxProjection argMap (rtModels rt)
+      | otherwise = []
     calleeFp = case tsCalleeFingerprint =<< mts of
       Just fp -> fpText fp
       Nothing -> case (isBareQName target, Map.lookup (bareIdent target) bindings) of

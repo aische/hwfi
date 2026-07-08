@@ -18,7 +18,12 @@
 --     never reach here — §8.1);
 --   * @callee-fingerprint@ is the Merkle fingerprint of the call target, so
 --     editing the callee (or anything it transitively calls) changes the key
---     and forces recomputation (A13).
+--     and forces recomputation (A13);
+--   * for one-shot LLM builtins (@builtin/llm-generate@, @builtin/llm-chat@,
+--     @builtin/llm-gen-object@), @ctx-projection@ also includes a
+--     @model-catalog-fp@ line derived from the resolved catalog entry named by
+--     the @model@ argument (§8.1), so editing @model-catalog.json@ busts the
+--     cache on resume.
 --
 -- Secrets are hashed by their /actual/ value (not the trace placeholder): two
 -- runs with different secret inputs must get different keys, and the key is a

@@ -16,11 +16,14 @@ module Hwfi.Runtime.Gateways
     lookupModel,
     availableModelNames,
     modelCatalogFingerprint,
+    oneShotLlmCtxProjection,
   )
 where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Hwfi.Ast.Name (Ident)
+import Hwfi.Runtime.Value (RValue (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Compat
@@ -138,3 +141,20 @@ modelCatalogFingerprint name store = case Map.lookup name store of
   where
     tshow :: (Show a) => a -> Text
     tshow = T.pack . show
+
+-- | Extra stable @ctx-projection@ lines for one-shot LLM builtin step-keys
+-- (§8.1). The model name in @resolved-args@ is not enough — repointing a
+-- catalog entry or changing its scalar fields must bust the cache.
+oneShotLlmCtxProjection :: Map Ident RValue -> ModelStore -> [(Text, Text)]
+oneShotLlmCtxProjection args store =
+  case resolvedTextArg "model" args of
+    Just name -> [("model-catalog-fp", modelCatalogFingerprint name store)]
+    Nothing -> []
+
+-- | Extract a resolved string argument, unwrapping 'VSecret' the same way
+-- step-key hashing does for @resolved-args@.
+resolvedTextArg :: Ident -> Map Ident RValue -> Maybe Text
+resolvedTextArg name args = case Map.lookup name args of
+  Just (VString t) -> Just t
+  Just (VSecret _ inner) -> resolvedTextArg name (Map.singleton name inner)
+  _ -> Nothing
