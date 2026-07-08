@@ -16,8 +16,8 @@ Normative requirements in [spec.md](spec.md) §4.1, §6.2, §7.1/§7.3/§7.6,
       on all direct file ops; regression test (§7.1, §6.2) (2026-07-08)
 - [x] H1.3 Model-catalog fingerprint in one-shot `builtin/llm-*` step-keys
       (§8.1, §7.3) (2026-07-08)
-- [ ] H1.4 Thread control-flow scope into `runWorkflow` at sub-workflow calls
-      (§4.1)
+- [x] H1.4 Thread control-flow scope into `runWorkflow` at sub-workflow calls
+      (§4.1) (2026-07-08)
 - [ ] H1.5 Crash handler: `run-end` (`crashed`) + `PhaseCrashed` on unexpected
       exceptions; test `run.json` phase (§8.2, §8.3.2)
 

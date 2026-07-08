@@ -197,7 +197,7 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
       tracer <- newPersistentTracer h [] 0
       let rt = mkRuntime tp ws models store tracer (runInfo runId startedAt entry rootInputs envVars) False
       _ <- emit tracer (RunStart runId (renderQName entry) (redactedJson (VRecord rootInputs)) ph)
-      finish rt store =<< runWorkflow rt entry rootInputs
+      finish rt store =<< runWorkflow rt "" entry rootInputs
 
 -- | Resume an interrupted run (spec §8.2): re-acquire the lock, verify the run
 -- is resumable, reconstruct the root inputs and the persisted trace, append a
@@ -255,7 +255,7 @@ resumeWith tp ws models envVars runId store = do
                     updateRunPhase store PhaseRunning
                     let rt = mkRuntime tp ws models store tracer (runInfo runId (rmStartedAt meta) entry rootInputs envVars) True
                     _ <- emit tracer (Resumed runId lastSeq)
-                    Right <$> (finish rt store =<< runWorkflow rt entry rootInputs)
+                    Right <$> (finish rt store =<< runWorkflow rt "" entry rootInputs)
 
 -- | Emit @run-end@, finalise @run.json@ status, and package the events.
 finish :: Runtime -> RunStore -> Either RuntimeError RValue -> IO RunResult
@@ -303,21 +303,19 @@ reconstructInputs tp entry v = case v of
 
 -- Workflow execution ---------------------------------------------------------
 
--- | Run a workflow or tool by qname with the supplied inputs record.
-runWorkflow :: Runtime -> QName -> Map Ident RValue -> IO (Either RuntimeError RValue)
-runWorkflow rt q inputs =
+-- | Run a workflow or tool by qname with the supplied inputs record. The
+-- @scope@ prefix is the caller's control-flow scope (§4.1): top-level entry
+-- uses @""@; a sub-workflow invoked from a loop iteration or branch inherits
+-- the call-site prefix so its internal step-keys stay distinct per call site.
+runWorkflow :: Runtime -> Text -> QName -> Map Ident RValue -> IO (Either RuntimeError RValue)
+runWorkflow rt scope q inputs =
   case lookupTyped q (rtProject rt) of
     Nothing -> pure (Left (internalError ("no such declaration: " <> renderQName q)))
     Just td -> case declBody (tdDeclaration td) of
       Nothing -> pure (Left (internalError (renderQName q <> " is not executable")))
       Just (stmts, sections) ->
         let typedSteps = Map.fromList [(stepId (tsStmt ts), ts) | ts <- tdSteps td]
-         in -- A workflow body starts a fresh step-key scope (§8.1): a
-            -- sub-workflow call resets the control-flow scope prefix at the
-            -- call boundary, so its internal steps stay content-addressed by
-            -- the sub-workflow and its arguments, independent of the caller's
-            -- iteration\/branch context (§13, M8).
-            execStatements rt typedSteps q sections "" (Map.singleton "inputs" (VRecord inputs)) Nothing stmts
+         in execStatements rt typedSteps q sections scope (Map.singleton "inputs" (VRecord inputs)) Nothing stmts
 
 -- | The default @par@ concurrency bound when @par(max = N)@ is not given
 -- (§13, M8).
@@ -539,8 +537,8 @@ execStep rt typedSteps q sections scope bindings s = do
               then -- The agent step is a non-cacheable black box, but its
               -- intra-step model\/tool cache is namespaced under an
               -- agent step-key computed the same way (§8.1, §8.2.1).
-                runAgentStep rt bindings stepRef target argMap (stepKeyFor rt scope env bindings mts q sid target argMap s)
-              else dispatch rt stepRef bindings target argMap
+                runAgentStep rt bindings stepRef scope target argMap (stepKeyFor rt scope env bindings mts q sid target argMap s)
+              else dispatch rt stepRef bindings scope target argMap
           case dr of
             Left e -> Left <$> failWith rt stepRef e
             Right result -> do
@@ -606,32 +604,34 @@ dispatch ::
   Runtime ->
   StepRef ->
   Map Ident RValue ->
+  Text ->
   QName ->
   Map Ident RValue ->
   IO (Either RuntimeError RValue)
-dispatch rt stepRef bindings target argMap
+dispatch rt stepRef bindings scope target argMap
   | isBareQName target =
       case Map.lookup (bareIdent target) bindings of
-        Just (VRef _ realQ) -> dispatchResolved rt stepRef bindings realQ argMap
+        Just (VRef _ realQ) -> dispatchResolved rt stepRef bindings scope realQ argMap
         Just _ ->
           pure (Left (evalError ("'" <> renderQName target <> "' is not a callable ref value")))
         Nothing ->
           pure (Left (evalError ("call target '" <> renderQName target <> "' is not bound")))
-  | otherwise = dispatchResolved rt stepRef bindings target argMap
+  | otherwise = dispatchResolved rt stepRef bindings scope target argMap
 
 dispatchResolved ::
   Runtime ->
   StepRef ->
   Map Ident RValue ->
+  Text ->
   QName ->
   Map Ident RValue ->
   IO (Either RuntimeError RValue)
-dispatchResolved rt stepRef bindings target argMap
+dispatchResolved rt stepRef bindings scope target argMap
   | isBuiltin target =
       runBuiltin (builtinEnv rt stepRef bindings) target argMap
   | otherwise = case lookupTyped target (rtProject rt) of
       Just td
-        | isExecutable (tdDeclaration td) -> runWorkflow rt target argMap
+        | isExecutable (tdDeclaration td) -> runWorkflow rt scope target argMap
       _ -> pure (Left (internalError ("cannot dispatch to " <> renderQName target)))
 
 -- Agent step (§6.1) ----------------------------------------------------------
@@ -645,18 +645,19 @@ runAgentStep ::
   Runtime ->
   Map Ident RValue ->
   StepRef ->
+  Text ->
   QName ->
   Map Ident RValue ->
   -- | The enclosing agent step-key namespacing every sub-key (§8.2.1).
   Text ->
   IO (Either RuntimeError RValue)
-runAgentStep rt bindings stepRef target argMap agentKey =
+runAgentStep rt bindings stepRef scope target argMap agentKey =
   case buildAgentSpec rt target argMap of
     Left e -> pure (Left e)
-    Right spec -> runAgent (mkAgentEnv rt bindings stepRef agentKey) spec
+    Right spec -> runAgent (mkAgentEnv rt bindings stepRef scope agentKey) spec
 
-mkAgentEnv :: Runtime -> Map Ident RValue -> StepRef -> Text -> AgentEnv
-mkAgentEnv rt bindings stepRef agentKey =
+mkAgentEnv :: Runtime -> Map Ident RValue -> StepRef -> Text -> Text -> AgentEnv
+mkAgentEnv rt bindings stepRef scope agentKey =
   AgentEnv
     { aeTracer = rtTracer rt,
       aeStore = rtStore rt,
@@ -666,7 +667,7 @@ mkAgentEnv rt bindings stepRef agentKey =
       aeStepKey = agentKey,
       -- A model-chosen call runs through the normal resolved dispatch, tagged
       -- with the tool's qname and the loop-supplied nested step id.
-      aeDispatch = \tq tsid targs -> dispatchResolved rt (StepRef tq tsid) bindings tq targs
+      aeDispatch = \tq tsid targs -> dispatchResolved rt (StepRef tq tsid) bindings scope tq targs
     }
 
 -- | Assemble the 'AgentSpec' from the resolved step arguments (spec §6.1). The

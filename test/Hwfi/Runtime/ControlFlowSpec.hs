@@ -39,11 +39,18 @@ projectJson =
 
 -- | Materialise a one-workflow project from a full @main.md@ body.
 writeProject :: FilePath -> Text -> IO ()
-writeProject dir mainMd = do
+writeProject dir mainMd = writeProjectWithSub dir mainMd Nothing
+
+-- | Like 'writeProject', optionally adding a @workflows/tick.md@ sub-workflow.
+writeProjectWithSub :: FilePath -> Text -> Maybe Text -> IO ()
+writeProjectWithSub dir mainMd mSubMd = do
   createDirectoryIfMissing True (dir </> "workflows")
   TIO.writeFile (dir </> "project.json") projectJson
   TIO.writeFile (dir </> "model-catalog.json") "[]\n"
   TIO.writeFile (dir </> "workflows" </> "main.md") mainMd
+  case mSubMd of
+    Just subMd -> TIO.writeFile (dir </> "workflows" </> "tick.md") subMd
+    Nothing -> pure ()
 
 loadChecked :: FilePath -> IO TypedProject
 loadChecked dir = do
@@ -65,10 +72,13 @@ errKinds :: Either [TypeError] TypedProject -> [TypeErrorKind]
 errKinds = either (map errKind) (const [])
 
 runProject :: Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
-runProject mainMd inputs k =
+runProject mainMd inputs k = runProjectWithSub mainMd Nothing inputs k
+
+runProjectWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
+runProjectWithSub mainMd mSubMd inputs k =
   withSystemTempDirectory "hwfi-cf-proj" $ \proj ->
     withSystemTempDirectory "hwfi-cf-ws" $ \ws -> do
-      writeProject proj mainMd
+      writeProjectWithSub proj mainMd mSubMd
       tp <- loadChecked proj
       workspace <- newWorkspace ws
       res <- performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
@@ -78,10 +88,13 @@ runProject mainMd inputs k =
 
 -- | Run to completion, mark the run resumable (aborted), then resume.
 runThenResume :: Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
-runThenResume mainMd inputs k =
+runThenResume mainMd inputs k = runThenResumeWithSub mainMd Nothing inputs k
+
+runThenResumeWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
+runThenResumeWithSub mainMd mSubMd inputs k =
   withSystemTempDirectory "hwfi-cf-proj" $ \proj ->
     withSystemTempDirectory "hwfi-cf-ws" $ \ws -> do
-      writeProject proj mainMd
+      writeProjectWithSub proj mainMd mSubMd
       tp <- loadChecked proj
       workspace <- newWorkspace ws
       r1 <- expectRun =<< performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
@@ -122,6 +135,55 @@ foreachMd =
 
 parMd :: Text
 parMd = T.replace "@loop" "@fan" (T.replace "foreach it in" "par(max = 2) it in" foreachMd)
+
+-- A sub-workflow with a cacheable step using identical static arguments on
+-- every call — without call-site scope threading (§4.1) a second loop iteration
+-- would incorrectly cache-hit the first iteration's internal step.
+tickMd :: Text
+tickMd =
+  T.unlines
+    [ "---",
+      "name: workflows/tick",
+      "inputs: {}",
+      "outputs:",
+      "  ok: String",
+      "imports:",
+      "  - builtin/exec",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "_ <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo tick >> log.txt\"], stdin = \"\", timeout_ms = 0) @work",
+      "return { ok = \"x\" }",
+      "```"
+    ]
+
+foreachSubMd :: Text
+foreachSubMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs:",
+      "  items: List<String>",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - workflows/tick",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rs <- foreach it in ${inputs.items} {",
+      "  r <- workflows/tick() @call",
+      "} @loop",
+      "return { got = ${rs[1].ok} }",
+      "```"
+    ]
+
+parSubMd :: Text
+parSubMd = T.replace "@loop" "@fan" (T.replace "foreach it in" "par(max = 2) it in" foreachSubMd)
 
 -- An @if@/@else@ that branches on a Bool input; each branch echoes a distinct
 -- marker. The workflow returns the taken branch's stdout.
@@ -208,6 +270,28 @@ spec = do
       runThenResume parMd items3 $ \_ r2 ws -> do
         lineCount (ws </> "log.txt") `shouldReturn` 3
         resumedStepStarts "r" (rrEvents r2) `shouldBe` 0
+
+  describe "sub-workflow scope threading (§4.1, H1.4)" $ do
+    it "runs a cacheable sub-workflow once per foreach iteration (identical args)" $
+      runProjectWithSub foreachSubMd (Just tickMd) items3 $ \rr ws -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("got", VString "x")]))
+        lineCount (ws </> "log.txt") `shouldReturn` 3
+        stepStarts "work" (rrEvents rr) `shouldBe` 3
+
+    it "does not re-apply sub-workflow side effects on foreach resume (§8.2)" $
+      runThenResumeWithSub foreachSubMd (Just tickMd) items3 $ \_ r2 ws -> do
+        lineCount (ws </> "log.txt") `shouldReturn` 3
+        resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
+
+    it "runs a cacheable sub-workflow once per par iteration (identical args)" $
+      runProjectWithSub parSubMd (Just tickMd) items3 $ \rr ws -> do
+        lineCount (ws </> "log.txt") `shouldReturn` 3
+        stepStarts "work" (rrEvents rr) `shouldBe` 3
+
+    it "does not re-apply sub-workflow side effects on par resume (§8.2)" $
+      runThenResumeWithSub parSubMd (Just tickMd) items3 $ \_ r2 ws -> do
+        lineCount (ws </> "log.txt") `shouldReturn` 3
+        resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
 
   describe "if/else (§13, M8)" $ do
     it "takes the then branch and yields its value" $
