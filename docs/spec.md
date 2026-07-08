@@ -887,6 +887,7 @@ Key sources, in order of precedence (highest wins):
 2. `<project>/.env`, if the file exists.
 3. The existing process environment (`OPENAI_API_KEY` etc. exported by
    the user's shell or a wrapper like `direnv`).
+4. `$XDG_CONFIG_HOME/hwfi/.env`, if the file exists (user-level fallback).
 
 `.env` files are parsed with `Configuration.Dotenv.parseFile`, which
 returns key/value pairs **without** injecting them into the process
@@ -965,8 +966,8 @@ keys fail startup with:
 
 ```
 error: model 'gpt_4_1' in model-catalog.json requires provider 'openai',
-  but OPENAI_API_KEY was not found in --env-file, <project>/.env, or the
-  process environment.
+  but OPENAI_API_KEY was not found in --env-file, <project>/.env, the
+  process environment, or $XDG_CONFIG_HOME/hwfi/.env.
 ```
 
 ### 7.4 Network access
@@ -1567,7 +1568,8 @@ When §8.4 is implemented, `hwfi show` also prints the run's accumulated
   entries override.
 - `--entry <qname>` overrides `project.json`'s `entrypoint` for this run.
 - `--env-file <path>` supplies provider API keys; takes precedence over
-  `<project>/.env` and the process environment (§7.2).
+  `<project>/.env`, the process environment, and `$XDG_CONFIG_HOME/hwfi/.env`
+  (§7.2).
 
 ### 9.1 Error message format
 
@@ -1636,7 +1638,8 @@ A11. An unknown model name passed to `builtin/llm-generate` fails with an
     error that lists the available model names from the catalog.
 A12. A project whose `model-catalog.json` references provider `openai`
     but for which no `OPENAI_API_KEY` is discoverable via `--env-file`,
-    `<project>/.env`, or the process environment fails at `hwfi run`
+    `<project>/.env`, the process environment, or `$XDG_CONFIG_HOME/hwfi/.env`
+    fails at `hwfi run`
     startup with a message naming the offending model and provider.
 A13. Editing a called tool or sub-workflow between an aborted run and
     `hwfi resume` causes every dependent cached step to be recomputed

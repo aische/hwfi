@@ -20,8 +20,6 @@ M1–M8 complete. After H1, remaining near-term work is optional / perf:
 - [ ] 9.4 Skill extraction from traces
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
-- [ ] 9.7 User-level key store (e.g. `$XDG_CONFIG_HOME/hwfi/.env`) as
-      a lower-precedence source in §7.2
 
 ## Done
 
@@ -81,6 +79,9 @@ _Move items here temporarily, then archive to
       one-shot LLM step-keys (§8.1); sub-workflow scope threading (§4.1); crash
       handler with `PhaseCrashed` + `run-end` (`crashed`) (§8.2). Source:
       [code-issues.md](code-issues.md). (2026-07-08)
+- [x] 9.7 (Optional) user-level key store (§7.2): `$XDG_CONFIG_HOME/hwfi/.env`
+      as lowest-precedence provider-key source (below process env);
+      `KeyStoreSpec` precedence tests. (2026-07-08)
 - [x] 9.8 (Optional) usage and cost accounting (§8.4): per-call `cost_usd`
       on `llm-call`; run-scoped running total in `run.json` and
       `ctx.run.usage`; optional `project.json` `budget.max_cost_usd`;

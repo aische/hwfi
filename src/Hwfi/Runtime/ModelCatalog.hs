@@ -66,7 +66,8 @@ renderCatalogError = \case
           <> providerText p
           <> "', but "
           <> envVar
-          <> " was not found in --env-file, <project>/.env, or the process environment."
+          <> " was not found in --env-file, <project>/.env, the process environment,"
+          <> " or $XDG_CONFIG_HOME/hwfi/.env."
 
 -- | Load the project's model catalog, failing if the file is absent or
 -- malformed.

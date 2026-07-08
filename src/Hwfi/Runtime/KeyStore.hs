@@ -9,7 +9,8 @@
 --
 --   1. the file named by @--env-file \<path>@ on the CLI, if given;
 --   2. @\<project>/.env@, if it exists;
---   3. the existing process environment.
+--   3. the existing process environment;
+--   4. @$XDG_CONFIG_HOME/hwfi/.env@, if it exists.
 --
 -- @.env@ files are parsed with 'Configuration.Dotenv.parseFile', which does
 -- /not/ inject anything into the process environment. A missing @.env@ at
@@ -36,14 +37,14 @@ import Hwfi.Runtime.Provider
     providerEnvVar,
   )
 import Hwfi.Runtime.Secret (Secret, mkSecret)
-import System.Directory (doesFileExist)
+import System.Directory (XdgDirectory (XdgConfig), doesFileExist, getXdgDirectory)
 import System.Environment (getEnvironment)
 import System.FilePath ((</>))
 
 -- | Discovered provider keys. 'Ollama' never appears here (it needs no key).
 newtype KeyStore = KeyStore (Map ProviderName (Secret Text))
 
--- | Build a 'KeyStore' by merging the three key sources with the precedence
+-- | Build a 'KeyStore' by merging the four key sources with the precedence
 -- documented above.
 loadKeyStore ::
   -- | @--env-file@ path, if supplied.
@@ -58,12 +59,17 @@ loadKeyStore mEnvFile projectDir = do
     exists <- doesFileExist dotenvPath
     if exists then parseDotenv dotenvPath else pure []
   processVars <- fmap (\(k, v) -> (T.pack k, T.pack v)) <$> getEnvironment
+  userVars <- do
+    userDotenvPath <- (</> ".env") <$> getXdgDirectory XdgConfig "hwfi"
+    exists <- doesFileExist userDotenvPath
+    if exists then parseDotenv userDotenvPath else pure []
   -- 'Map.unions' is left-biased, so earlier (higher-precedence) sources win.
   let merged =
         Map.unions
           [ Map.fromList cliVars,
             Map.fromList projectVars,
-            Map.fromList processVars
+            Map.fromList processVars,
+            Map.fromList userVars
           ]
   pure . KeyStore . Map.fromList $
     mapMaybe (resolveProvider merged) allProviders
