@@ -5,18 +5,28 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
+## H1 — Runtime hardening (code review 2026-07-08)
+
+Normative requirements in [spec.md](spec.md) §4.1, §6.2, §7.1/§7.3/§7.6,
+§8.1/§8.2/§8.3.2; gap table in spec §14. Source: [code-issues.md](code-issues.md).
+
+- [ ] H1.1 Threaded RTS: `-threaded -rtsopts "-with-rtsopts=-N"` on executable
+      and test-suite stanzas (§7.6)
+- [ ] H1.2 Symlink sandbox containment: `canonicalizePath` + root-prefix check
+      on all direct file ops; regression test (§7.1, §6.2)
+- [ ] H1.3 Model-catalog fingerprint in one-shot `builtin/llm-*` step-keys
+      (§8.1, §7.3)
+- [ ] H1.4 Thread control-flow scope into `runWorkflow` at sub-workflow calls
+      (§4.1)
+- [ ] H1.5 Crash handler: `run-end` (`crashed`) + `PhaseCrashed` on unexpected
+      exceptions; test `run.json` phase (§8.2, §8.3.2)
+
 ## Now — carried-over optional items
 
-M1–M8 are complete. The engine parses, type-checks, runs, persists, resumes,
-pretty-prints, drives an agentic tool-use loop, modifies the workspace and runs
-allowlisted commands, and now **branches and iterates** (`if`/`foreach`/`par`).
-No milestone is currently in flight; the remaining near-term items are
-performance/hardening, not new surface area:
+M1–M8 complete. After H1, remaining near-term work is optional / perf:
 
-- [ ] 8.g (Optional, carried over) serialise agent machine state to skip the
-      replay re-walk on resume (§8.2.1) — performance only.
-
-## Now — carried-over optional items
+- [ ] 8.g (Optional) serialise agent machine state to skip the replay re-walk
+      on resume (§8.2.1) — performance only.
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
       allowlist + empty-env model (§7.5)

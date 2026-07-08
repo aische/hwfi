@@ -3,6 +3,10 @@
 Review date: 2026-07-08. Scope: `src/`, `app/`, `hwfi.cabal`. No fourmolu/ormolu/hlint
 config is present, so formatting is not flagged.
 
+**Spec alignment (2026-07-08):** normative requirements for the critical fixes
+below are now in [spec.md](spec.md) (§4.1, §6.2, §7.1/§7.3/§7.6, §8.1/§8.2/§8.3.2);
+implementation gaps are tracked in spec §14 and [TASKS.md](TASKS.md) → H1.
+
 ## 1. Summary
 
 The codebase is in genuinely good shape: the checker is cleanly phased, the

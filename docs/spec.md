@@ -3,6 +3,9 @@
 Concrete requirements derived from [idea.md](idea.md). This spec pins v1 scope.
 Anything marked **[deferred v1.1]** is intentionally out of scope for v1.
 
+Known gaps between this spec and the current engine are listed in §14 (with
+matching backlog items in [TASKS.md](TASKS.md) → H1).
+
 ## 1. Product summary
 
 A command-line workflow engine, written in Haskell (GHC2021), that:
@@ -384,10 +387,13 @@ Control-flow constructs are **value-producing** and use the same
   step, but its step-key is **iteration/branch-scoped** — the executor threads a
   scope prefix (e.g. `check#2/c`, `mode?then/s`) into the key so dynamically
   distinct occurrences of the same static step get distinct keys. The scope is
-  also threaded into sub-workflow calls (call-site-prefixed internal keys),
-  favouring per-iteration resume correctness over cross-call cache sharing. The
-  durable-workspace invariant (§8.2) therefore holds through loops/branches: a
-  completed iteration's side effect is not re-applied on resume.
+  also threaded into **sub-workflow calls**: when a step at scope prefix `P`
+  invokes a workflow or tool, the callee body runs with initial scope `P` (not
+  `""`), so internal steps are call-site-prefixed (e.g. `check#2/c` before the
+  callee's own `step-id`). This favours per-iteration resume correctness over
+  cross-call cache sharing. The durable-workspace invariant (§8.2) therefore
+  holds through loops/branches: a completed iteration's side effect is not
+  re-applied on resume.
 - Trace: `loop-start`/`loop-iter`/`loop-end` bracket each loop with its kind
   (`foreach`/`par`) and count; `if-branch` records the taken arm (§8.3.2).
 
@@ -702,8 +708,12 @@ When the model emits `ToolCall { name, arguments }`:
    so its `step-start`/`step-end`, `llm-call`, and `file-io` events nest
    under the agent step (§8.3.3.6) and its effects go through the sandboxed
    `Workspace` (§7.1). The model never touches the filesystem directly.
-4. The result `RValue` is serialised to JSON as the tool-message content
-   for the next round.
+4. The result `RValue` is serialised to **redacted** JSON as the tool-message
+   content for the next round (§8.3.4). Intra-step tool-call caches store this
+   same redacted form so resume replays exactly what the model originally saw;
+   secrets in a tool result therefore appear as `<secret:…>` to the model on
+   both the fresh and resume paths. Scripted (non-agent) steps cache the actual
+   `RValue` instead (§8.1).
 
 #### 6.1.3 Terminating `submit` tool for typed output
 
@@ -759,8 +769,11 @@ The read (`read-file`, `list-dir`, `read-file-slice`, `find-files`,
 `copy-file`, `remove-file`, `make-dir`, `remove-dir`) builtins all
 resolve their `FileRef` arguments through the **same** workspace guard as
 `read-file`/`write-file` (§7.1): every path is resolved lexically against
-the canonical workspace root and rejected if it is absolute or escapes the
-root. There is exactly one sandbox, one `file-io` trace event stream
+the canonical workspace root, rejected if it is absolute or escapes the
+root via `..`, then **canonicalised** and verified to remain under the
+workspace root (so symlinks cannot redirect reads or mutations outside).
+`find-files`/`grep` directory walks skip symlinked entries rather than
+following them. There is exactly one sandbox, one `file-io` trace event stream
 (§8.3.2), and one cache/fingerprint scheme for all of them.
 
 **Implementation note (native, not wrapped).** These are implemented
@@ -842,8 +855,17 @@ event) like every other tool.
 
 - Engine receives `--workspace <dir>` on the CLI.
 - All `FileRef` values are resolved relative to the workspace root.
-- Path traversal outside the workspace is rejected at runtime; the
-  workspace root is canonicalised once at start.
+- The workspace root is canonicalised once at startup (`newWorkspace`).
+- **Path resolution (two stages).**
+  1. *Lexical:* collapse `.` / `..` and reject absolute paths or any `..`
+     that would escape the root (A5).
+  2. *Containment:* `canonicalizePath` the result and verify its canonical
+     prefix is the workspace root. Reject if not — including when a path
+     component is a symlink that points outside the workspace. All direct
+     file operations (`read-file`, `write-file`, mutation builtins) use
+     both stages before touching the filesystem.
+- Directory walks (`find-files`, `grep`) skip symlinked entries at each
+  level rather than following them.
 - The workspace is the **only** filesystem area the workflow may write to.
   Every read and mutation builtin (§6.2) and every `builtin/exec` child
   (§6.3, §7.5) is confined to it by the same guard; there is no second
@@ -928,6 +950,12 @@ The `model` argument to `builtin/llm-*` must name an entry
 (`modelConfigName`) in the catalog. Unknown names fail at runtime with a
 clear error listing available names (A11).
 
+Editing a catalog entry (provider model id, temperature, token cap,
+timeouts, retry policy) must change the **model-catalog fingerprint**
+used in step-key hashing (§8.1) and agent intra-step model sub-keys
+(§8.2.1), so cached one-shot LLM step results are invalidated on
+`hwfi resume` after a catalog change.
+
 Provider–key linking is validated at startup: for every model referenced
 in the catalog, the corresponding provider key must be available from
 the sources in §7.2 (except `ollama`, which requires no key). Missing
@@ -983,6 +1011,16 @@ CPU/disk or reach the network (§7.4). Projects that need stronger
 isolation should run `hwfi` inside their own container/VM. Stronger
 per-process sandboxing is a possible later refinement.
 
+### 7.6 Runtime process (RTS)
+
+The `hwfi` executable and its test suite must be linked with the **threaded**
+RTS (`ghc-options: -threaded`) and run with multiple capabilities by default
+(`-with-rtsopts=-N`), because the engine uses bounded concurrency (`par`),
+subprocess execution with wall-clock timeouts, and concurrent LLM calls. On
+the single-threaded RTS, green threads do not run in parallel and any
+blocking **safe** FFI call (e.g. DNS during HTTP) stalls the entire process,
+which can make `par` appear to hang.
+
 ## 8. Persistence and resumability
 
 Every run has a `run id` (ULID). Run artifacts are stored under
@@ -1031,6 +1069,19 @@ fingerprint(d) = hash( normalized-AST(d),
 Built-in tools (`builtin/*`) have a fixed fingerprint derived from the
 engine version.
 
+**Model-catalog fingerprint (LLM builtins).** For cacheable one-shot LLM
+builtins (`builtin/llm-generate`, `builtin/llm-chat`, `builtin/llm-gen-object`),
+the step-key must also incorporate a fingerprint of the resolved catalog
+entry named by the `model` argument — the same scalar fields as
+`model-catalog-fingerprint` in §8.2.1 (`modelConfigName`, provider model id,
+`maxTokens`, `temperature`, `requestTimeout`, `throttleDelay`, `retryCount`,
+`jitterBackoff`). The model *name* string alone in `resolved-args` is not
+sufficient: repointing `fast` at a different underlying model or changing
+temperature must bust the cache. Agent steps already fold this fingerprint
+into intra-step model sub-keys (§8.2.1); one-shot builtins must do the
+equivalent at the step-key level (e.g. as an extra `ctx-projection` line or
+a sixth hash component).
+
 **Ctx projection.** `ctx-projection` includes only those `ctx.*` fields
 the step actually references, restricted to *stable* fields:
 
@@ -1066,6 +1117,14 @@ units are cached instead (§8.2.1).
 - On resume the runtime appends one `Resumed` marker (§8.3.2) before any
   new events, then continues numbering `seq` from the last value + 1.
 - A run is resumable if `run.json.status ∈ {running, crashed, aborted}`.
+- **Crash handling.** Typed `RuntimeError` values end a run deliberately
+  (`run-end` with `status: aborted`, `run.json.status: aborted`). An
+  **unexpected synchronous exception** (provider library fault, aeson bug,
+  unhandled I/O, etc.) must also be handled deliberately: emit a terminal
+  `error` event (`kind: internal`), append `run-end` with `status: crashed`,
+  set `run.json.status` to `crashed`, then rethrow or exit. A run must not
+  be left at `status: running` with no `run-end` after a crash. `crashed`
+  runs remain resumable like `aborted` ones.
 
 **Durable-workspace invariant.** Resume treats the workspace directory as
 **durable state carried over from the interrupted attempt**. A cache hit
@@ -1262,7 +1321,7 @@ TraceEvent =
       tag    : "run-end",
       seq, at,
       run_id : String,
-      status : "completed" | "aborted"
+      status : "completed" | "aborted" | "crashed"
     }
 ```
 
@@ -1281,9 +1340,11 @@ A trace represents one *logical run*, which may span several execution
 1. The file begins with exactly one `RunStart`. Each resume appends
    exactly one `Resumed` marker. When the logical run reaches a terminal
    state it ends with exactly one `RunEnd` (`status ∈ {completed,
-   aborted}`). A run interrupted by a crash has no `RunEnd` until a later
-   attempt completes or permanently aborts it; resumability is determined
-   by `run.json.status`, not by the presence of `RunEnd`.
+   aborted, crashed}`). The engine writes `run-end` on both typed aborts
+   (`aborted`) and unexpected exceptions (`crashed`, §8.2). A run killed
+   without running the crash handler (e.g. `SIGKILL`) may have no `RunEnd`;
+   resumability is determined by `run.json.status`, not solely by the
+   presence of `RunEnd`.
 2. `seq` is strictly increasing across the whole file and gap-free,
    continuing across attempts.
 3. Within a single attempt (the events between one `RunStart`/`Resumed`
@@ -1507,7 +1568,6 @@ A26. An agent (`builtin/llm-agent`) advertised the mutation and `exec`
 
 ## 13. Explicitly deferred to v1.1+
 
-- Control flow (`if`, `foreach`, `par`).
 - Dynamic workflow synthesis by agents. The type checker is already
   factored as a pure function (§5.6) so it can be re-invoked at runtime
   on a freshly-parsed workflow; what remains is a built-in tool along the
@@ -1533,3 +1593,23 @@ A26. An agent (`builtin/llm-agent`) advertised the mutation and `exec`
   recoverable-error boundary (§6.1.4), which turns a bad tool call into a
   tool message the model can retry; it does not expose a general
   `try`/recover construct to workflows.
+
+## 14. Known implementation gaps (2026-07-08)
+
+Code review ([code-issues.md](code-issues.md)) found gaps between this spec
+and the current engine. Backlog: [TASKS.md](TASKS.md) → **H1**. Normative
+requirements are already stated in the sections cited below; this table tracks
+what remains to implement.
+
+| ID | Spec | Gap | Fix |
+|----|------|-----|-----|
+| H1.1 | §7.6 | `hwfi` executable and test suite are built without `-threaded`; `par`, subprocess timeouts, and LLM I/O can block the whole process on safe FFI (e.g. DNS). | Add `ghc-options: -threaded -rtsopts "-with-rtsopts=-N"` to both stanzas in `hwfi.cabal`. |
+| H1.2 | §7.1, §6.2 | Workspace guard is lexical only; `read-file` / mutation builtins follow symlinks and can escape the root. Module comment overstates the guarantee. | After lexical resolve, `canonicalizePath` and verify prefix ⊆ workspace root; regression test with `ln -s`. |
+| H1.3 | §8.1, §7.3 | One-shot `builtin/llm-*` step-keys omit the model-catalog fingerprint; editing `model-catalog.json` does not invalidate cached LLM results on resume (agent path is correct). | Fold `modelCatalogFingerprint` into `stepKeyFor` for LLM builtins. |
+| H1.4 | §4.1 | `runWorkflow` resets scope to `""` at sub-workflow entry; two `par` iterations with identical args share internal step caches. | Thread caller `scope` into `runWorkflow` / `dispatchResolved`. |
+| H1.5 | §8.2, §8.3.2 | Unexpected exceptions bypass `finish`; no `run-end`, `run.json.status` stays `running`. | `withException` / `onException` around run body → `error` + `run-end` (`crashed`) + `PhaseCrashed`. |
+
+**Deferred hardening** (spec silent or acceptable for v1; track in TASKS if
+needed): O(n²) `ctx.trace` rebuild per step (§8.3.5, perf); O(n²)
+`find-files`/`grep` walk; `read-file-slice` re-reads whole file per page
+(§6.2, bounded by read cap).
