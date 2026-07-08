@@ -4,10 +4,14 @@ Last updated: 2026-07-09
 
 ## Current focus
 
-**8.g complete.** Optional items next: 9.1–9.6.
+**8.g complete.** Spec §6.4 (`eval-workflow`) added. Optional items next:
+9.1–9.6.
 
 ## Done recently
 
+- **§6.4 eval-workflow spec (2026-07-09):** Dynamic workflow evaluation
+  specified — `{ ok, outputs, errors }` result; parse/check failures
+  non-fatal; recoverable in agent loop (A34/A35).
 - **8.g agent checkpoint (2026-07-09):** Persist agent-loop `messages` +
   `next_round` under the agent step-key on each completed round; reload on
   resume to skip re-walking earlier rounds (§8.2.1 perf optimization).

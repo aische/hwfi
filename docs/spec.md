@@ -19,9 +19,10 @@ A command-line workflow engine, written in Haskell (GHC2021), that:
 5. Exposes the run's environment (workspace, prior trace, inputs) to every
    step via a typed ambient `Context`, so agent steps can inspect what
    happened before them.
-6. Is designed so that, in a later stage, agent steps can synthesize new
-   workflows at runtime, type-check them against the same checker used at
-   load time, and read prior traces to learn or extract skills.
+6. Is designed so that agent steps can synthesize new workflows at runtime,
+   type-check them against the same checker used at load time, and execute
+   them via `builtin/eval-workflow` (§6.4). Reading prior traces to learn
+   or extract skills remains deferred (§13).
 
 Non-goals for v1: GUI, remote/distributed execution, multi-tenant isolation,
 a package registry for workflows.
@@ -750,7 +751,7 @@ sensitive value. Rules:
    statically.
 8. The checker is a pure function `Project -> Either [TypeError] TypedProject`
    so the same checker runs both at load time (`hwfi check`) and at runtime
-   over dynamically synthesized workflows (see §13).
+   over dynamically synthesized workflows (`builtin/eval-workflow`, §6.4).
 9. `builtin/llm-agent` / `builtin/llm-agent-object` (§6.1): every element of
    the `tools` argument must be a `ToolRef`/`WorkflowRef` value in scope,
    and every referenced callee must be **agent-eligible** — none of its
@@ -855,6 +856,12 @@ Provided by the engine, addressed as `builtin/<name>`:
   gather information, then must terminate by calling a synthesized `submit`
   tool whose parameters are `schema` (§6.1.3). `builtin/llm-gen-object` is
   the zero-tool degenerate case of this builtin.
+- `builtin/eval-workflow` :
+  `{ source: String, inputs: Json }
+   -> { ok: Bool, outputs: Json, errors: List<String> }` — parse,
+  type-check, and run a workflow definition produced at runtime (§6.4).
+  **Implementation deferred** (task 9.2); specified here so v1 data model
+  and agent error posture stay compatible.
 
 For all LLM tools, `model` names an entry in the **model catalog** (§7.3),
 not a raw provider model id. Retry, timeout, temperature, and pricing
@@ -989,7 +996,9 @@ posture (§4, §13). Failures are classified:
 
 - **Recoverable** (turned into a tool message; loop continues): unknown
   tool name, malformed/ill-typed tool arguments, a tool result the callee
-  itself surfaces as an error, and `submit` decode failures.
+  itself surfaces as an error, `submit` decode failures, and
+  `builtin/eval-workflow` returning `ok = false` (parse/type-check failure
+  on synthesized source — §6.4).
 - **Fatal** (abort the run with an `Error` event): `max_rounds` exhaustion,
   provider/auth/generation failures (`llm`), lost workspace lock, and any
   `internal` engine fault.
@@ -1092,6 +1101,108 @@ requested `program`.
 Because `exec` output is fed back to the model when used as an agent tool,
 it participates in redaction (§8.3.4) and tracing (§8.3.2, the `exec`
 event) like every other tool.
+
+### 6.4 Dynamic workflow evaluation (`builtin/eval-workflow`)
+
+**Status: specified; implementation deferred (task 9.2).**
+
+`builtin/eval-workflow` lets an agent (or any step) parse, type-check, and
+run a workflow definition produced at runtime — e.g. markdown the model
+wrote in an earlier round. This is distinct from `builtin/llm-agent`
+(§6.1), which calls *existing* project declarations; `eval-workflow`
+executes *new* source text against the same checker and executor used at
+load time.
+
+#### 6.4.1 Signature and result shape
+
+```
+builtin/eval-workflow :
+  { source: String, inputs: Json }
+  -> { ok: Bool, outputs: Json, errors: List<String> }
+```
+
+- `source` — the full text of a single workflow markdown file (same format
+  as a file under `workflows/`, §2).
+- `inputs` — root inputs for the dynamic workflow, coerced against its
+  declared input record (same rules as `hwfi run` root inputs, §9).
+- `ok` — whether parse, type-check, and execution all succeeded.
+- `outputs` — on success, the dynamic workflow's output record as `Json`;
+  on failure before or during a successful run boundary, `{}`.
+- `errors` — on failure, one or more human-readable diagnostic strings in
+  the §9.1 format (`file:line:col: message` with optional caret block);
+  on success, `[]`.
+
+The step **always completes normally** (emits `step-end`) when the only
+failure is parse or type-check. It does **not** abort the enclosing run for
+bad synthesized source — callers (including agents) inspect `ok` and
+`errors` and decide what to do next.
+
+#### 6.4.2 Pipeline
+
+1. **Parse** `source` as one workflow declaration. A parse failure sets
+   `ok = false`, populates `errors`, and stops — the workflow body is never
+   executed.
+2. **Merge** the parsed declaration into a *synthetic project* consisting
+   of all declarations from the enclosing run's checked project plus the
+   dynamic workflow. The dynamic declaration is assigned a fixed virtual
+   path `<eval-workflow>` for diagnostics (§9.1). Name collisions with an
+   existing declaration are type-check errors.
+3. **Type-check** the synthetic project with the same pure checker as
+   `hwfi check` (§5.6.8). Any `[TypeError]` sets `ok = false`, renders
+   each error to §9.1 form in `errors`, and stops — the body is never
+   executed.
+4. **Coerce** `inputs` against the dynamic workflow's declared inputs. A
+   coercion failure sets `ok = false` with an `errors` entry and stops.
+5. **Execute** the dynamic workflow as a nested run through the normal
+   executor (same workspace, sandbox, trace nesting, and step-key rules as
+   a sub-workflow call). On success, set `ok = true` and `outputs` to the
+   result record.
+
+The dynamic workflow may call any tool or sub-workflow declared in the
+parent project (subject to the usual static call-graph and eligibility
+rules). It does not gain access to declarations that were not part of the
+loaded project.
+
+#### 6.4.3 Error posture
+
+| Failure | Step result | Enclosing run |
+|---------|-------------|---------------|
+| Parse error on `source` | `ok = false`, `errors` populated | Continues |
+| Type-check error on synthetic project | `ok = false`, `errors` populated | Continues |
+| `inputs` coercion failure | `ok = false`, `errors` populated | Continues |
+| Runtime error during execution of a checked workflow | — | Aborts (§4) |
+
+Rationale: synthesized source is expected to be wrong sometimes (the
+primary use case is agent-generated workflows). Aborting the whole run on
+the first type error would prevent the model from reading diagnostics and
+retrying. Once source passes the checker, failures are ordinary workflow
+errors.
+
+When `eval-workflow` is advertised as an agent tool (§6.1), a result with
+`ok = false` is fed back to the model as a normal tool message (the
+serialised `{ ok, outputs, errors }` record). The agent loop continues;
+this is a **recoverable** outcome (§6.1.4), not a fatal `Error` event on
+the agent step.
+
+Scripted callers branch on `${result.ok}` (or equivalent) without needing
+a workflow-level `try`/recover construct (still deferred, §13).
+
+#### 6.4.4 Caching and fingerprinting
+
+- The step is **non-cacheable** (§8.1): `source` is typically unique per
+  invocation.
+- Built-in fingerprint follows the engine-version rule for `builtin/*`
+  (§8.1).
+- Steps *inside* a successfully checked dynamic workflow use normal
+  step-key and cache semantics, scoped under the eval-workflow call site
+  (§4.1).
+
+#### 6.4.5 Agent eligibility
+
+`eval-workflow` is **agent-eligible** (§6.1.1): its inputs are `String`
+and `Json` only. Projects typically expose it to agents via a thin tool
+wrapper or by including a `ToolRef` to such a wrapper in the agent's
+`tools` list.
 
 ## 7. Workspace, project, and sandboxing
 
@@ -1602,7 +1713,9 @@ TraceEvent =
 ```
 
 `kind` values: `type` (should not occur at runtime for statically-checked
-code), `eval` (expression evaluation failure — list index out of bounds,
+code; parse/type-check failures on dynamic source are returned as
+`eval-workflow`'s `ok = false` result instead — §6.4), `eval` (expression
+evaluation failure — list index out of bounds,
 missing field on an opaque `Json` value, interpolation of an unexpected
 runtime value), `io` (filesystem), `sandbox` (workspace-boundary
 violation), `llm` (provider/generation failure), `user` (error raised by
@@ -1976,9 +2089,15 @@ A32. A `while` whose predicate workflow contains `builtin/llm-agent` replays the
 A33. `${carry}` in `predicate_args`/`body_args` is rejected at `hwfi check`
     when it would be in scope for iteration 0 (§4.3.4).
 
-The following are specified for optional v1.1 (§8.4) and are not required
-in v1:
+The following are specified for optional v1.1 (§6.4, §8.4) and are not
+required in v1:
 
+A34. `builtin/eval-workflow` with ill-typed `source` returns
+    `{ ok = false, errors = [...] }` and does not abort the enclosing run;
+    the workflow body is not executed.
+A35. When `eval-workflow` is an agent tool and returns `ok = false`, the
+    agent loop continues and the model receives the error diagnostics in
+    the tool message (§6.4.3).
 A27. A live `builtin/llm-generate` call increments `run.json` `usage.cost_usd`
     and `ctx.run.usage.cost_usd`; a cache hit on resume does not.
 A28. An agent model round served from intra-step cache on resume emits no
@@ -2006,15 +2125,6 @@ A29. With `project.json` `budget.max_cost_usd` set, a provider call that
 
 ## 13. Explicitly deferred to v1.1+
 
-- Dynamic workflow synthesis by agents. The type checker is already
-  factored as a pure function (§5.6) so it can be re-invoked at runtime
-  on a freshly-parsed workflow; what remains is a built-in tool along the
-  lines of `builtin/eval-workflow(source: String, inputs: Json)
-  -> { outputs: Json }` that parses, type-checks, and runs a workflow
-  produced by another step. (Note: **LLM tool-use** — a model calling the
-  project's *existing* declarations in a loop — is a distinct, weaker
-  capability and is **no longer deferred**: it is specified in §6.1 as
-  `builtin/llm-agent` / `builtin/llm-agent-object`.)
 - OS-level command-execution isolation (namespaces/seccomp/cgroups) for
   `builtin/exec`. (Note: a **filesystem-mutation and command-execution
   toolset** — `edit-file`/`move-file`/…/`exec` gated by an allowlist — is

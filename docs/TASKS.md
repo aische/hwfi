@@ -11,8 +11,8 @@ M1–M9 complete. Near-term work is optional / perf:
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
       allowlist + empty-env model (§7.5)
-- [ ] 9.2 `builtin/eval-workflow` — parse+check+run a workflow produced
-      at runtime (reuses M3 checker)
+- [ ] 9.2 `builtin/eval-workflow` — implement §6.4 (parse+check+run dynamic
+      source; `ok`/`errors` result; recoverable in agent loop)
 - [ ] 9.3 Cross-run trace reading built-in tool
 - [ ] 9.4 Skill extraction from traces
 - [ ] 9.5 `Bytes`-typed file I/O
