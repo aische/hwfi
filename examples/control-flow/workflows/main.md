@@ -50,23 +50,23 @@ _ <- foreach path in ${inputs.scripts} {
   )
 } @manifest
 
--- Branch on the caller's flag. Both arms bind a step result of the same type
--- (the exec record), so the `if` yields that record as its value; an `else` is
--- mandatory whenever an `if` binds a value.
+-- Branch on the caller's flag. Both arms bind the same name and reuse the
+-- same step @id@ — legal under block-local scoping (§4.2); only the taken arm
+-- runs and the `if` yields that arm's exec record.
 summary <- if ${inputs.strict} {
-  strict_msg <- builtin/exec(
+  msg <- builtin/exec(
     program = "sh",
     args = ["-c", "echo STRICT mode: every script must pass"],
     stdin = "",
     timeout_ms = 0
-  )
+  ) @notify
 } else {
-  lenient_msg <- builtin/exec(
+  msg <- builtin/exec(
     program = "sh",
     args = ["-c", "echo LENIENT mode: failures are warnings"],
     stdin = "",
     timeout_ms = 0
-  )
+  ) @notify
 } @mode
 
 return { report = ${summary.stdout}, first_status = ${checks[0].exit_code} }

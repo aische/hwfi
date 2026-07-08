@@ -110,31 +110,35 @@ isReturn = \case
   SReturn _ _ -> True
   _ -> False
 
--- | Every step/control-flow id must be unique within a declaration (§13, M8):
--- ids share one namespace, so the executor can key per-step data and the
--- step-key scope path (per-iteration\/per-branch) stays unambiguous. Loop
--- bodies contribute their body ids once (a single static step, many dynamic
--- iterations), so uniqueness is a purely static property.
+-- | Step/control-flow ids must be unique within each block (§4.2). Sibling
+-- branches and unrelated loops may reuse the same static id; the executor
+-- disambiguates dynamically via the step-key scope prefix
+-- (e.g. @mode?then/notify@ vs @mode?else/notify@).
 duplicateIdErrors :: FilePath -> [Statement] -> [TypeError]
-duplicateIdErrors path statements = go [] idPositions
+duplicateIdErrors path statements =
+  dupInBlock statements <> concatMap dupNested statements
   where
-    idPositions =
-      [(i, spanStart (statementSpan s)) | s <- flattenStatements statements, Just i <- [statementId s]]
-    go _ [] = []
-    go seen ((i, p) : rest)
-      | i `elem` seen =
-          typeError
-            path
-            p
-            DuplicateBind
-            ("duplicate step/control-flow id '" <> i <> "'; ids must be unique within a declaration (§13)")
-            : go seen rest
-      | otherwise = go (i : seen) rest
+    dupNested = \case
+      SIf s -> duplicateIdErrors path (ifThen s) <> maybe [] (duplicateIdErrors path) (ifElse s)
+      SLoop s -> duplicateIdErrors path (loopBody s)
+      _ -> []
 
--- | All statements in a declaration body, flattened depth-first through
--- control-flow blocks.
-flattenStatements :: [Statement] -> [Statement]
-flattenStatements = concatMap (\s -> s : flattenStatements (concat (blockStatements s)))
+    dupInBlock stmts = go [] idPositions
+      where
+        idPositions = [(i, spanStart (statementSpan s)) | s <- stmts, Just i <- [statementId s]]
+        go _ [] = []
+        go seen ((i, p) : rest)
+          | i `elem` seen =
+              typeError
+                path
+                p
+                DuplicateBind
+                ( "duplicate step/control-flow id '"
+                    <> i
+                    <> "'; ids must be unique within a block (§4.2)"
+                )
+                : go seen rest
+          | otherwise = go (i : seen) rest
 
 -- Statement-sequence checking (§5.6, §13) -----------------------------------
 

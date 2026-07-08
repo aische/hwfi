@@ -277,7 +277,7 @@ spec = do
               [("out", "String")]
       errKinds <$> checkOnly md `shouldReturn` [DuplicateBind]
 
-    it "rejects a duplicate step/control-flow id" $ do
+    it "rejects a duplicate step/control-flow id in the same block" $ do
       let md =
             wrapBody
               [ "_ <- foreach it in ${inputs.items} {",
@@ -286,6 +286,48 @@ spec = do
                 "_ <- foreach it in ${inputs.items} {",
                 "  b <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo bye\"], stdin = \"\", timeout_ms = 0)",
                 "} @dup",
+                "return { out = \"x\" }"
+              ]
+              [("items", "List<String>")]
+              [("out", "String")]
+      errKinds <$> checkOnly md `shouldReturn` [DuplicateBind]
+
+    it "allows the same step id in sibling if branches (§4.2)" $ do
+      let md =
+            wrapBody
+              [ "x <- if ${inputs.flag} {",
+                "  msg <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo THEN\"], stdin = \"\", timeout_ms = 0) @notify",
+                "} else {",
+                "  msg <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo ELSE\"], stdin = \"\", timeout_ms = 0) @notify",
+                "} @choose",
+                "return { out = ${x.stdout} }"
+              ]
+              [("flag", "Bool")]
+              [("out", "String")]
+      errKinds <$> checkOnly md `shouldReturn` []
+
+    it "allows the same step id in sibling loop bodies (§4.2)" $ do
+      let md =
+            wrapBody
+              [ "_ <- foreach it in ${inputs.items} {",
+                "  a <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo hi\"], stdin = \"\", timeout_ms = 0) @work",
+                "} @loop1",
+                "_ <- foreach it in ${inputs.items} {",
+                "  b <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo bye\"], stdin = \"\", timeout_ms = 0) @work",
+                "} @loop2",
+                "return { out = \"x\" }"
+              ]
+              [("items", "List<String>")]
+              [("out", "String")]
+      errKinds <$> checkOnly md `shouldReturn` []
+
+    it "rejects a duplicate step id within a single block" $ do
+      let md =
+            wrapBody
+              [ "_ <- foreach it in ${inputs.items} {",
+                "  a <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo hi\"], stdin = \"\", timeout_ms = 0) @dup",
+                "  b <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo bye\"], stdin = \"\", timeout_ms = 0) @dup",
+                "} @loop",
                 "return { out = \"x\" }"
               ]
               [("items", "List<String>")]

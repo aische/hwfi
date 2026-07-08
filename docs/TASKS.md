@@ -16,16 +16,7 @@ performance/hardening, not new surface area:
 - [ ] 8.g (Optional, carried over) serialise agent machine state to skip the
       replay re-walk on resume (§8.2.1) — performance only.
 
-## Decide before v1 freeze
-
-- [ ] **DEC-1 Identifier scoping in control-flow blocks (spec §4.2).** M8 ships a
-      flat per-declaration id namespace (step binders / loop vars / construct
-      `@id`s all unique, including across sibling `if` branches; no shadowing).
-      Reconsider vs. branch/block-local scoping (sibling branches may reuse
-      names; inner binds don't escape). Changing this later is a
-      source-compatibility break. Owner: Daniel.
-
-## Backlog — M9+: Deferred, per spec §13
+## Now — carried-over optional items
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
       allowlist + empty-env model (§7.5)
@@ -88,15 +79,18 @@ _Move items here temporarily, then archive to
       `file-io`/`exec` trace events + `hwfi show`; `examples/coding`
       (scripted + agentic); 188 tests (A22–A26 incl. durable-workspace
       resume and an end-to-end agent coding loop). (2026-07-07)
+- [x] **DEC-1** Block-local identifier scoping (spec §4.2): `@id`s unique per
+      block; sibling branches/loops may reuse names; no shadowing outward.
+      Checker + tests + `examples/control-flow` updated. (2026-07-08)
 - [x] M8 control flow (8.1–8.3): `Statement` extended with `SIf`/`SLoop`
       (`Hwfi.Ast.Step`); `if`/`else`, `foreach`, `par(max = N)` parsing +
       reserved words; recursive checker (branch typing + mandatory `else`,
-      `List<T>` iteration binding, `List<U>` loop result, no-shadow, flat
-      per-declaration id namespace); callee/fingerprint/exec-policy recursion
+      `List<T>` iteration binding, `List<U>` loop result, no-shadow,
+      per-block id namespace); callee/fingerprint/exec-policy recursion
       through blocks; `if-branch`/`loop-start`/`loop-iter`/`loop-end` trace
       events + `MVar`-serialised tracer for `par`; executor `execIf`/`execLoop`
       (sequential `foreach`, bounded order-preserving `par`) with a scope
       prefix folded into step-keys for per-iteration resume; value-producing
-      block semantics; `examples/control-flow`; 207 tests incl.
+      block semantics; `examples/control-flow`; 210 tests incl.
       `Hwfi.Runtime.ControlFlowSpec` (execution, ordering, `par` concurrency,
       resume durability, checker rejections). (2026-07-08)

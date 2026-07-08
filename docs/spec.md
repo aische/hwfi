@@ -357,7 +357,7 @@ arguments). The two parsers must not conflate them.
 ## 4. Control flow (v1)
 
 - Sequential steps, plus `if`/`else`, `foreach`, and `par` (implemented in M8;
-  see §4.1 for the design and §4.2 for an open decision).
+  see §4.1 for the design and §4.2 for scoping rules).
 - Errors abort the workflow; the failing step is recorded and the run is
   resumable from that step.
 
@@ -391,28 +391,26 @@ Control-flow constructs are **value-producing** and use the same
 - Trace: `loop-start`/`loop-iter`/`loop-end` bracket each loop with its kind
   (`foreach`/`par`) and count; `if-branch` records the taken arm (§8.3.2).
 
-### 4.2 Open decision — identifier scoping in control-flow blocks
+### 4.2 Identifier scoping in control-flow blocks
 
-**Status: decided for M8, revisit before v1 freeze.**
+**Status: decided — block-local scoping (v1).**
 
-M8 uses a **flat, per-declaration identifier namespace**: step binders, loop
-variables, and construct `@id`s must all be unique within a declaration —
-*including across sibling `if` branches*. Consequently mirrored branches cannot
-reuse a binder name (e.g. the `then`/`else` arms of a conditional must bind
-`strict_msg` / `lenient_msg`, not both `s`). No binding shadows an outer one.
+Each brace-delimited block is its own scope:
 
-Rationale: it keeps scope resolution and trace correlation simple (one name →
-one static step) and avoids "which `s`?" ambiguity in step-key scoping.
+- Inner bindings do not escape the block (only the construct's own bind name,
+  if any, is visible outside).
+- Names from the enclosing scope are visible inside a block.
+- **No shadowing:** an inner bind must not reuse a name already bound in an
+  enclosing scope (§3.4).
 
-The alternative is **branch/block-local scoping**: each block is its own scope,
-inner bindings simply do not escape, and sibling branches may reuse names (only
-the outer scope's names must stay unshadowed). This reads more naturally but
-requires the checker and the step-key scope machinery to disambiguate identical
-static ids by their scope path rather than by name alone.
+Step `@id`s and control-flow construct `@id`s must be **unique within a block**.
+Sibling `if` branches, unrelated loops, and nested blocks may reuse the same
+static id; the executor disambiguates dynamically via the step-key scope prefix
+(e.g. `mode?then/notify` vs `mode?else/notify`, `check#2/c`).
 
-Decision to make before freezing v1: keep the flat namespace, or move to
-block-local scoping. Changing this later is a source-compatibility break for any
-workflow that relied on cross-branch uniqueness diagnostics.
+Rationale: mirrored branches and loops read naturally without inventing distinct
+names for structurally identical steps; the scope-prefix machinery (§4.1) already
+keeps cache keys and resume unambiguous.
 
 ## 5. Type system (v1)
 

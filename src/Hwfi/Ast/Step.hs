@@ -113,9 +113,9 @@ statementSpan = \case
   SLoop s -> loopSpan s
 
 -- | The static id of a statement, if it has one (@return@ has none). Step ids
--- and control-flow ids share one namespace and must be unique within a
--- declaration (§13, M8), so the executor can key per-step data and the
--- step-key scope path stays unambiguous.
+-- and control-flow ids must be unique within each block (§4.2); sibling
+-- branches may reuse the same id, disambiguated at runtime by the step-key
+-- scope prefix.
 statementId :: Statement -> Maybe Ident
 statementId = \case
   SStep s -> Just (stepId s)

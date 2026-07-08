@@ -24,11 +24,12 @@ Control-flow constructs are **value-producing**, uniform with step calls:
   body's tail type and `list : List<T>` binds `v : T` in the body scope.
 - `par` runs iterations concurrently (default bound 4, override with `par(max = N)`),
   returns results in **input order**, and aborts on the **lowest-index** failure.
-- Scoping is lexical: the outer scope is visible inside a block, inner bindings do
-  not escape, and **no shadowing** is allowed. Step binders, loop variables, and
-  construct `@id`s share **one flat namespace per declaration** and must all be
-  unique — even across sibling branches (that is why the `then`/`else` arms here
-  bind `strict_msg` / `lenient_msg` rather than reusing one name).
+- Scoping is **block-local** (§4.2): the outer scope is visible inside a block,
+  inner bindings do not escape, and **no shadowing** of outer names is allowed.
+  Step `@id`s must be unique **within a block**; sibling `if` branches and
+  unrelated loops may reuse the same `@id` (the executor disambiguates via the
+  step-key scope prefix, e.g. `mode?then/notify` vs `mode?else/notify`). That is
+  why the `then`/`else` arms here both bind `msg` with `@notify`.
 
 ## Resume behaviour (durable workspace, spec §8.2)
 
@@ -74,7 +75,7 @@ cabal run hwfi -- show /tmp/cf-ws <run-id>
 # 18  exec        workflows/main#w         sh  exit=0
 # 28  loop-end    workflows/main#manifest  count=3
 # 29  if-branch   workflows/main#mode      -> then
-# 31  exec        workflows/main#strict_msg  sh  exit=0
+# 31  exec        workflows/main#notify  sh  exit=0
 ```
 
 (The three `par` iterations start before any completes, then interleave; a

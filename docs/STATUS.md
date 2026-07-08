@@ -14,31 +14,22 @@ items (agent state serialisation §8.2.1, OS-level `exec` isolation §7.5,
 
 ## Done recently
 
+- **DEC-1 closed:** block-local identifier scoping (spec §4.2). `@id`s are
+  unique per block; sibling branches/loops may reuse names. Checker updated;
+  `examples/control-flow` demonstrates mirrored `@notify` in `if` arms.
 - `Hwfi.Ast.Step`: `Statement` extended with `SIf`/`SLoop` (`IfStmt`,
   `LoopStmt`, `LoopKind = LoopSeq | LoopPar (Maybe Int)`); `statementId`,
   `blockStatements` helpers.
 - `Hwfi.Parse.{Step,Lexer}`: `if`/`else`, `foreach`, `par(max = N)` with
   brace-delimited blocks; `if`/`else`/`foreach`/`par`/`in` reserved.
-- `Hwfi.Check.Decl`: recursive body checking (`checkSeq`/`checkStmt`/`checkIf`/
-  `checkLoop`) — `cond : Bool`, mandatory `else` + structurally-equal arms for
-  value-binding `if`, `List<T>` iteration binding `v : T`, `List<U>` loop
-  result, no-shadowing, and a **flat per-declaration id namespace** (step
-  binders, loop vars, construct `@id`s must all be unique).
-- `Hwfi.Check.Graph` + `Hwfi.Check`: `directCallees`, fingerprint `encodeStmt`,
-  and the `builtin/exec` policy pass all recurse into control-flow blocks.
-- `Hwfi.Runtime.Trace`: `IfBranch`/`LoopStart`/`LoopIter`/`LoopEnd` events
-  (JSON round-trip + `hwfi show` render); tracer now holds an `MVar` mutex so
-  concurrent `par` iterations serialise `emit` (consistent `seq` + file order).
-- `Hwfi.Runtime.Executor`: `execIf`/`execLoop`; sequential `foreach` and
-  bounded, order-preserving `par` (`pooledForConcurrentlyN`, default 4, aborts
-  on lowest-index failure). A **scope prefix** (`check#2/c`, `mode?then/s`) is
-  threaded into `stepKeyFor` so dynamically-distinct occurrences of a static
-  step get distinct cache keys — per-iteration resume correctness.
-- `examples/control-flow`: scripted `par` syntax-check + `foreach` manifest +
-  `if`/`else` summary; `check`/`run` verified.
-- 207 tests (was 188): parser cases (StepSpec), trace round-trip (TraceSpec),
-  and a new `Hwfi.Runtime.ControlFlowSpec` (foreach/par/if execution, ordered
-  results, `par` concurrency, resume durability, and checker rejections).
+- `Hwfi.Check.Decl`: recursive body checking — branch typing, mandatory
+  `else`, `List<T>` iteration, `List<U>` loop result, no-shadowing,
+  per-block `@id` uniqueness.
+- `Hwfi.Check.Graph` + `Hwfi.Check`: callee/fingerprint/exec-policy recursion
+  through control-flow blocks.
+- `Hwfi.Runtime.Executor`: scope prefix in step keys for per-iteration resume.
+- `examples/control-flow`: `par` + `foreach` + mirrored `if`/`else`.
+- 210 tests (was 207): block-local scoping acceptance/rejection cases.
 
 ## Blockers
 
@@ -46,24 +37,15 @@ items (agent state serialisation §8.2.1, OS-level `exec` isolation §7.5,
 
 ## Notes / decisions
 
+- **Block-local scoping (§4.2):** inner binds don't escape; no shadowing outward;
+  `@id` unique within a block; sibling branches may reuse binders and `@id`s.
 - Control flow is value-producing: a block's value is its last statement's
-  value (empty block → empty record). This keeps the linear binding model
-  uniform and makes conditional/loop results first-class.
-- Step ids are globally unique **within a declaration**, including across `if`
-  branches, so `then`/`else` arms cannot reuse a binder name (checked, A-dup).
-  **Open decision (revisit before v1 freeze):** keep this flat namespace or move
-  to block-local scoping — see spec §4.2 and TASKS → DEC-1.
-- `par` result ordering is by input index (not completion); the first error is
-  the lowest-index one. Iterations write to distinct cache keys/paths, so
-  concurrent cache writes are safe; only the tracer's `emit` is serialised.
-- Scope is threaded into sub-workflow calls too (call-site-prefixed keys):
-  favours per-iteration resume correctness over cross-call cache sharing.
-- Durable-workspace invariant (§8.2) holds through loops/branches: a completed
-  iteration's step is served from cache on resume and its side effect is not
-  re-applied (verified in ControlFlowSpec).
+  value (empty block → empty record).
+- `par` result ordering is by input index; aborts on lowest-index failure.
+- Scope prefix threaded into sub-workflow calls (per-iteration resume over
+  cross-call cache sharing).
+- Durable-workspace invariant (§8.2) holds through loops/branches.
 
 ## Next up
 
-See [TASKS.md](TASKS.md) → carried-over optional items (agent state
-serialisation §8.2.1, OS-level `exec` isolation §7.5, `Bytes`-typed file I/O)
-and the M9+ backlog.
+See [TASKS.md](TASKS.md) → carried-over optional items and M9+ backlog.
