@@ -5,9 +5,20 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — carried-over optional items
+## Now — M9 `while` loops (§4.3)
 
-M1–M8 complete. After H1, remaining near-term work is optional / perf:
+Spec written 2026-07-09. Predicate/body workflow loop with `carry`, decision
+pinning, and `max_iterations`.
+
+- [ ] M9.1 AST + parser: `WhileStmt`, reserved words; extend §3.4 grammar in code
+- [ ] M9.2 Checker: predicate output shape, args, `${carry}` scoping, graph/fps
+- [ ] M9.3 Executor: `execWhile`, scope prefixes (`#i/p/`, `#i/b/`), decision keys
+- [ ] M9.4 Trace + `hwfi show`: `while-pred`, `loop-start` without count for `while`
+- [ ] M9.5 Tests A30–A33; example (e.g. split `coding` into `check`/`fix` + `while`)
+
+## Later — optional items
+
+M1–M8 complete. After M9, remaining near-term work is optional / perf:
 
 - [ ] 8.g (Optional) serialise agent machine state to skip the replay re-walk
       on resume (§8.2.1) — performance only.

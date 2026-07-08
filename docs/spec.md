@@ -131,6 +131,10 @@ Inside a `step` block, one statement per line:
 <bind> <- <qname>(<args>)             -- step id defaults to bind name
 <bind> <- <qname>(<args>) @<id>       -- explicit step id
 _      <- <qname>(<args>) @<id>       -- discard result; id required
+<bind> <- if <cond> { ... } else { ... } @<id>   -- conditional (§4.1)
+<bind> <- foreach v in <list> { ... } @<id>      -- sequential loop (§4.1)
+<bind> <- par(max = N) v in <list> { ... } @<id> -- parallel loop (§4.1)
+<bind> <- while( predicate = ..., ... ) @<id>    -- predicate/body loop (§4.3)
 ```
 
 Rules:
@@ -242,8 +246,16 @@ grouping. `\n` denotes a line terminator.
 (* --- Step block (contents of a ```step fenced code block) --- *)
 
 StepBlock       = Sep? Statement (Sep+ Statement)* Sep? ;
-Statement       = ReturnStmt | StepStmt ;
+Statement       = ReturnStmt | StepStmt | IfStmt | LoopStmt | WhileStmt ;
 StepStmt        = Binder "<-" QName "(" ArgList? ")" StepId? ;
+IfStmt          = Binder "<-" "if" Expr Block ("else" Block)? StepId? ;
+LoopStmt        = Binder "<-" LoopKind Ident "in" Expr Block StepId? ;
+LoopKind        = "foreach" | ParKw ;
+ParKw           = "par" ("(" "max" "=" NumberLit ")")? ;
+WhileStmt       = Binder "<-" "while" "(" WhileArgList ")" StepId? ;
+WhileArgList    = WhileArg ("," WhileArg)* ","? ;
+WhileArg        = Ident "=" Expr ;
+Block           = "{" Sep? Statement (Sep+ Statement)* Sep? "}" ;
 Binder          = Ident | "_" ;
 StepId          = "@" Ident ;
 ReturnStmt      = "return" Record ;
@@ -311,7 +323,9 @@ Whitespace      = (" " | "\t")+ ;             (* insignificant between
 Additional lexical rules:
 
 - Reserved keywords (cannot be `Ident`): `return`, `true`, `false`,
-  `null`, `_`.
+  `null`, `_`, `if`, `else`, `foreach`, `par`, `while`, `in`, `max`,
+  `predicate`, `predicate_args`, `body`, `body_args`, `max_iterations`,
+  `carry`.
 - Horizontal whitespace and comments are permitted between any two
   adjacent tokens without changing meaning.
 - Inside `(...)`, `[...]`, `{...}`, `"..."`, and `"""..."""`, `\n` is
@@ -359,8 +373,9 @@ arguments). The two parsers must not conflate them.
 
 ## 4. Control flow (v1)
 
-- Sequential steps, plus `if`/`else`, `foreach`, and `par` (implemented in M8;
-  see §4.1 for the design and §4.2 for scoping rules).
+- Sequential steps, plus `if`/`else`, `foreach`, `par` (implemented in M8;
+  see §4.1), and `while` (specified in §4.3; implementation milestone M9).
+- See §4.2 for scoping rules shared by all control-flow constructs.
 - Errors abort the workflow; the failing step is recorded and the run is
   resumable from that step.
 
@@ -395,7 +410,8 @@ Control-flow constructs are **value-producing** and use the same
   holds through loops/branches: a completed iteration's side effect is not
   re-applied on resume.
 - Trace: `loop-start`/`loop-iter`/`loop-end` bracket each loop with its kind
-  (`foreach`/`par`) and count; `if-branch` records the taken arm (§8.3.2).
+  (`foreach`/`par`/`while`); `if-branch` records the taken arm; `while-pred`
+  records each predicate decision (§4.3.6).
 
 ### 4.2 Identifier scoping in control-flow blocks
 
@@ -417,6 +433,231 @@ static id; the executor disambiguates dynamically via the step-key scope prefix
 Rationale: mirrored branches and loops read naturally without inventing distinct
 names for structurally identical steps; the scope-prefix machinery (§4.1) already
 keeps cache keys and resume unambiguous.
+
+### 4.3 `while` — predicate/body workflow loop
+
+**Status: specified — not yet implemented (milestone M9).**
+
+`while` is a **value-producing** control-flow construct that repeatedly
+invokes two declared workflows — a **predicate** `p` and a **body** `b` — until
+`p` reports that iteration should stop, or a static iteration cap is reached.
+Unlike `foreach`/`par`, the iteration count is **not known upfront**; unlike
+`builtin/llm-agent` (§6.1), orchestration stays at **workflow step
+granularity**: each predicate and body invocation is an ordinary nested
+sub-workflow call with its own trace, cache keys, and resume behaviour.
+
+Use `while` when discrete, cacheable workflow steps per round matter (e.g.
+`workflows/check` → `workflows/fix`). Use `builtin/llm-agent` when the model
+should freely choose tools within a round.
+
+#### 4.3.1 Syntax
+
+```
+<bind> <- while(
+  predicate = <callee>,
+  predicate_args = { <field> = <expr>, ... },
+  body = <callee>,
+  body_args = { <field> = <expr>, ... },
+  max_iterations = <expr>
+) @<id>
+```
+
+- `<callee>` is a static qname (`workflows/check`) or a `${ref}` where `ref`
+  has type `WorkflowRef<In, Out>` in the enclosing binding environment
+  (§5.1).
+- `predicate_args` and `body_args` are **required** records; use `{}` when the
+  callee takes no inputs.
+- `max_iterations` is a required `Int` expression (static literal or binding);
+  it must evaluate to a value `≥ 1` at runtime. Reaching the cap without
+  `continue = false` aborts the run with an `Error` of kind `user`
+  (§8.3.2).
+- `_ <- while(...) @id` discards the accumulated body results (side-effect-only
+  loop).
+- The construct requires an explicit `@id` when the binder is `_` (§3.1).
+
+Example:
+
+```step
+results <- while(
+  predicate = workflows/check_done,
+  predicate_args = { target = ${inputs.target} },
+  body = workflows/refine,
+  body_args = { target = ${inputs.target} },
+  max_iterations = 20
+) @refine_loop
+return { iterations = ${results} }
+```
+
+#### 4.3.2 Predicate contract
+
+The predicate workflow's declared `outputs` must be a record that **structurally
+includes** at least:
+
+```
+Record<{ continue: Bool, reason: String, ... }>
+```
+
+- `continue : Bool` — when `true`, the engine runs one body iteration (if the
+  cap allows) and then re-evaluates the predicate; when `false`, the `while`
+  terminates successfully.
+- `reason : String` — human-readable explanation of the decision, persisted in
+  the trace (§4.3.6) for debugging and agent introspection. Not interpreted by
+  the engine beyond logging.
+
+Extra output fields are permitted and are ignored by the loop machinery.
+
+The predicate may be any workflow — including one that calls `builtin/llm-agent`,
+reads the workspace, or runs `builtin/exec`. There is no restriction that `p`
+must be deterministic; resume semantics for non-deterministic predicates are in
+§4.3.5.
+
+#### 4.3.3 Body contract and loop value
+
+The body workflow is invoked once per iteration for which the predicate returned
+`continue = true`. Its declared `outputs` type is `U`.
+
+- When the `while` binds a name (`xs <- while(...) @id`), the construct's value
+  is `List<U>` — the list of body results in iteration order (map semantics,
+  same as `foreach`).
+- When the binder is `_`, no value constraint is imposed on the body beyond
+  ordinary workflow return rules.
+
+#### 4.3.4 Iteration state and `carry`
+
+Sub-workflows do not inherit the parent's binding environment (§5.3); they
+receive only their declared `inputs`. State between iterations therefore flows
+through:
+
+1. **Workspace mutations** (primary v1 pattern). The body mutates files; the
+   predicate inspects them on the next round.
+2. **Re-evaluated args.** `predicate_args` and `body_args` are evaluated in the
+   **enclosing workflow's** binding environment immediately before each
+   invocation, so they may reference bindings from earlier steps in the same
+   workflow body.
+3. **`carry` — the previous body result.** After iteration `i ≥ 0` completes,
+   the body’s return value is available as `${carry}` in `predicate_args` and
+   `body_args` for iteration `i + 1` only. `${carry}` is **not in scope** for
+   iteration `0`; referencing it there is a static type-check error. The type of
+   `carry` is the body workflow's output type `U` (§4.3.3).
+
+There is no implicit threading of predicate outputs into body inputs; wire
+explicit fields in `body_args` if needed.
+
+#### 4.3.5 Execution semantics
+
+For a `while` with static id `w` at scope prefix `P` (§4.1):
+
+```
+i ← 0
+emit loop-start (kind = "while", no count yet)
+while true:
+  emit loop-iter (i)
+  evaluate predicate_args (carry in scope iff i > 0)
+  run predicate at scope P <> w <> "#" <> i <> "/p/"
+  extract continue, reason from predicate outputs
+  emit while-pred (i, continue, reason)
+  pin predicate decision for resume (below)
+  if not continue: break
+  if i >= max_iterations: abort (kind user)
+  evaluate body_args (carry in scope iff i > 0)
+  run body at scope P <> w <> "#" <> i <> "/b/"
+  bind carry ← body result for next iteration
+  i ← i + 1
+emit loop-end (final count = i)
+```
+
+- Predicate and body invocations are **sequential**; there is no `par` variant
+  of `while`.
+- Errors in either callee abort the enclosing run (§4), same as a failed step
+  call.
+- Each nested step inside `p` or `b` uses the call-site scope prefix
+  (`P/w#i/p/` or `P/w#i/b/`) so per-iteration resume matches `foreach`
+  (§4.1).
+
+**Resume and predicate decision pinning.** A completed iteration's predicate
+decision must replay identically on resume even when the predicate sub-workflow
+is non-cacheable as a whole (e.g. it contains `builtin/llm-agent`, §8.1).
+
+After predicate `i` completes, the engine persists
+`{ continue, reason }` under a **decision key**:
+
+```
+decision-key(i) = hash( qname, P <> w, "while-pred", i )
+```
+
+On resume, if `decision-key(i)` exists, the predicate sub-workflow for
+iteration `i` is **not** re-invoked; the stored `continue`/`reason` are used
+and a `while-pred` event is not re-emitted (same “no duplicate events on cache
+hit” rule as §8.2). If the key is absent, the predicate runs normally.
+
+Body invocations use ordinary sub-workflow / step caching under scope
+`P/w#i/b/`. A partially completed body resumes from the first uncached step
+inside it.
+
+**Durable-workspace invariant** (§8.2) applies unchanged: a completed body
+iteration's mutating steps are not re-applied on resume.
+
+#### 4.3.6 Trace
+
+`while` reuses the loop bracket events from §4.1 with `kind = "while"`:
+
+- `loop-start` — emitted once on entry. Unlike `foreach`/`par`, **`count` is
+  omitted** (iteration total unknown).
+- `loop-iter` — emitted at the start of each iteration (0-based index).
+- `loop-end` — emitted on normal exit with `count` set to the **number of
+  predicate evaluations** performed (including the evaluation that returned
+  `continue = false`). On abort by `max_iterations`, `count` is the number of
+  predicate evaluations before the abort (the cap violation is detected after
+  a `continue = true` result).
+
+Additionally, each predicate evaluation emits:
+
+```
+| WhilePred {
+    tag       : "while-pred",
+    seq, at, qname, step_id,    -- enclosing workflow + while @id
+    iteration : Int,            -- 0-based
+    continue  : Bool,
+    reason    : String
+  }
+```
+
+On resume, pinned decisions do not re-emit `while-pred` (§4.3.5).
+
+#### 4.3.7 Type-checking
+
+In addition to §5.6:
+
+1. `predicate` and `body` must resolve to executable workflows (or
+   `WorkflowRef` values whose output types are known).
+2. `predicate_args` / `body_args` must match the corresponding callee's
+   `inputs` record.
+3. The predicate's `outputs` must include `continue: Bool` and
+   `reason: String` (structural check).
+4. `${carry}` may appear only in `predicate_args` / `body_args` of a `while`;
+   its type is the body's `outputs` type. It is an error to reference `carry`
+   from any other position.
+5. `max_iterations` must have type `Int`.
+6. When the `while` binds a value, the body's `outputs` type must be known and
+   the construct's result type is `List<that type>`.
+7. `predicate` and `body` are **direct callees** for import-graph and Merkle
+   fingerprint purposes (§8.1), same as a step call.
+8. Static import cycles through `while` callees are rejected (§5.6.6). Runtime
+   unbounded recursion is bounded by `max_iterations`.
+
+#### 4.3.8 Relation to `builtin/llm-agent`
+
+| Concern | `while(p, b)` | `builtin/llm-agent` |
+|---------|---------------|------------------------|
+| Who decides to continue? | Predicate workflow (may contain an agent) | Model each round |
+| Granularity | One trace step per workflow invocation | One trace step for the whole loop |
+| Per-round caching | Sub-workflow step keys + decision pinning | Intra-step model/tool sub-keys (§8.2.1) |
+| Typed loop output | `List<U>` from body declarations | `{ text, rounds }` or `{ value, rounds }` |
+| Best for | Scripted rounds with optional agent in `p` or `b` | Model-driven tool choice within a round |
+
+A predicate workflow that *is* an `llm-agent` step returning
+`{ continue, reason }` via a `submit` schema is valid; decision pinning
+(§4.3.5) makes resume deterministic.
 
 ## 5. Type system (v1)
 
@@ -520,6 +761,9 @@ sensitive value. Rules:
    cycles (the model lets A call B which calls A) are bounded at runtime by
    `max_rounds`, not by the acyclic-call-graph rule of §5.6.6, which only
    covers *static* calls.
+10. `while` (§4.3): `predicate` and `body` callees, `predicate_args` /
+    `body_args`, `max_iterations`, predicate output shape, and `${carry}`
+    scoping rules are checked as specified in §4.3.7.
 
 ### 5.7 Environment access (`ctx.env`)
 
@@ -1315,6 +1559,34 @@ TraceEvent =
       round    : Int,
       finished : Bool              -- true if the model terminated this round
     }
+  | IfBranch {
+      tag     : "if-branch",
+      seq, at, qname, step_id,
+      branch  : "then" | "else" | "none"
+    }
+  | LoopStart {
+      tag     : "loop-start",
+      seq, at, qname, step_id,
+      kind    : "foreach" | "par" | "while",
+      count   : Int?              -- present for foreach/par; omitted for while
+    }
+  | LoopIter {
+      tag       : "loop-iter",
+      seq, at, qname, step_id,
+      iteration : Int             -- 0-based
+    }
+  | LoopEnd {
+      tag   : "loop-end",
+      seq, at, qname, step_id,
+      count : Int                 -- iteration count (see §4.1, §4.3.6)
+    }
+  | WhilePred {
+      tag       : "while-pred",
+      seq, at, qname, step_id,
+      iteration : Int,
+      continue  : Bool,
+      reason    : String
+    }
   | Resumed {
       tag      : "resumed",
       seq, at,
@@ -1693,6 +1965,16 @@ A26. An agent (`builtin/llm-agent`) advertised the mutation and `exec`
     tools can edit a source file and run an allowlisted build/test command,
     reacting to a non-zero `exit_code` in a subsequent round (§6.1, §6.2,
     §6.3).
+A30. A `while` loop invokes `predicate` then `body` until `continue` is
+    `false`, producing `List<U>` from body outputs; reaching `max_iterations`
+    without termination aborts with kind `user` (§4.3).
+A31. Killing a run mid-`while` and resuming does not re-apply completed body
+    iterations' workspace side effects; predicate decisions are replayed from
+    pinned decision keys (§4.3.5, §8.2).
+A32. A `while` whose predicate workflow contains `builtin/llm-agent` replays the
+    same `continue` decision on resume without re-invoking the predicate (§4.3.5).
+A33. `${carry}` in `predicate_args`/`body_args` is rejected at `hwfi check`
+    when it would be in scope for iteration 0 (§4.3.4).
 
 The following are specified for optional v1.1 (§8.4) and are not required
 in v1:
@@ -1718,6 +2000,9 @@ A29. With `project.json` `budget.max_cost_usd` set, a provider call that
 - Circular tool imports: rejected at type-check.
 - Trace growth over long runs: `trace.jsonl` is append-only text; v1
   imposes no size cap. Rotation deferred to v1.1.
+- `while` with a predicate that reads volatile `ctx` fields: the predicate
+  is re-executed on resume unless a decision key already exists (§4.3.5).
+  Authors should prefer workspace-backed state for resume-stable loops.
 
 ## 13. Explicitly deferred to v1.1+
 

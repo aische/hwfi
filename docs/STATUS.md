@@ -1,19 +1,18 @@
 # Status
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 
 ## Current focus
 
-**§9.7 user-level key store shipped.** `$XDG_CONFIG_HOME/hwfi/.env` is now
-the lowest-precedence provider-key source (below process env). 235 tests green.
+**M9 `while` loops** — spec §4.3 drafted; implementation not started. Prior
+milestones M1–M8 + H1 + optional 9.7/9.8 complete. 235 tests green.
 
 ## Done recently
 
-- **9.7:** user config `.env` via `getXdgDirectory`; precedence tests; spec §7.2
-  + `CatalogMissingKey` message updated.
-- **9.8:** usage/cost accounting (`RunUsage`, `Usage`, budget gate, `hwfi show`).
-- **H1** runtime hardening complete (2026-07-08).
-- **M8** control flow complete (2026-07-08).
+- **§4.3:** `while(predicate, body)` control flow specified — predicate/body
+  workflows, `carry`, decision pinning on resume, trace schema (2026-07-09).
+- **9.7:** user config `.env`; **9.8:** usage/cost accounting.
+- **H1** runtime hardening; **M8** control flow.
 
 ## Blockers
 
@@ -21,4 +20,4 @@ the lowest-precedence provider-key source (below process env). 235 tests green.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → optional items (8.g, 9.1–9.6).
+[TASKS.md](TASKS.md) → **M9** (`while` implementation), then optional 8.g / 9.1–9.6.
