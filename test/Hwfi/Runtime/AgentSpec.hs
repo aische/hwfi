@@ -24,6 +24,8 @@ import Hwfi.Runtime.Agent
   )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
+import Hwfi.Runtime.RunUsage (emptyRunUsage)
+import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.RunStore (RunStore, createRunStore)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), Tracer, newTracer, snapshotEvents)
 import Hwfi.Runtime.Value (RValue (..))
@@ -50,82 +52,87 @@ spec :: Spec
 spec = describe "Agent loop (§6.1)" $ do
   describe "builtin/llm-agent — free-text termination" $ do
     it "drives a tool round then returns the model's final text (A17)" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [searchCall "c1", textResp "The answer is 42."]
-        res <- runAgent (env store tracer False (countingDispatch calls searchResult)) (textSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (textSpec gw)
         res `shouldBe` Right (record [("text", VString "The answer is 42."), ("rounds", VInt 2)])
         readIORef calls `shouldReturn` 1
 
     it "feeds an unknown tool name back as a recoverable result (§6.1.4)" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [toolResp "c1" "does_not_exist" (object []), textResp "done"]
-        res <- runAgent (env store tracer False (countingDispatch calls searchResult)) (textSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (textSpec gw)
         res `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 2)])
         -- The unknown tool never reaches dispatch.
         readIORef calls `shouldReturn` 0
 
     it "fails fatally when max_rounds is exhausted without terminating (§6.1.4)" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [searchCall "c1", searchCall "c2", searchCall "c3"]
             spec' = (textSpec gw) {asMaxRounds = 1}
-        res <- runAgent (env store tracer False (countingDispatch calls searchResult)) spec'
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) spec'
         reKind (fromLeft res) `shouldBe` KLlm
 
   describe "builtin/llm-agent-object — submit termination" $ do
     it "returns the validated submit payload as the typed value (A19)" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [searchCall "c1", submitCall "c2" (object ["answer" .= ("42" :: Text)])]
-        res <- runAgent (env store tracer False (countingDispatch calls searchResult)) (objectSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("42" :: Text)])), ("rounds", VInt 2)])
 
     it "rejects a round mixing submit with another call, then accepts submit alone (§6.1.3)" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let gw =
               scriptedGateway
                 [ mixedResp,
                   submitCall "c9" (object ["answer" .= ("late" :: Text)])
                 ]
-        res <- runAgent (env store tracer False (countingDispatch calls searchResult)) (objectSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("late" :: Text)])), ("rounds", VInt 2)])
         evs <- snapshotEvents tracer
         any recoverableToolResult evs `shouldBe` True
 
     it "feeds a schema-invalid submit back as recoverable, then accepts a valid one (§6.1.3)" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let gw =
               scriptedGateway
                 [ submitCall "c1" (object ["wrong" .= ("x" :: Text)]),
                   submitCall "c2" (object ["answer" .= ("ok" :: Text)])
                 ]
-        res <- runAgent (env store tracer False (countingDispatch calls searchResult)) (objectSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("ok" :: Text)])), ("rounds", VInt 2)])
 
   describe "intra-step caching and resume (§8.2.1, A21)" $ do
     it "replays cached model and tool calls without re-invoking either on resume" $
-      withEnv $ \store tracer -> do
+      withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
         let liveGw = scriptedGateway [searchCall "c1", textResp "cached answer"]
-        primed <- runAgent (env store tracer False (countingDispatch calls searchResult)) (textSpec liveGw)
+        primed <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (textSpec liveGw)
         primed `shouldBe` Right (record [("text", VString "cached answer"), ("rounds", VInt 2)])
         readIORef calls `shouldReturn` 1
         -- Resume against a gateway/dispatch that fail if touched: the cache must
         -- satisfy every model and tool call.
         tracer2 <- newTracer
+        usageBefore <- readIORef (usRef usageSeam)
         resumed <-
           runAgent
-            (env store tracer2 True explodingDispatch)
+            (env store tracer2 usageSeam True explodingDispatch)
             (textSpec explodingGateway)
         resumed `shouldBe` primed
+        usageAfter <- readIORef (usRef usageSeam)
+        usageAfter `shouldBe` usageBefore
+        evs2 <- snapshotEvents tracer2
+        length [() | TraceEvent _ _ (LlmCall {}) <- evs2] `shouldBe` 0
 
   describe "coding loop end-to-end (§6.2, §6.3, A26)" $
     it "reacts to a failing exec by editing a file and re-running until it passes" $
-      withCodingEnv $ \store tracer ws -> do
+      withCodingEnv $ \store tracer usageSeam ws -> do
         -- The source lacks the token the build checks for, so the first build
         -- fails; the agent must edit it and re-run.
         _ <- writeTextFile ws "src.txt" "foo\n"
@@ -136,10 +143,11 @@ spec = describe "Agent loop (§6.1)" $ do
                   beTracer = tracer,
                   beStep = StepRef mainQ "agent",
                   beExecPolicy = Just codingPolicy,
+                  beUsage = usageSeam,
                   beIntrospect = pure Null
                 }
             dispatch q _sid args = runBuiltin benv q args
-        res <- runAgent (env store tracer False dispatch) codingSpec
+        res <- runAgent (env store tracer usageSeam False dispatch) codingSpec
         res `shouldBe` Right (record [("text", VString "build passed"), ("rounds", VInt 4)])
         -- The edit was actually applied to the sandboxed workspace.
         edited <- readTextFile ws "src.txt"
@@ -283,36 +291,40 @@ submitSchema =
 
 -- Environment ----------------------------------------------------------------
 
-withEnv :: (RunStore -> Tracer -> IO a) -> IO a
+withEnv :: (RunStore -> Tracer -> UsageSeam -> IO a) -> IO a
 withEnv k =
   withSystemTempDirectory "hwfi-agent" $ \dir -> do
     store <- createRunStore dir "run-agent"
+    usageSeam <- newUsageSeam store Nothing emptyRunUsage
     tracer <- newTracer
-    k store tracer
+    k store tracer usageSeam
 
 -- | Like 'withEnv' but also provides a real sandboxed workspace so tool calls
 -- can genuinely mutate files and run commands (A26).
-withCodingEnv :: (RunStore -> Tracer -> Workspace -> IO a) -> IO a
+withCodingEnv :: (RunStore -> Tracer -> UsageSeam -> Workspace -> IO a) -> IO a
 withCodingEnv k =
   withSystemTempDirectory "hwfi-coding" $ \dir -> do
     store <- createRunStore dir "run-agent"
+    usageSeam <- newUsageSeam store Nothing emptyRunUsage
     tracer <- newTracer
     let wsDir = dir </> "ws"
     createDirectoryIfMissing True wsDir
     ws <- newWorkspace wsDir
-    k store tracer ws
+    k store tracer usageSeam ws
 
 env ::
   RunStore ->
   Tracer ->
+  UsageSeam ->
   Bool ->
   (QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue)) ->
   AgentEnv
-env store tracer resume dispatch =
+env store tracer usageSeam resume dispatch =
   AgentEnv
     { aeTracer = tracer,
       aeStore = store,
       aeResume = resume,
+      aeUsage = usageSeam,
       aeQName = mainQ,
       aeStepId = "agent",
       aeStepKey = "step-key-fixed",

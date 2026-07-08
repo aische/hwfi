@@ -15,6 +15,7 @@ import Hwfi.Runtime.RunStore
     withWorkspaceLock,
     writeRunMeta,
   )
+import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Control.Monad (join)
@@ -28,7 +29,8 @@ sampleMeta =
       rmStartedAt = "2026-07-07T00:00:00.000Z",
       rmProjectHash = "abc123",
       rmInputs = object ["src" .= ("in.txt" :: String)],
-      rmPhase = PhaseRunning
+      rmPhase = PhaseRunning,
+      rmUsage = emptyRunUsage
     }
 
 spec :: Spec

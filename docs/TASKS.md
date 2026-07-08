@@ -22,10 +22,6 @@ M1–M8 complete. After H1, remaining near-term work is optional / perf:
 - [ ] 9.6 `trace.jsonl` rotation
 - [ ] 9.7 User-level key store (e.g. `$XDG_CONFIG_HOME/hwfi/.env`) as
       a lower-precedence source in §7.2
-- [ ] 9.8 (Optional) usage and cost accounting (§8.4): per-call `cost_usd`
-      on `llm-call`; run-scoped running total in `run.json` and
-      `ctx.run.usage`; optional `project.json` `budget.max_cost_usd`;
-      cached/resumed provider calls bill $0; `hwfi show` usage summary.
 
 ## Done
 
@@ -85,6 +81,11 @@ _Move items here temporarily, then archive to
       one-shot LLM step-keys (§8.1); sub-workflow scope threading (§4.1); crash
       handler with `PhaseCrashed` + `run-end` (`crashed`) (§8.2). Source:
       [code-issues.md](code-issues.md). (2026-07-08)
+- [x] 9.8 (Optional) usage and cost accounting (§8.4): per-call `cost_usd`
+      on `llm-call`; run-scoped running total in `run.json` and
+      `ctx.run.usage`; optional `project.json` `budget.max_cost_usd`;
+      cached/resumed provider calls bill $0; `hwfi show` usage summary.
+      `Hwfi.Runtime.{RunUsage,Usage}`; tests A27–A29. (2026-07-08)
 - [x] M8 control flow (8.1–8.3): `Statement` extended with `SIf`/`SLoop`
       (`Hwfi.Ast.Step`); `if`/`else`, `foreach`, `par(max = N)` parsing +
       reserved words; recursive checker (branch typing + mandatory `else`,

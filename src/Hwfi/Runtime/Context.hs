@@ -20,6 +20,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Hwfi.Ast.Name (Ident, QName, renderQName)
 import Hwfi.Runtime.Trace (TraceEvent, eventToJson)
+import Hwfi.Runtime.RunUsage (RunUsage (..), usageRecordValue)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Type (isSecretEnvName)
 
@@ -51,8 +52,8 @@ buildEnvRecord vars =
 -- | Build the ambient @ctx@ value for a step (spec §5.2). @q@\/@stepId@ are the
 -- enclosing workflow qname and the step id; @events@ is the trace snapshot the
 -- step observes (§8.3.5).
-contextValue :: RunInfo -> QName -> Ident -> [TraceEvent] -> RValue
-contextValue ri q stepId events =
+contextValue :: RunInfo -> RunUsage -> QName -> Ident -> [TraceEvent] -> RValue
+contextValue ri usage q stepId events =
   VRecord $
     Map.fromList
       [ ("workspace", VFileRef "."),
@@ -61,7 +62,8 @@ contextValue ri q stepId events =
             Map.fromList
               [ ("id", VString (riRunId ri)),
                 ("started_at", VString (riStartedAt ri)),
-                ("entrypoint", VString (riEntrypoint ri))
+                ("entrypoint", VString (riEntrypoint ri)),
+                ("usage", usageRecordValue usage)
               ]
         ),
         ( "self",

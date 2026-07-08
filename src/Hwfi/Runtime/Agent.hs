@@ -1,22 +1,22 @@
 -- | The agentic tool-use loop for @builtin/llm-agent@ /
--- @builtin/llm-agent-object@ (spec §6.1).
+-- @builtin/llm-agent-object@ (spec ?6.1).
 --
 -- Where the one-shot LLM builtins are workflow-driven, this is LLM-driven:
 -- within a single step the model is advertised a set of tools (the project's
 -- own declarations) and autonomously issues tool calls in a loop until it
--- yields a final answer (§6.1). The loop is expressed as an explicit
+-- yields a final answer (?6.1). The loop is expressed as an explicit
 -- round\/tool-call state machine over 'RValue', modelled on the reference
 -- evaluator in @../llm-workflow@ but without @unsafeCoerce@ (hwfi values are
 -- already dynamically typed). A model-chosen tool call is reified as a nested
 -- executor step ('aeDispatch') so its effects go through the sandboxed
--- 'Hwfi.Runtime.Workspace' and its events nest under the agent step (§6.1.2,
--- §8.3.3.7).
+-- 'Hwfi.Runtime.Workspace' and its events nest under the agent step (?6.1.2,
+-- ?8.3.3.7).
 --
--- Determinism vs. caching (§8.1, §8.2.1): the agent step is a non-cacheable
+-- Determinism vs. caching (?8.1, ?8.2.1): the agent step is a non-cacheable
 -- black box, but every /model call/ and every /tool call/ inside it is
 -- individually content-addressed under the enclosing agent step-key and reused
 -- from 'RunStore' on resume. A resumed loop therefore replays deterministically
--- — reusing the model's prior choices and tool results — without re-paying LLM
+-- ��� reusing the model's prior choices and tool results ��� without re-paying LLM
 -- calls or re-running tool side effects. Caching is consulted only on resume
 -- ('aeResume'); every attempt writes cache entries (mirroring the executor).
 module Hwfi.Runtime.Agent
@@ -60,18 +60,20 @@ import Hwfi.Compat
     noHooks,
   )
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), llmError)
+import Hwfi.Runtime.Gateways (primaryModel)
 import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, lookupCachedResult)
 import Hwfi.Runtime.Schema (recordSchema)
 import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (EventBody (..), Tracer, emit)
+import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
 import Hwfi.Type (Type)
 import LLM (defaultDebugHooks)
 
 -- | One tool advertised to the model: the resolved ref's qname, its provider
--- 'ToolDef' (schema-translated inputs, §6.1.1), the declared input\/output
+-- 'ToolDef' (schema-translated inputs, ?6.1.1), the declared input\/output
 -- types (for coercion), and its Merkle fingerprint (for the tool-call sub-key,
--- §8.2.1).
+-- ?8.2.1).
 data AdvertisedTool = AdvertisedTool
   { atQName :: QName,
     atToolDef :: ToolDef,
@@ -79,7 +81,7 @@ data AdvertisedTool = AdvertisedTool
     atFingerprint :: Text
   }
 
--- | The terminating @submit@ tool of @builtin/llm-agent-object@ (§6.1.3): the
+-- | The terminating @submit@ tool of @builtin/llm-agent-object@ (?6.1.3): the
 -- JSON Schema its arguments are validated against, and the 'ToolDef' advertised
 -- to the model.
 data SubmitSpec = SubmitSpec
@@ -93,7 +95,7 @@ data AgentSpec = AgentSpec
     asPrompt :: Text,
     asModelName :: Text,
     asModel :: ModelWithFallbacks,
-    -- | Catalog fingerprint of 'asModelName' for the model-call sub-key (§8.2.1).
+    -- | Catalog fingerprint of 'asModelName' for the model-call sub-key (?8.2.1).
     asModelFingerprint :: Text,
     asTools :: [AdvertisedTool],
     asMaxRounds :: Int,
@@ -106,17 +108,19 @@ data AgentSpec = AgentSpec
 data AgentEnv = AgentEnv
   { aeTracer :: Tracer,
     aeStore :: RunStore,
-    -- | Consult the intra-step cache only on resume (§8.2). Always written.
+    -- | Consult the intra-step cache only on resume (?8.2). Always written.
     aeResume :: Bool,
-    -- | Enclosing workflow qname (for the agent step's own events, §8.3.1).
+    -- | Run-scoped usage accounting and optional budget (?8.4).
+    aeUsage :: UsageSeam,
+    -- | Enclosing workflow qname (for the agent step's own events, ?8.3.1).
     aeQName :: QName,
     -- | The agent step id.
     aeStepId :: Ident,
-    -- | The enclosing agent step-key that namespaces every sub-key (§8.2.1).
+    -- | The enclosing agent step-key that namespaces every sub-key (?8.2.1).
     aeStepKey :: Text,
     -- | Run a resolved ref (builtin or workflow) as a nested step, tagged with
     -- the given @(qname, step_id)@. Emits no step-start\/end wrapper itself; the
-    -- loop brackets it (§8.3.3.7).
+    -- loop brackets it (?8.3.3.7).
     aeDispatch :: QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue)
   }
 
@@ -128,9 +132,9 @@ data AgentResponse = AgentResponse
     arToolCalls :: [ToolCall]
   }
 
--- | Run the agent loop, returning the step's result record (spec §6.1):
+-- | Run the agent loop, returning the step's result record (spec ?6.1):
 -- @{ text, rounds }@ for @builtin/llm-agent@ or @{ value, rounds }@ for
--- @builtin/llm-agent-object@. A 'Left' is a fatal error (§6.1.4).
+-- @builtin/llm-agent-object@. A 'Left' is a fatal error (?6.1.4).
 runAgent :: AgentEnv -> AgentSpec -> IO (Either RuntimeError RValue)
 runAgent env spec = driveRounds env spec [UserTurn (asPrompt spec)] 0
 
@@ -142,11 +146,11 @@ driveRounds env spec messages roundIx
       pure . Left . llmError $
         "agent reached max_rounds ("
           <> tshow (asMaxRounds spec)
-          <> ") without terminating (§6.1.3, §6.1.4)"
+          <> ") without terminating (?6.1.3, ?6.1.4)"
   | otherwise = do
       -- 'AgentRoundStart'/'AgentRoundEnd' are emitted lazily: a round whose
       -- model call and tool calls are all served from cache on resume emits no
-      -- new events (§8.3.3.7), so the marker is written on the first real event.
+      -- new events (?8.3.3.7), so the marker is written on the first real event.
       startedRef <- newIORef False
       let ensureStart = do
             started <- readIORef startedRef
@@ -178,7 +182,7 @@ driveRounds env spec messages roundIx
 -- | Terminate a round in which the model produced no tool calls: for
 -- @builtin/llm-agent@ this is the final free-text answer; for
 -- @builtin/llm-agent-object@ finishing without a @submit@ is a hard error
--- (§6.1.3).
+-- (?6.1.3).
 finishTextRound :: AgentEnv -> AgentSpec -> AgentResponse -> Int -> IO (Either RuntimeError RValue)
 finishTextRound _ spec assistant roundIx = case asSubmit spec of
   Nothing ->
@@ -186,26 +190,32 @@ finishTextRound _ spec assistant roundIx = case asSubmit spec of
       VRecord (Map.fromList [("text", VString (arText assistant)), ("rounds", roundsValue roundIx)])
   Just _ ->
     pure . Left . llmError $
-      "agent finished with plain text but this step requires a terminating submit call (§6.1.3)"
+      "agent finished with plain text but this step requires a terminating submit call (?6.1.3)"
 
--- Model call (cached per round, §8.2.1) --------------------------------------
+-- Model call (cached per round, ?8.2.1) --------------------------------------
 
 runModelCall :: AgentEnv -> AgentSpec -> [Turn] -> Int -> IO () -> IO (Either RuntimeError AgentResponse)
 runModelCall env spec messages roundIx ensureStart = do
   let key = modelSubKey env spec messages roundIx
   mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
   case mCached >>= decodeResponse of
-    Just cached -> pure (Right cached) -- cache hit: no new events (§8.3.3.7)
+    Just cached -> pure (Right cached) -- cache hit: no new events (?8.3.3.7)
     Nothing -> do
       ensureStart
-      result <- generateTextWithFallbacks (genReq spec messages) (asModel spec)
-      case result of
-        Left gerr -> pure (Left (llmError ("agent model call failed: " <> tshow gerr)))
-        Right resp -> do
-          let assistant = responseOf resp
-          emitLlmCall env spec messages resp
-          cacheStepResult (aeStore env) key (encodeResponse assistant)
-          pure (Right assistant)
+      budget <- checkBudgetSeam (aeUsage env)
+      case budget of
+        Left err -> pure (Left err)
+        Right _ -> do
+          result <- generateTextWithFallbacks (genReq spec messages) (asModel spec)
+          case result of
+            Left gerr -> pure (Left (llmError ("agent model call failed: " <> tshow gerr)))
+            Right resp -> do
+              let assistant = responseOf resp
+                  usage = maybe (Usage 0 0 0) id resp.respUsage
+              cost <- recordBilledCall (aeUsage env) (primaryModel (asModel spec)) usage
+              emitLlmCall env spec messages resp cost
+              cacheStepResult (aeStore env) key (encodeResponse assistant)
+              pure (Right assistant)
 
 genReq :: AgentSpec -> [Turn] -> GenRequest
 genReq spec messages =
@@ -226,7 +236,7 @@ responseOf resp =
       arToolCalls = [tc | ToolCallBlock tc <- resp.respContent]
     }
 
--- Tool calls (each cached per (round, call-index), §8.2.1) --------------------
+-- Tool calls (each cached per (round, call-index), ?8.2.1) --------------------
 
 -- | The outcome of running a round's tool calls.
 data ToolOutcome
@@ -234,12 +244,12 @@ data ToolOutcome
     Terminated RValue
   | -- | All calls ran (possibly with recoverable errors); feed results back.
     Continue [ToolResult]
-  | -- | A fatal (non-recoverable) failure aborts the run (§6.1.4).
+  | -- | A fatal (non-recoverable) failure aborts the run (?6.1.4).
     FatalTool RuntimeError
 
 runToolCalls :: AgentEnv -> AgentSpec -> [ToolCall] -> Int -> IO () -> IO ToolOutcome
 runToolCalls env spec toolCalls roundIx ensureStart
-  -- §6.1.3: a round mixing 'submit' with other calls is rejected wholesale — no
+  -- ?6.1.3: a round mixing 'submit' with other calls is rejected wholesale ��� no
   -- call runs, and the model is told to call submit alone.
   | mixesSubmit = rejectMixedSubmit env roundIx ensureStart toolCalls
   | otherwise = go 0 [] toolCalls
@@ -273,12 +283,12 @@ runOneCall env spec roundIx callIx ensureStart tc
       Just tool -> runAdvertisedCall env roundIx callIx ensureStart tc tool
 
 -- | Run an advertised (non-@submit@) tool call as a nested executor step,
--- honouring the tool-call sub-cache (§8.2.1, §6.1.2).
+-- honouring the tool-call sub-cache (?8.2.1, ?6.1.2).
 runAdvertisedCall :: AgentEnv -> Int -> Int -> IO () -> ToolCall -> AdvertisedTool -> IO CallOutcome
 runAdvertisedCall env roundIx callIx ensureStart tc tool =
   case coerceArgs (atInputs tool) tc.tcArguments of
     Left reason -> do
-      -- §6.1.4: malformed/ill-typed arguments are recoverable.
+      -- ?6.1.4: malformed/ill-typed arguments are recoverable.
       ensureStart
       emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
       recoverable env roundIx callIx (renderQName (atQName tool)) tc ("invalid arguments: " <> reason)
@@ -302,7 +312,7 @@ runAdvertisedCall env roundIx callIx ensureStart tc tool =
                   void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
                   pure (CallFatal err)
               | otherwise -> do
-                  -- §6.1.4: a tool result the callee surfaces as an error is recoverable.
+                  -- ?6.1.4: a tool result the callee surfaces as an error is recoverable.
                   void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
                   recoverable env roundIx callIx (renderQName (atQName tool)) tc ("tool error: " <> reMessage err)
             Right result -> do
@@ -313,7 +323,7 @@ runAdvertisedCall env roundIx callIx ensureStart tc tool =
                 emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
               pure (CallResult (toolResult tc (canonicalJson redacted)))
 
--- | Run the terminating @submit@ call (§6.1.3). Because a mixed submit round is
+-- | Run the terminating @submit@ call (?6.1.3). Because a mixed submit round is
 -- rejected earlier, submit is guaranteed to be the sole call here.
 runSubmitCall :: AgentEnv -> AgentSpec -> Int -> Int -> IO () -> ToolCall -> IO CallOutcome
 runSubmitCall env spec roundIx callIx ensureStart tc = do
@@ -325,7 +335,7 @@ runSubmitCall env spec roundIx callIx ensureStart tc = do
       recoverable env roundIx callIx submitToolName tc "submit is not available for this agent step"
     Just submit -> case validateSubmit (ssSchema submit) tc.tcArguments of
       Left reason ->
-        -- §6.1.3: a decode failure is recoverable — the model can retry.
+        -- ?6.1.3: a decode failure is recoverable ��� the model can retry.
         recoverable env roundIx callIx submitToolName tc ("submit decode error: " <> reason)
       Right validated -> do
         void $
@@ -333,7 +343,7 @@ runSubmitCall env spec roundIx callIx ensureStart tc = do
         pure . CallTerminated $
           VRecord (Map.fromList [("value", VJson validated), ("rounds", roundsValue roundIx)])
 
--- | Reject a round that mixes @submit@ with other tool calls (§6.1.3): feed a
+-- | Reject a round that mixes @submit@ with other tool calls (?6.1.3): feed a
 -- recoverable message back for every call and run none of them.
 rejectMixedSubmit :: AgentEnv -> Int -> IO () -> [ToolCall] -> IO ToolOutcome
 rejectMixedSubmit env roundIx ensureStart toolCalls = do
@@ -341,7 +351,7 @@ rejectMixedSubmit env roundIx ensureStart toolCalls = do
   results <- mapM reject (zip [0 ..] toolCalls)
   pure (Continue results)
   where
-    msg = "submit must be called on its own; no tools were run this round — call submit alone (§6.1.3)"
+    msg = "submit must be called on its own; no tools were run this round -- call submit alone (?6.1.3)"
     reject (ix, tc) = do
       emitToolCall env roundIx ix tc.tcName tc.tcArguments
       void $ emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx ix tc.tcName (String msg) True)
@@ -359,8 +369,8 @@ emitToolCall :: AgentEnv -> Int -> Int -> Text -> Value -> IO ()
 emitToolCall env roundIx callIx toolLabel args =
   void $ emit (aeTracer env) (AgentToolCall (aeQName env) (aeStepId env) roundIx callIx toolLabel args)
 
-emitLlmCall :: AgentEnv -> AgentSpec -> [Turn] -> ChatResponse -> IO ()
-emitLlmCall env spec messages resp =
+emitLlmCall :: AgentEnv -> AgentSpec -> [Turn] -> ChatResponse -> Double -> IO ()
+emitLlmCall env spec messages resp cost =
   void $
     emit
       (aeTracer env)
@@ -373,6 +383,7 @@ emitLlmCall env spec messages resp =
           resp.respText
           usage.usageInputTokens
           usage.usageOutputTokens
+          cost
       )
   where
     usage = maybe (Usage 0 0 0) id resp.respUsage
@@ -386,7 +397,7 @@ renderConversation = T.intercalate "\n" . map render
         "assistant: " <> t <> if null calls then "" else "  [calls: " <> T.intercalate ", " (map (.tcName) calls) <> "]"
       ToolTurn results -> "tool: " <> T.intercalate " | " (map (\r -> r.trName <> "=" <> r.trContent) results)
 
--- Sub-keys (§8.2.1) ----------------------------------------------------------
+-- Sub-keys (?8.2.1) ----------------------------------------------------------
 
 modelSubKey :: AgentEnv -> AgentSpec -> [Turn] -> Int -> Text
 modelSubKey env spec messages roundIx =
@@ -411,7 +422,7 @@ toolSubKey env roundIx callIx calleeFp argsJson =
     ]
 
 -- | A stable fingerprint of the advertised tool set plus the submit schema, so
--- the model-call sub-key changes if the offered tools change (§8.2.1).
+-- the model-call sub-key changes if the offered tools change (?8.2.1).
 toolsFingerprint :: AgentSpec -> Text
 toolsFingerprint spec =
   sha256Hex (T.intercalate ";" entries <> "|submit:" <> submitPart)
@@ -423,7 +434,7 @@ toolStepId :: AgentEnv -> Int -> Int -> Ident
 toolStepId env roundIx callIx =
   aeStepId env <> "~r" <> tshow roundIx <> "c" <> tshow callIx
 
--- Submit schema validation (§6.1.3) ------------------------------------------
+-- Submit schema validation (?6.1.3) ------------------------------------------
 
 -- | Validate @submit@ arguments against its JSON Schema. v1 checks the
 -- arguments are an object and that every property named in the schema's
@@ -446,8 +457,8 @@ validateSubmit schema args = case args of
 -- Argument coercion ----------------------------------------------------------
 
 -- | Coerce a model-supplied JSON arguments object into the callee's declared
--- input types (spec §6.1.2), reusing the resume-time 'coerceFromJson'. A
--- failure is recoverable (fed back to the model, §6.1.4).
+-- input types (spec ?6.1.2), reusing the resume-time 'coerceFromJson'. A
+-- failure is recoverable (fed back to the model, ?6.1.4).
 coerceArgs :: [(Ident, Type)] -> Value -> Either Text (Map Ident RValue)
 coerceArgs inputs = \case
   Object o -> Map.fromList <$> traverse (field o) inputs
@@ -486,7 +497,7 @@ decodeResponse = \case
 
 -- Tool-name mapping and ToolDef construction ---------------------------------
 
--- | The synthesized @submit@ tool's provider name (§6.1.3).
+-- | The synthesized @submit@ tool's provider name (?6.1.3).
 submitToolName :: Text
 submitToolName = "submit"
 
@@ -507,7 +518,7 @@ sanitizeToolName q = T.map safe (renderQName q)
       | c == '/' || c == '-' = '_'
       | otherwise = c
 
--- | Build the provider 'ToolDef' for an advertised callee (spec §6.1.1). The
+-- | Build the provider 'ToolDef' for an advertised callee (spec ?6.1.1). The
 -- checker guarantees eligibility, so 'recordSchema' succeeds; the empty-object
 -- fallback keeps this total.
 advertisedToolDef :: QName -> [(Ident, Type)] -> ToolDef
@@ -520,7 +531,7 @@ advertisedToolDef q inputs =
     }
 
 -- | Build the terminating @submit@ 'ToolDef' from the object variant's schema
--- (spec §6.1.3). The description states the single-call rule the engine also
+-- (spec ?6.1.3). The description states the single-call rule the engine also
 -- enforces.
 submitToolDef :: Value -> ToolDef
 submitToolDef schema =

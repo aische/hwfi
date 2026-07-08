@@ -22,6 +22,7 @@ import Hwfi.Compat
   ( ChatResponse (..),
     GenRequest (..),
     GenerateErrorResult (..),
+    ModelWithFallbacks (..),
     Turn (..),
     Usage (..),
     generateTextWithFallbacks,
@@ -32,8 +33,9 @@ import Hwfi.Compat
 import Hwfi.Project.Manifest (ExecPolicy)
 import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sandboxError)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
-import Hwfi.Runtime.Gateways (ModelStore, lookupModel)
+import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit)
+import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
 import Hwfi.Runtime.Workspace
   ( Workspace,
@@ -60,6 +62,8 @@ data BuiltinEnv = BuiltinEnv
     beStep :: StepRef,
     -- | The opt-in @exec@ policy (§7.5). 'Nothing' disables @builtin/exec@.
     beExecPolicy :: Maybe ExecPolicy,
+    -- | Run-scoped usage accounting and optional budget (§8.4).
+    beUsage :: UsageSeam,
     -- | Produce the @builtin/introspect@ dump for the current step (§6). Built
     -- by the executor because it needs the live bindings and trace.
     beIntrospect :: IO Value
@@ -257,12 +261,8 @@ execTool env args =
 llmGenerateTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
 llmGenerateTool env args =
   orFail prep $ \(system, prompt, modelName, model) -> do
-    result <- generateTextWithFallbacks (genReq system [UserTurn prompt]) model
-    case result of
-      Left gerr -> pure (Left (llmError (T.pack (show gerr))))
-      Right resp -> do
-        emitLlm env modelName system prompt resp
-        pure (Right (record [("text", VString resp.respText)]))
+    runBilledText env model modelName system prompt [UserTurn prompt] $ \resp ->
+      pure (Right (record [("text", VString resp.respText)]))
   where
     prep = do
       system <- argText args "system"
@@ -274,12 +274,8 @@ llmGenerateTool env args =
 llmChatTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
 llmChatTool env args =
   orFail prep $ \(system, modelName, turns, model) -> do
-    result <- generateTextWithFallbacks (genReq system turns) model
-    case result of
-      Left gerr -> pure (Left (llmError (T.pack (show gerr))))
-      Right resp -> do
-        emitLlm env modelName system (renderTurns turns) resp
-        pure (Right (record [("text", VString resp.respText)]))
+    runBilledText env model modelName system (renderTurns turns) turns $ \resp ->
+      pure (Right (record [("text", VString resp.respText)]))
   where
     prep = do
       system <- argText args "system"
@@ -292,12 +288,17 @@ llmChatTool env args =
 llmGenObjectTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
 llmGenObjectTool env args =
   orFail prep $ \(system, prompt, modelName, schema, model) -> do
-    result <- genObjectUntyped (genReq system [UserTurn prompt]) model schema
-    case result of
-      Left ger -> pure (Left (llmError (T.pack (show ger.gerError))))
-      Right (value, usage) -> do
-        emitLlmUsage env modelName system prompt (canonicalJson value) usage
-        pure (Right (record [("value", VJson value)]))
+    budget <- checkBudgetSeam (beUsage env)
+    case budget of
+      Left e -> pure (Left e)
+      Right _ -> do
+        result <- genObjectUntyped (genReq system [UserTurn prompt]) model schema
+        case result of
+          Left ger -> pure (Left (llmError (T.pack (show ger.gerError))))
+          Right (value, usage) -> do
+            cost <- recordBilledCall (beUsage env) (primaryModel model) usage
+            emitLlmUsage env modelName system prompt (canonicalJson value) usage cost
+            pure (Right (record [("value", VJson value)]))
   where
     prep = do
       system <- argText args "system"
@@ -345,6 +346,31 @@ renderTurns = T.intercalate "\n" . map render
       AssistantTurn t _ _ -> "assistant: " <> t
       ToolTurn _ -> "tool: <result>"
 
+-- LLM billing (§8.4) ---------------------------------------------------------
+
+runBilledText ::
+  BuiltinEnv ->
+  ModelWithFallbacks ->
+  Text ->
+  Text ->
+  Text ->
+  [Turn] ->
+  (ChatResponse -> IO (Either RuntimeError RValue)) ->
+  IO (Either RuntimeError RValue)
+runBilledText env model modelName system prompt turns k = do
+  budget <- checkBudgetSeam (beUsage env)
+  case budget of
+    Left e -> pure (Left e)
+    Right _ -> do
+      result <- generateTextWithFallbacks (genReq system turns) model
+      case result of
+        Left gerr -> pure (Left (llmError (T.pack (show gerr))))
+        Right resp -> do
+          let usage = maybe (Usage 0 0 0) id resp.respUsage
+          cost <- recordBilledCall (beUsage env) (primaryModel model) usage
+          emitLlmUsage env modelName system prompt resp.respText usage cost
+          k resp
+
 -- Trace emission -------------------------------------------------------------
 
 emitFileIo :: BuiltinEnv -> FileOp -> Text -> Int -> IO ()
@@ -368,14 +394,8 @@ emitExec env program argv outcome =
         (eoStderrBytes outcome)
     )
 
-emitLlm :: BuiltinEnv -> Text -> Text -> Text -> ChatResponse -> IO ()
-emitLlm env model system prompt resp =
-  emitLlmUsage env model system prompt resp.respText usage
-  where
-    usage = maybe (Usage 0 0 0) id resp.respUsage
-
-emitLlmUsage :: BuiltinEnv -> Text -> Text -> Text -> Text -> Usage -> IO ()
-emitLlmUsage env model system prompt response usage =
+emitLlmUsage :: BuiltinEnv -> Text -> Text -> Text -> Text -> Usage -> Double -> IO ()
+emitLlmUsage env model system prompt response usage cost =
   emit_
     env
     ( LlmCall
@@ -387,6 +407,7 @@ emitLlmUsage env model system prompt response usage =
         response
         usage.usageInputTokens
         usage.usageOutputTokens
+        cost
     )
 
 emit_ :: BuiltinEnv -> EventBody -> IO ()

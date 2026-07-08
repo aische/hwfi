@@ -2,6 +2,8 @@
 module Hwfi.Project.Manifest
   ( ProjectManifest (..),
     ExecPolicy (..),
+    BudgetPolicy (..),
+    budgetMaxCostUsd,
     defaultExecTimeoutMs,
     defaultExecMaxOutputBytes,
     loadManifest,
@@ -52,6 +54,16 @@ instance FromJSON ExecPolicy where
       <*> o .:? "timeout_ms" .!= defaultExecTimeoutMs
       <*> o .:? "max_output_bytes" .!= defaultExecMaxOutputBytes
 
+-- | Optional spend ceiling for LLM provider calls (spec §8.4.6).
+data BudgetPolicy = BudgetPolicy
+  { bpMaxCostUsd :: Double
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON BudgetPolicy where
+  parseJSON = withObject "BudgetPolicy" $ \o ->
+    BudgetPolicy <$> o .: "max_cost_usd"
+
 -- | The parsed @project.json@ (v1 shape).
 data ProjectManifest = ProjectManifest
   { -- | Project name.
@@ -64,7 +76,9 @@ data ProjectManifest = ProjectManifest
     -- @[]@). Provider API keys must /not/ be listed here (spec §7.2).
     envWhitelist :: [Text],
     -- | The opt-in @exec@ policy (spec §7.5). 'Nothing' disables @builtin/exec@.
-    execPolicy :: Maybe ExecPolicy
+    execPolicy :: Maybe ExecPolicy,
+    -- | Optional LLM spend ceiling (spec §8.4.6).
+    budgetPolicy :: Maybe BudgetPolicy
   }
   deriving stock (Eq, Show)
 
@@ -76,6 +90,11 @@ instance FromJSON ProjectManifest where
       <*> o .: "entrypoint"
       <*> o .:? "env" .!= []
       <*> o .:? "exec"
+      <*> o .:? "budget"
+
+-- | Resolve the optional budget ceiling from a manifest.
+budgetMaxCostUsd :: ProjectManifest -> Maybe Double
+budgetMaxCostUsd manifest = bpMaxCostUsd <$> budgetPolicy manifest
 
 -- | Load and parse @\<project>/project.json@.
 loadManifest :: FilePath -> IO (Either Text ProjectManifest)

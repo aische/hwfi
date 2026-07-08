@@ -17,6 +17,7 @@ module Hwfi.Runtime.Gateways
     availableModelNames,
     modelCatalogFingerprint,
     oneShotLlmCtxProjection,
+    primaryModel,
   )
 where
 
@@ -150,6 +151,10 @@ oneShotLlmCtxProjection args store =
   case resolvedTextArg "model" args of
     Just name -> [("model-catalog-fp", modelCatalogFingerprint name store)]
     Nothing -> []
+
+-- | The primary model config from a @model@ argument (no fallbacks in v1).
+primaryModel :: ModelWithFallbacks -> ModelConfig
+primaryModel mwf = mwf.mwfModel
 
 -- | Extract a resolved string argument, unwrapping 'VSecret' the same way
 -- step-key hashing does for @resolved-args@.

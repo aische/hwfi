@@ -84,7 +84,7 @@ import Hwfi.Runtime.Error
     internalError,
   )
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
-import Hwfi.Project.Manifest (ProjectManifest (..))
+import Hwfi.Project.Manifest (ProjectManifest (..), budgetMaxCostUsd)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint, oneShotLlmCtxProjection)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
@@ -122,6 +122,8 @@ import Hwfi.Runtime.Value
     redactedJson,
     valueToJson,
   )
+import Hwfi.Runtime.RunUsage (emptyRunUsage, runUsageToJson)
+import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.Workspace (Workspace, workspaceRoot)
 import Hwfi.Type (Type (..))
 import Hwfi.TypedProject
@@ -133,6 +135,7 @@ import Hwfi.TypedProject
     lookupTyped,
   )
 import Control.Exception (SomeException, displayException)
+import Data.IORef (readIORef)
 import Data.Maybe (fromMaybe)
 import System.IO (hClose)
 import UnliftIO.Async (pooledForConcurrentlyN)
@@ -146,6 +149,7 @@ data Runtime = Runtime
     rtStore :: RunStore,
     rtTracer :: Tracer,
     rtRunInfo :: RunInfo,
+    rtUsage :: UsageSeam,
     -- | Whether this attempt is a resume: only then is the step cache consulted
     -- (§8.2). The cache is /written/ on every attempt so a later resume can use
     -- it.
@@ -184,6 +188,8 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
     store <- createRunStore (workspaceRoot ws) runId
     startedAt <- nowIso
     let ph = projectContentHash tp
+        budget = budgetMaxCostUsd (tpManifest tp)
+    usageSeam <- newUsageSeam store budget emptyRunUsage
     writeRunMeta
       store
       RunMeta
@@ -193,11 +199,12 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
           rmStartedAt = startedAt,
           rmProjectHash = ph,
           rmInputs = valueToJson (VRecord rootInputs),
-          rmPhase = PhaseRunning
+          rmPhase = PhaseRunning,
+          rmUsage = emptyRunUsage
         }
     bracket (openTraceAppend store) hClose $ \h -> do
       tracer <- newPersistentTracer h [] 0
-      let rt = mkRuntime tp ws models store tracer (runInfo runId startedAt entry rootInputs envVars) False
+      let rt = mkRuntime tp ws models store tracer (runInfo runId startedAt entry rootInputs envVars) usageSeam False
       _ <- emit tracer (RunStart runId (renderQName entry) (redactedJson (VRecord rootInputs)) ph)
       guardedFinish rt store entry =<< tryAny (runWorkflow rt "" entry rootInputs)
 
@@ -255,7 +262,8 @@ resumeWith tp ws models envVars runId store = do
                   bracket (openTraceAppend store) hClose $ \h -> do
                     tracer <- newPersistentTracer h priorEvents (lastSeq + 1)
                     updateRunPhase store PhaseRunning
-                    let rt = mkRuntime tp ws models store tracer (runInfo runId (rmStartedAt meta) entry rootInputs envVars) True
+                    usageSeam <- newUsageSeam store (budgetMaxCostUsd (tpManifest tp)) (rmUsage meta)
+                    let rt = mkRuntime tp ws models store tracer (runInfo runId (rmStartedAt meta) entry rootInputs envVars) usageSeam True
                     _ <- emit tracer (Resumed runId lastSeq)
                     Right <$> (guardedFinish rt store entry =<< tryAny (runWorkflow rt "" entry rootInputs))
 
@@ -292,8 +300,8 @@ finishCrash rt store entry exc = do
   events <- snapshotEvents (rtTracer rt)
   pure (RunResult (Left (internalError msg)) events)
 
-mkRuntime :: TypedProject -> Workspace -> ModelStore -> RunStore -> Tracer -> RunInfo -> Bool -> Runtime
-mkRuntime tp ws models store tracer ri resume =
+mkRuntime :: TypedProject -> Workspace -> ModelStore -> RunStore -> Tracer -> RunInfo -> UsageSeam -> Bool -> Runtime
+mkRuntime tp ws models store tracer ri usage resume =
   Runtime
     { rtProject = tp,
       rtWorkspace = ws,
@@ -301,6 +309,7 @@ mkRuntime tp ws models store tracer ri resume =
       rtStore = store,
       rtTracer = tracer,
       rtRunInfo = ri,
+      rtUsage = usage,
       rtResume = resume
     }
 
@@ -689,6 +698,7 @@ mkAgentEnv rt bindings stepRef scope agentKey =
     { aeTracer = rtTracer rt,
       aeStore = rtStore rt,
       aeResume = rtResume rt,
+      aeUsage = rtUsage rt,
       aeQName = srQName stepRef,
       aeStepId = srStepId stepRef,
       aeStepKey = agentKey,
@@ -776,7 +786,8 @@ builtinEnv rt stepRef bindings =
       beModels = rtModels rt,
       beTracer = rtTracer rt,
       beStep = stepRef,
-      beExecPolicy = execPolicy (tpManifest (rtProject rt)),
+      beExecPolicy = (tpManifest (rtProject rt)).execPolicy,
+      beUsage = rtUsage rt,
       beIntrospect = introspectDump rt stepRef bindings
     }
 
@@ -785,6 +796,7 @@ builtinEnv rt stepRef bindings =
 introspectDump :: Runtime -> StepRef -> Map Ident RValue -> IO Value
 introspectDump rt stepRef bindings = do
   events <- snapshotJson (rtTracer rt)
+  usage <- readIORef (usRef (rtUsage rt))
   let ri = rtRunInfo rt
   pure $
     object
@@ -792,7 +804,8 @@ introspectDump rt stepRef bindings = do
           .= object
             [ "id" .= riRunId ri,
               "started_at" .= riStartedAt ri,
-              "entrypoint" .= riEntrypoint ri
+              "entrypoint" .= riEntrypoint ri,
+              "usage" .= runUsageToJson usage
             ],
         "self"
           .= object
@@ -828,7 +841,8 @@ refKind rt q
 buildCtx :: Runtime -> QName -> Ident -> IO RValue
 buildCtx rt q sid = do
   events <- snapshotEvents (rtTracer rt)
-  pure (contextValue (rtRunInfo rt) q sid events)
+  usage <- readIORef (usRef (rtUsage rt))
+  pure (contextValue (rtRunInfo rt) usage q sid events)
 
 -- Step-key helpers -----------------------------------------------------------
 
@@ -853,6 +867,7 @@ isStableCtx (RefPath "ctx" accs) = not (volatile accs)
   where
     volatile (AField "trace" : _) = True
     volatile (AField "run" : AField "started_at" : _) = True
+    volatile (AField "run" : AField "usage" : _) = True
     volatile _ = False
 isStableCtx _ = False
 

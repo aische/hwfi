@@ -26,7 +26,7 @@ sampleEvents =
   [ q (RunStart "run-1" "workflows/main" (object ["src" .= ("x" :: String)]) "deadbeef"),
     q (StepStart wf "c" (object ["path" .= ("in.txt" :: String)]) True),
     q (StepEnd wf "c" (object ["text" .= ("hi" :: String)]) 42),
-    q (LlmCall wf "g" "gpt" "sys" "prompt" "response" 10 20),
+    q (LlmCall wf "g" "gpt" "sys" "prompt" "response" 10 20 0.0012),
     q (FileIo wf "w" OpWrite "out.txt" 7),
     q (FileIo wf "l" OpList "dir" 0),
     q (ErrorEvent wf "x" "boom" KEval),

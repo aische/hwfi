@@ -655,8 +655,8 @@ checkImplicitReturn path outputs mLastResult =
 
 -- | A step is non-cacheable if it calls @builtin/introspect@, is an agent
 -- builtin (a model-driven black box, §8.1), or any of its argument expressions
--- references a volatile @ctx@ field (@ctx.trace@ or @ctx.run.started_at@). This
--- is a purely syntactic scan.
+-- references a volatile @ctx@ field (@ctx.trace@, @ctx.run.started_at@, or
+-- @ctx.run.usage@). This is a purely syntactic scan.
 classifyCacheable :: QName -> [Arg] -> Bool
 classifyCacheable target args =
   not
@@ -669,6 +669,7 @@ classifyCacheable target args =
 refPathVolatile :: RefPath -> Bool
 refPathVolatile (RefPath "ctx" (AField "trace" : _)) = True
 refPathVolatile (RefPath "ctx" (AField "run" : AField "started_at" : _)) = True
+refPathVolatile (RefPath "ctx" (AField "run" : AField "usage" : _)) = True
 refPathVolatile _ = False
 
 -- | All reference paths occurring in an expression (bare 'ERef' and in-string

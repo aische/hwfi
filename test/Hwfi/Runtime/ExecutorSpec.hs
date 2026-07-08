@@ -14,6 +14,7 @@ import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..))
 import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
 import Hwfi.Runtime.RunStore (RunMeta (..), RunPhase (..), RunStore, openRunStore, readRunMeta, rsTracePath, updateRunPhase)
+import Hwfi.Runtime.RunUsage (RunUsage (..))
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), RunStatus (..), TraceEvent (..))
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
@@ -162,15 +163,21 @@ writeExecProject dir = do
           "```"
         ]
 
-writeLlmResumeProject :: FilePath -> IO ()
-writeLlmResumeProject dir = do
+writeLlmUsageProject :: FilePath -> Maybe Double -> IO ()
+writeLlmUsageProject dir mBudget = do
   createDirectoryIfMissing True (dir </> "workflows")
-  TIO.writeFile (dir </> "project.json") projectJson
+  TIO.writeFile (dir </> "project.json") (projectJson mBudget)
   TIO.writeFile (dir </> "model-catalog.json") "[]\n"
   TIO.writeFile (dir </> "workflows/main.md") mainMd
   where
-    projectJson =
-      "{\n  \"name\": \"llm-resume\",\n  \"version\": \"0.1.0\",\n  \"entrypoint\": \"workflows/main\",\n  \"env\": []\n}\n"
+    projectJson mBudget' =
+      case mBudget' of
+        Nothing ->
+          "{\n  \"name\": \"llm-usage\",\n  \"version\": \"0.1.0\",\n  \"entrypoint\": \"workflows/main\",\n  \"env\": []\n}\n"
+        Just cap ->
+          "{\n  \"name\": \"llm-usage\",\n  \"version\": \"0.1.0\",\n  \"entrypoint\": \"workflows/main\",\n  \"env\": [],\n  \"budget\": { \"max_cost_usd\": "
+            <> T.pack (show cap)
+            <> " }\n}\n"
     mainMd =
       T.unlines
         [ "---",
@@ -189,6 +196,9 @@ writeLlmResumeProject dir = do
           "return { answer = ${g.text} }",
           "```"
         ]
+
+writeLlmResumeProject :: FilePath -> IO ()
+writeLlmResumeProject dir = writeLlmUsageProject dir Nothing
 
 llmStore :: LLMGateway -> Double -> ModelStore
 llmStore gw temp = Map.singleton "fast" (llmConfig gw temp)
@@ -230,6 +240,37 @@ throwingGateway =
 
 usage :: Usage
 usage = Usage 1 1 0
+
+pricedUsage :: Usage
+pricedUsage = Usage 1000 500 0
+
+countingGatewayWithUsage :: IORef Int -> LLMGateway
+countingGatewayWithUsage calls =
+  LLMGateway
+    { gwName = "fake",
+      gwGenerateText = \_ _ -> do
+        modifyIORef' calls (+ 1)
+        pure (Right (ChatResponse "ok" [TextBlock "ok"] (Just pricedUsage) Nothing)),
+      gwStreamText = \_ _ _ -> pure (Left EmptyResponse),
+      gwGenerateObject = \_ _ _ -> pure (Left EmptyResponse)
+    }
+
+llmPricedStore :: LLMGateway -> ModelStore
+llmPricedStore gw =
+  Map.singleton
+    "fast"
+    ModelConfig
+      { mcGateway = gw,
+        mcModel = "fake",
+        mcPricing = PricingInfo 3 6,
+        mcMaxTokens = 256,
+        mcTemperature = Just 0.1,
+        mcThinking = Nothing,
+        mcRequestTimeout = Just 30000,
+        mcThrottleDelay = Just 0,
+        mcRetryCount = 3,
+        mcJitterBackoff = 1000
+      }
 
 -- | Run the durable-workspace fixture to completion, abort it, then resume.
 runExecThenResume :: FilePath -> FilePath -> IO (RunResult, RunResult, FilePath)
@@ -441,6 +482,51 @@ spec = do
         r2 <- expectRun =<< performResume tp workspace store2 Map.empty "run-1"
         readIORef calls `shouldReturn` 2
         stepStarts "gen" (rrEvents r2) `shouldBe` 2
+  describe "Usage accounting (§8.4, A27-A29)" $ do
+    it "increments run.json usage on a live llm-generate call (A27)" $
+      withResumeDirs $ \proj ws -> do
+        writeLlmUsageProject proj Nothing
+        calls <- newIORef (0 :: Int)
+        let models = llmPricedStore (countingGatewayWithUsage calls)
+        workspace <- newWorkspace ws
+        tp <- loadChecked proj
+        result <- expectRun =<< performRun tp workspace models Map.empty proj "run-1" mainQ Map.empty
+        readIORef calls `shouldReturn` 1
+        Right runStore <- openRunStore (workspaceRoot workspace) "run-1"
+        Right meta <- readRunMeta runStore
+        rmUsage meta `shouldBe` RunUsage 1000 500 0.006
+        llmCallCosts (rrEvents result) `shouldBe` [0.006]
+
+    it "does not bill a cache hit on resume (A27)" $
+      withResumeDirs $ \proj ws -> do
+        calls <- newIORef (0 :: Int)
+        let models = llmPricedStore (countingGatewayWithUsage calls)
+        writeLlmUsageProject proj Nothing
+        workspace <- newWorkspace ws
+        tp <- loadChecked proj
+        _ <- expectRun =<< performRun tp workspace models Map.empty proj "run-1" mainQ Map.empty
+        readIORef calls `shouldReturn` 1
+        Right runStore <- openRunStore (workspaceRoot workspace) "run-1"
+        Right meta1 <- readRunMeta runStore
+        updateRunPhase runStore PhaseAborted
+        r2 <- expectRun =<< performResume tp workspace models Map.empty "run-1"
+        readIORef calls `shouldReturn` 1
+        Right meta2 <- readRunMeta runStore
+        rmUsage meta2 `shouldBe` rmUsage meta1
+        llmCallCosts (rrEvents r2) `shouldBe` [0.006]
+
+    it "aborts before a provider call when the budget is already met (A29)" $
+      withResumeDirs $ \proj ws -> do
+        writeLlmUsageProject proj (Just 0.0)
+        calls <- newIORef (0 :: Int)
+        let models = llmPricedStore (countingGatewayWithUsage calls)
+        workspace <- newWorkspace ws
+        tp <- loadChecked proj
+        result <- expectRun =<< performRun tp workspace models Map.empty proj "run-1" mainQ Map.empty
+        readIORef calls `shouldReturn` 0
+        case rrOutcome result of
+          Left err -> reKind err `shouldBe` KLlm
+          Right _ -> expectationFailure "expected budget rejection"
   where
     base = "${inputs.note}"
     edited = "\"EDIT ${inputs.note}\""
@@ -457,6 +543,10 @@ dropLastTraceLine store = do
   contents <- TIO.readFile (rsTracePath store)
   let kept = reverse (drop 1 (reverse (filter (not . T.null) (T.lines contents))))
   TIO.writeFile (rsTracePath store) (T.unlines kept)
+
+llmCallCosts :: [TraceEvent] -> [Double]
+llmCallCosts evs =
+  [cost | TraceEvent _ _ (LlmCall _ _ _ _ _ _ _ _ cost) <- evs]
 
 readFileT :: FilePath -> IO Text
 readFileT = TIO.readFile

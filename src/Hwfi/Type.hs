@@ -126,7 +126,7 @@ isSecret = \case
 contextFieldType :: Type -> Ident -> Maybe Type
 contextFieldType envTy = \case
   "workspace" -> Just TyFileRef
-  "run" -> Just (TyRecord [("id", TyString), ("started_at", TyString), ("entrypoint", TyString)])
+  "run" -> Just (TyRecord runFields)
   "self" -> Just (TyRecord [("qname", TyString), ("step_id", TyString)])
   "inputs" -> Just TyJson
   "trace" -> Just TyTrace
@@ -139,7 +139,25 @@ runFieldType = \case
   "id" -> Just TyString
   "started_at" -> Just TyString
   "entrypoint" -> Just TyString
+  "usage" -> Just (TyRecord usageFields)
   _ -> Nothing
+
+-- | The fields of @ctx.run.usage@ (§8.4.4).
+usageFields :: [(Ident, Type)]
+usageFields =
+  [ ("tokens_in", TyInt),
+    ("tokens_out", TyInt),
+    ("cost_usd", TyDouble)
+  ]
+
+-- | The fields of @ctx.run@ (§5.2, §8.4.4).
+runFields :: [(Ident, Type)]
+runFields =
+  [ ("id", TyString),
+    ("started_at", TyString),
+    ("entrypoint", TyString),
+    ("usage", TyRecord usageFields)
+  ]
 
 -- | The fields of @ctx.self@ (§5.2).
 selfFieldType :: Ident -> Maybe Type

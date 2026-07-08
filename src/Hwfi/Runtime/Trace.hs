@@ -33,7 +33,7 @@ module Hwfi.Runtime.Trace
 where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Data.Aeson (Value (..), encode, object, (.:), (.=))
+import Data.Aeson (Value (..), encode, object, (.:), (.=), (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseMaybe, withObject)
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -43,6 +43,7 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Runtime.Error (ErrorKind, errorKindFromText, errorKindText)
+import Hwfi.Runtime.RunUsage (formatCostUsd)
 import System.IO (Handle, hFlush)
 
 -- | The @op@ discriminator of a 'FileIo' event (§8.3.2). Covers the M4 read
@@ -122,7 +123,7 @@ data EventBody
   | -- | @step-end@: qname, step id, result (redacted), duration in ms.
     StepEnd QName Ident Value Int
   | -- | @llm-call@: qname, step id, model, system, prompt, response, tokens in\/out.
-    LlmCall QName Ident Text Text Text Text Int Int
+    LlmCall QName Ident Text Text Text Text Int Int Double
   | -- | @file-io@: qname, step id, op, workspace-relative path, byte count.
     FileIo QName Ident FileOp Text Int
   | -- | @exec@ (§8.3.2): qname, step id, allowlisted program basename, argv
@@ -194,7 +195,7 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "result" .= result,
           "duration_ms" .= durMs
         ]
-      LlmCall q sid model system prompt response tin tout ->
+      LlmCall q sid model system prompt response tin tout cost ->
         [ "tag" .= ("llm-call" :: Text),
           "qname" .= renderQName q,
           "step_id" .= sid,
@@ -203,7 +204,8 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "prompt" .= prompt,
           "response" .= response,
           "tokens_in" .= tin,
-          "tokens_out" .= tout
+          "tokens_out" .= tout,
+          "cost_usd" .= cost
         ]
       FileIo q sid op path bytes ->
         [ "tag" .= ("file-io" :: Text),
@@ -332,6 +334,7 @@ parseEvent = withObject "TraceEvent" $ \o -> do
           <*> o .: "response"
           <*> o .: "tokens_in"
           <*> o .: "tokens_out"
+          <*> o .:? "cost_usd" .!= 0
       "file-io" ->
         FileIo <$> qn o <*> o .: "step_id" <*> (fileOpFromText <$> o .: "op") <*> o .: "path" <*> o .: "bytes"
       "exec" ->
@@ -398,8 +401,17 @@ renderEvent (TraceEvent s at body) =
         "step-start  " <> step q sid <> (if cacheable then "  [cacheable]" else "  [volatile]")
       StepEnd q sid _ ms ->
         "step-end    " <> step q sid <> "  " <> T.pack (show ms) <> "ms"
-      LlmCall q sid model _ _ _ tin tout ->
-        "llm-call    " <> step q sid <> "  model=" <> model <> "  tokens=" <> T.pack (show tin) <> "/" <> T.pack (show tout)
+      LlmCall q sid model _ _ _ tin tout cost ->
+        "llm-call    "
+          <> step q sid
+          <> "  model="
+          <> model
+          <> "  tokens="
+          <> T.pack (show tin)
+          <> "/"
+          <> T.pack (show tout)
+          <> "  $"
+          <> formatCostUsd cost
       FileIo q sid op path bytes ->
         "file-io     " <> step q sid <> "  " <> fileOpText op <> " " <> path <> " (" <> T.pack (show bytes) <> "B)"
       Exec q sid program _ exitCode timedOut _ _ ->

@@ -29,6 +29,8 @@ module Hwfi.Compat
     ToolResult (..),
     mkToolCall,
     Usage (..),
+    PricingInfo (..),
+    estimateCost,
     ThinkingMode (..),
     LLMGateway (..),
 
@@ -57,7 +59,7 @@ import LLM.Core.Types
     Turn (..),
     mkToolCall,
   )
-import LLM.Core.Usage (Usage (..))
+import LLM.Core.Usage (PricingInfo (..), Usage (..), estimateCost)
 import LLM.Generate
   ( GenRequest (..),
     GenerateError (..),

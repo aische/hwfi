@@ -67,10 +67,12 @@ library
         Hwfi.Runtime.ModelCatalog
         Hwfi.Runtime.Provider
         Hwfi.Runtime.RunStore
+        Hwfi.Runtime.RunUsage
         Hwfi.Runtime.Schema
         Hwfi.Runtime.Secret
         Hwfi.Runtime.StepKey
         Hwfi.Runtime.Trace
+        Hwfi.Runtime.Usage
         Hwfi.Runtime.Value
         Hwfi.Runtime.Workspace
         Hwfi.Source
@@ -148,6 +150,7 @@ test-suite hwfi-test
         Hwfi.Runtime.SchemaSpec
         Hwfi.Runtime.StepKeySpec
         Hwfi.Runtime.TraceSpec
+        Hwfi.Runtime.UsageSpec
         Hwfi.Runtime.ValueSpec
         Hwfi.Runtime.WorkspaceSpec
         Hwfi.SourceSpec

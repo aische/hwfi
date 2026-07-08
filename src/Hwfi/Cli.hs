@@ -66,6 +66,7 @@ import Hwfi.Runtime.RunStore
     readTraceEvents,
   )
 import Hwfi.Runtime.Trace (renderEvent)
+import Hwfi.Runtime.RunUsage (renderUsageSummary)
 import Hwfi.Runtime.Value (RValue, coerceFromJson, coerceFromString, redactedJson)
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace, workspaceRoot)
 import Hwfi.Source (Diagnostic (..), renderDiagnostic)
@@ -367,7 +368,11 @@ runShow opts = do
                 ""
               ]
             Left _ -> []
-      TIO.putStr (T.unlines (metaLines <> map renderEvent events))
+          summary =
+            case eMeta of
+              Right m -> [renderUsageSummary m.rmUsage, ""]
+              Left _ -> []
+      TIO.putStr (T.unlines (metaLines <> map renderEvent events <> summary))
 
 -- Input assembly (§9) --------------------------------------------------------
 

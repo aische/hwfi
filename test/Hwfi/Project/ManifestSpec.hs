@@ -26,7 +26,8 @@ spec = do
                 version = "0.1.0",
                 entrypoint = "workflows/main",
                 envWhitelist = ["HOME", "USER"],
-                execPolicy = Nothing
+                execPolicy = Nothing,
+                budgetPolicy = Nothing
               }
           )
 
@@ -75,6 +76,20 @@ spec = do
                   "}"
                 ]
       fmap envWhitelist (eitherDecodeStrict' json) `shouldBe` Right []
+
+    it "parses an optional budget ceiling (§8.4.6)" $ do
+      let json =
+            BS.pack $
+              unlines
+                [ "{",
+                  "  \"name\": \"example\",",
+                  "  \"version\": \"0.1.0\",",
+                  "  \"entrypoint\": \"workflows/main\",",
+                  "  \"budget\": { \"max_cost_usd\": 1.5 }",
+                  "}"
+                ]
+      fmap budgetPolicy (eitherDecodeStrict' json)
+        `shouldBe` Right (Just (BudgetPolicy {bpMaxCostUsd = 1.5}))
 
     it "fails when a required field is missing" $ do
       let json = BS.pack "{ \"name\": \"example\" }"

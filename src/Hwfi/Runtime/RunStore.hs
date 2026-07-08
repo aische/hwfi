@@ -21,6 +21,7 @@ module Hwfi.Runtime.RunStore
   ( RunStore,
     rsRunDir,
     rsTracePath,
+    rsMetaPath,
     RunPhase (..),
     phaseText,
     phaseFromText,
@@ -40,16 +41,17 @@ module Hwfi.Runtime.RunStore
 where
 
 import Control.Exception (IOException)
-import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.=))
+import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.=), (.:?))
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Types (parseMaybe)
+import Data.Aeson.Types (parseMaybe, withObject)
+import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
-import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
+import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, renameFile)
 import System.FilePath ((</>))
 import System.IO
@@ -119,7 +121,9 @@ data RunMeta = RunMeta
     rmProjectHash :: Text,
     -- | Actual (non-redacted) root inputs, as a JSON record, for resume.
     rmInputs :: Value,
-    rmPhase :: RunPhase
+    rmPhase :: RunPhase,
+  -- | Accumulated LLM spend for the logical run (§8.4.4).
+    rmUsage :: RunUsage
   }
   deriving stock (Eq, Show)
 
@@ -168,19 +172,34 @@ metaToJson m =
       "started_at" .= rmStartedAt m,
       "project_hash" .= rmProjectHash m,
       "inputs" .= rmInputs m,
-      "status" .= phaseText (rmPhase m)
+      "status" .= phaseText (rmPhase m),
+      "usage" .= runUsageToJson (rmUsage m)
     ]
 
 metaFromJson :: Value -> Maybe RunMeta
-metaFromJson = parseMaybe $ \v -> flip (Aeson.withObject "RunMeta") v $ \o ->
-  RunMeta
-    <$> o .: "run_id"
-    <*> o .: "entrypoint"
-    <*> o .: "project_dir"
-    <*> o .: "started_at"
-    <*> o .: "project_hash"
-    <*> o .: "inputs"
-    <*> (phaseFromText <$> o .: "status")
+metaFromJson = parseMaybe (withObject "RunMeta" parseMeta)
+  where
+    parseMeta o = do
+      runId <- o .: "run_id"
+      entry <- o .: "entrypoint"
+      projectDir <- o .: "project_dir"
+      startedAt <- o .: "started_at"
+      projectHash <- o .: "project_hash"
+      inputs <- o .: "inputs"
+      phase <- phaseFromText <$> o .: "status"
+      mUsage <- o .:? "usage"
+      let usage = maybe emptyRunUsage (maybe emptyRunUsage id . runUsageFromJson) mUsage
+      pure
+        RunMeta
+          { rmRunId = runId,
+            rmEntrypoint = entry,
+            rmProjectDir = projectDir,
+            rmStartedAt = startedAt,
+            rmProjectHash = projectHash,
+            rmInputs = inputs,
+            rmPhase = phase,
+            rmUsage = usage
+          }
 
 -- | Write (or overwrite) @run.json@ atomically.
 writeRunMeta :: RunStore -> RunMeta -> IO ()
