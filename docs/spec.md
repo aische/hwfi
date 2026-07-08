@@ -954,7 +954,9 @@ Editing a catalog entry (provider model id, temperature, token cap,
 timeouts, retry policy) must change the **model-catalog fingerprint**
 used in step-key hashing (§8.1) and agent intra-step model sub-keys
 (§8.2.1), so cached one-shot LLM step results are invalidated on
-`hwfi resume` after a catalog change.
+`hwfi resume` after a catalog change. When §8.4 is implemented, `pricing`
+changes do not rewrite historical `llm-call` events; they affect only new
+live calls.
 
 Provider–key linking is validated at startup: for every model referenced
 in the catalog, the corresponding provider key must be available from
@@ -1254,6 +1256,7 @@ TraceEvent =
       response   : String,         -- may be redacted per §5.5
       tokens_in  : Int,
       tokens_out : Int
+      -- cost_usd : Double         -- [optional v1.1, §8.4] this call only
     }
   | FileIo {
       tag     : "file-io",
@@ -1403,6 +1406,139 @@ crash happened to occur.
 Consumers that want per-attempt segmentation can split on `Resumed`
 markers; consumers that want the logical-run view can ignore them.
 
+### 8.4 Usage and cost accounting **[optional v1.1]**
+
+**Status: not implemented in v1.** v1 records per-call token counts on
+`llm-call` trace events (§8.3.2) and stores per-million pricing in
+`model-catalog.json` (§7.3), but does not compute dollar cost, maintain a
+running total, or enforce budgets. This section specifies the intended
+behaviour when the feature is added.
+
+#### 8.4.1 Scope
+
+- **In scope:** LLM provider spend only (`builtin/llm-*` and agent model
+  rounds). File I/O, `exec`, and CPU time are not costed.
+- **Unit:** United States dollars (`cost_usd : Double`). Display may round
+  to cents; persistence uses full precision.
+- **Logical run:** one `run id` across all resume attempts (§8.3.3). The
+  running total is monotonic for the logical run and survives `Resumed`
+  markers.
+
+#### 8.4.2 What counts as spend
+
+A cost increment is recorded **only when the engine makes a live provider
+call** and receives a response (including a provider error that still
+returned usage metadata).
+
+The following are **free** — they add `0` to the running total and emit
+**no** new `llm-call` event (consistent with §8.3.3.7):
+
+- A cacheable step served from the step cache on resume.
+- An agent model round served from an intra-step model sub-cache (§8.2.1).
+- An agent tool call served from an intra-step tool sub-cache (§8.2.1).
+- Replaying a prior attempt's cached units during a resume re-walk.
+
+Summing `cost_usd` over all `llm-call` events in `trace.jsonl` must equal
+the final `run.json` total for the logical run. Nested agents (an outer
+agent calling a workflow/tool that runs an inner agent) share one run-scoped
+accumulator; depth does not double-count.
+
+#### 8.4.3 Cost per call
+
+When a live provider call completes, the engine computes `cost_usd` for
+that call:
+
+1. If the provider response includes a non-zero `usageTotalCost` (from
+   `llm-simple`'s `Usage`), use it.
+2. Otherwise estimate from the resolved catalog entry's `pricing` and the
+   reported `tokens_in` / `tokens_out`:
+   `(tokens_in × pricePerMillionInput + tokens_out × pricePerMillionOutput) / 1_000_000`.
+
+The `model` field on the event is the catalog `modelConfigName`, so
+retrospective repricing after a catalog edit does not rewrite persisted
+events; totals are fixed at call time.
+
+#### 8.4.4 Running total — where it lives
+
+The engine maintains a **run-scoped running total**, updated atomically
+after each billed provider call (at the same sites that emit `llm-call`:
+one-shot builtins and agent model rounds, including nested agents):
+
+**`run.json`** — extended with a `usage` object, rewritten after each
+billed call and on terminal phases:
+
+```json
+"usage": {
+  "tokens_in": 12450,
+  "tokens_out": 890,
+  "cost_usd": 0.0234
+}
+```
+
+**`ctx.run.usage`** — the same record, exposed on the ambient `Context`
+(§5.2) so workflows can branch on spend (e.g. audit steps, early exit).
+Shape when the feature is enabled:
+
+```
+run = Record {
+  id         : String,
+  started_at : String,
+  entrypoint : String,
+  usage      : Record {
+    tokens_in  : Int,
+    tokens_out : Int,
+    cost_usd   : Double
+  }
+}
+```
+
+`ctx.run.usage` is **volatile** for step-key hashing (§8.1): referencing
+it makes the step non-cacheable, same as `ctx.trace`.
+
+#### 8.4.5 Trace extension
+
+Each billed `llm-call` event gains a `cost_usd` field:
+
+```
+| LlmCall {
+    ...
+    tokens_in  : Int,
+    tokens_out : Int,
+    cost_usd   : Double    -- this call only, not the running total
+  }
+```
+
+`hwfi show` prints the per-call cost and a summary line after the trace
+(e.g. `usage: 12450/890 tokens, $0.02`).
+
+#### 8.4.6 Optional budget
+
+`project.json` may declare an optional spend ceiling:
+
+```json
+"budget": {
+  "max_cost_usd": 1.0
+}
+```
+
+When present, the engine checks `ctx.run.usage.cost_usd` **before each
+live provider call** at any nesting depth. If the running total is already
+≥ `max_cost_usd`, the call is not made and the run aborts with an `Error`
+of kind `llm` naming the budget and the current total. Omitted `budget` means
+no limit.
+
+Budget checks use the running total after all prior billed calls in the
+logical run; cached replays do not consume budget because they are not
+provider calls.
+
+#### 8.4.7 Attribution (non-normative)
+
+Per-call `llm-call` rows carry the immediate `(qname, step_id)`. To
+attribute spend to an enclosing agent tool call, consumers walk the trace
+tree: inner events fall between the matching `agent-tool-call` and
+`agent-tool-result` (§8.3.3.6–7). No separate parent pointer is required
+for v1.1; a later version may add optional rollup fields on `agent-tool-result`.
+
 ## 9. CLI
 
 Binary name: `hwfi`. Minimal v1 surface:
@@ -1417,6 +1553,10 @@ hwfi run     <project-dir> --workspace <dir>
 hwfi resume  <workspace-dir> <run-id>
 hwfi show    <workspace-dir> <run-id>          # pretty-print trace
 ```
+
+When §8.4 is implemented, `hwfi show` also prints the run's accumulated
+`usage` (tokens and `cost_usd`) from `run.json` and/or a rollup over
+`llm-call` events.
 
 - `hwfi check` performs parse + type-check only, exits non-zero on any
   error.
@@ -1551,6 +1691,16 @@ A26. An agent (`builtin/llm-agent`) advertised the mutation and `exec`
     reacting to a non-zero `exit_code` in a subsequent round (§6.1, §6.2,
     §6.3).
 
+The following are specified for optional v1.1 (§8.4) and are not required
+in v1:
+
+A27. A live `builtin/llm-generate` call increments `run.json` `usage.cost_usd`
+    and `ctx.run.usage.cost_usd`; a cache hit on resume does not.
+A28. An agent model round served from intra-step cache on resume emits no
+    new `llm-call` and does not increment the running total.
+A29. With `project.json` `budget.max_cost_usd` set, a provider call that
+    would exceed the ceiling aborts before the request is sent.
+
 ## 12. Edge cases and known tricky bits
 
 - Non-UTF-8 files in the workspace: v1 treats `read-file` as text and
@@ -1593,6 +1743,9 @@ A26. An agent (`builtin/llm-agent`) advertised the mutation and `exec`
   recoverable-error boundary (§6.1.4), which turns a bad tool call into a
   tool message the model can retry; it does not expose a general
   `try`/recover construct to workflows.
+- **Usage and cost accounting** — running dollar cost, `ctx.run.usage`,
+  per-call `cost_usd` on `llm-call`, optional `project.json` budget;
+  cached/resumed provider calls are free. Full design: §8.4.
 
 ## 14. Known implementation gaps (2026-07-08)
 

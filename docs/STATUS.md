@@ -10,8 +10,13 @@ model-catalog fingerprint in one-shot `builtin/llm-*` step-keys (§8.1, §7.3);
 sub-workflow scope threading (§4.1); crash handler with `run-end` (`crashed`) +
 `PhaseCrashed` on unexpected exceptions (§8.2, §8.3.2). 223 tests green.
 
+Spec-only: **§8.4 usage/cost accounting** drafted as optional v1.1 (running
+`cost_usd`, cached calls free); backlog → TASKS 9.8.
+
 ## Done recently
 
+- **§8.4 spec:** dollar cost accounting design (running total, budget, cache-free
+  replays) — not implemented.
 - **H1.5:** `tryAny` around `runWorkflow` in `performRun`/`performResume`;
   `finishCrash` emits `error` (`internal`), `run-end` (`crashed`), sets
   `run.json.status: crashed`; `RunStatus` extended; resume-from-crash test.

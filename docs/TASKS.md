@@ -22,6 +22,10 @@ M1–M8 complete. After H1, remaining near-term work is optional / perf:
 - [ ] 9.6 `trace.jsonl` rotation
 - [ ] 9.7 User-level key store (e.g. `$XDG_CONFIG_HOME/hwfi/.env`) as
       a lower-precedence source in §7.2
+- [ ] 9.8 (Optional) usage and cost accounting (§8.4): per-call `cost_usd`
+      on `llm-call`; run-scoped running total in `run.json` and
+      `ctx.run.usage`; optional `project.json` `budget.max_cost_usd`;
+      cached/resumed provider calls bill $0; `hwfi show` usage summary.
 
 ## Done
 
