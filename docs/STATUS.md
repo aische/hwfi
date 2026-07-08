@@ -4,20 +4,18 @@ Last updated: 2026-07-08
 
 ## Current focus
 
-**H1 runtime hardening** in progress. **H1.1–H1.4 done:** threaded RTS (§7.6);
-symlink sandbox containment (§7.1, §6.2); model-catalog fingerprint in one-shot
-`builtin/llm-*` step-keys (§8.1, §7.3); sub-workflow scope threading (§4.1).
-Remaining: crash handler (H1.5). See spec §14 and [TASKS.md](TASKS.md) → H1.
+**H1 runtime hardening complete** (code review 2026-07-08). All items H1.1–H1.5
+shipped: threaded RTS (§7.6); symlink sandbox containment (§7.1, §6.2);
+model-catalog fingerprint in one-shot `builtin/llm-*` step-keys (§8.1, §7.3);
+sub-workflow scope threading (§4.1); crash handler with `run-end` (`crashed`) +
+`PhaseCrashed` on unexpected exceptions (§8.2, §8.3.2). 223 tests green.
 
 ## Done recently
 
-- **H1.4:** `runWorkflow` and `dispatchResolved` thread the caller's
-  control-flow scope prefix into sub-workflow/tool bodies (§4.1); agent tool
-  dispatch inherits the same scope; four regression tests in
-  `ControlFlowSpec` (foreach/par + resume); 220 tests green.
-- **H1.3:** `stepKeyFor` folds `model-catalog-fp` into `ctx-projection` for
-  `builtin/llm-generate`/`llm-chat`/`llm-gen-object` via
-  `Gateways.oneShotLlmCtxProjection`; resume test + fingerprint unit tests.
+- **H1.5:** `tryAny` around `runWorkflow` in `performRun`/`performResume`;
+  `finishCrash` emits `error` (`internal`), `run-end` (`crashed`), sets
+  `run.json.status: crashed`; `RunStatus` extended; resume-from-crash test.
+- **H1.4:** control-flow scope threaded into sub-workflow/tool bodies (§4.1).
 
 ## Blockers
 
@@ -25,4 +23,4 @@ Remaining: crash handler (H1.5). See spec §14 and [TASKS.md](TASKS.md) → H1.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → H1.5, then optional items.
+[TASKS.md](TASKS.md) → optional items (8.g, 9.x).

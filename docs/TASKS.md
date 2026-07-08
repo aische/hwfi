@@ -5,22 +5,6 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## H1 — Runtime hardening (code review 2026-07-08)
-
-Normative requirements in [spec.md](spec.md) §4.1, §6.2, §7.1/§7.3/§7.6,
-§8.1/§8.2/§8.3.2; gap table in spec §14. Source: [code-issues.md](code-issues.md).
-
-- [x] H1.1 Threaded RTS: `-threaded -rtsopts "-with-rtsopts=-N"` on executable
-      and test-suite stanzas (§7.6) (2026-07-08)
-- [x] H1.2 Symlink sandbox containment: `canonicalizePath` + root-prefix check
-      on all direct file ops; regression test (§7.1, §6.2) (2026-07-08)
-- [x] H1.3 Model-catalog fingerprint in one-shot `builtin/llm-*` step-keys
-      (§8.1, §7.3) (2026-07-08)
-- [x] H1.4 Thread control-flow scope into `runWorkflow` at sub-workflow calls
-      (§4.1) (2026-07-08)
-- [ ] H1.5 Crash handler: `run-end` (`crashed`) + `PhaseCrashed` on unexpected
-      exceptions; test `run.json` phase (§8.2, §8.3.2)
-
 ## Now — carried-over optional items
 
 M1–M8 complete. After H1, remaining near-term work is optional / perf:
@@ -92,6 +76,11 @@ _Move items here temporarily, then archive to
 - [x] **DEC-1** Block-local identifier scoping (spec §4.2): `@id`s unique per
       block; sibling branches/loops may reuse names; no shadowing outward.
       Checker + tests + `examples/control-flow` updated. (2026-07-08)
+- [x] H1 Runtime hardening (H1.1–H1.5, code review 2026-07-08): threaded RTS
+      (§7.6); symlink sandbox containment (§7.1); model-catalog fingerprint in
+      one-shot LLM step-keys (§8.1); sub-workflow scope threading (§4.1); crash
+      handler with `PhaseCrashed` + `run-end` (`crashed`) (§8.2). Source:
+      [code-issues.md](code-issues.md). (2026-07-08)
 - [x] M8 control flow (8.1–8.3): `Statement` extended with `SIf`/`SLoop`
       (`Hwfi.Ast.Step`); `if`/`else`, `foreach`, `par(max = N)` parsing +
       reserved words; recursive checker (branch typing + mandatory `else`,

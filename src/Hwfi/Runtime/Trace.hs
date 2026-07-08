@@ -95,18 +95,20 @@ fileOpFromText = \case
   _ -> OpList
 
 -- | The terminal @status@ of a logical run (§8.3.2, §8.3.3).
-data RunStatus = Completed | Aborted
+data RunStatus = Completed | Aborted | Crashed
   deriving stock (Eq, Show)
 
 runStatusText :: RunStatus -> Text
 runStatusText = \case
   Completed -> "completed"
   Aborted -> "aborted"
+  Crashed -> "crashed"
 
--- | Parse a 'RunStatus' from its wire spelling; defaults to 'Aborted'.
+-- | Parse a 'RunStatus' from its wire spelling; unknown values map to 'Aborted'.
 runStatusFromText :: Text -> RunStatus
 runStatusFromText = \case
   "completed" -> Completed
+  "crashed" -> Crashed
   _ -> Aborted
 
 -- | The variant-specific payload of a trace event (spec §8.3.2). The common

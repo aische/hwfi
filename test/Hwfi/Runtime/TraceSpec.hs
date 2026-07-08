@@ -50,6 +50,9 @@ spec = describe "Trace JSON round-trip (§8.3)" $ do
   it "decodes every emitted variant back to the same event" $
     mapM_ (\e -> eventFromJson (eventToJson e) `shouldBe` Just e) sampleEvents
 
+  it "round-trips a crashed run-end status" $
+    eventFromJson (eventToJson (q (RunEnd "run-1" Crashed))) `shouldBe` Just (q (RunEnd "run-1" Crashed))
+
   it "rejects an object without a known tag" $
     eventFromJson (object ["seq" .= (0 :: Int), "at" .= ("t" :: String), "tag" .= ("nope" :: String)])
       `shouldBe` Nothing

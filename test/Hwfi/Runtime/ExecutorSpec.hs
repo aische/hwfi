@@ -1,5 +1,6 @@
 module Hwfi.Runtime.ExecutorSpec (spec) where
 
+import Control.Exception (ErrorCall (ErrorCall), throwIO)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -10,8 +11,9 @@ import Hwfi.Check (checkProject)
 import Hwfi.Compat (ModelConfig (..))
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Parse.Project (loadProject)
+import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..))
 import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
-import Hwfi.Runtime.RunStore (RunPhase (..), RunStore, openRunStore, rsTracePath, updateRunPhase)
+import Hwfi.Runtime.RunStore (RunMeta (..), RunPhase (..), RunStore, openRunStore, readRunMeta, rsTracePath, updateRunPhase)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), RunStatus (..), TraceEvent (..))
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
@@ -217,6 +219,15 @@ countingGateway calls =
       gwGenerateObject = \_ _ _ -> pure (Left EmptyResponse)
     }
 
+throwingGateway :: LLMGateway
+throwingGateway =
+  LLMGateway
+    { gwName = "fake",
+      gwGenerateText = \_ _ -> throwIO (ErrorCall "synthetic crash"),
+      gwStreamText = \_ _ _ -> throwIO (ErrorCall "synthetic crash"),
+      gwGenerateObject = \_ _ _ -> throwIO (ErrorCall "synthetic crash")
+    }
+
 usage :: Usage
 usage = Usage 1 1 0
 
@@ -380,6 +391,39 @@ spec = do
         stepStarts "cached" (rrEvents r2) `shouldBe` 1
         readFileT (ws </> "sub-marker.txt") `shouldReturn` "EDIT SEED"
 
+  describe "Crash handling (§8.2, H1.5)" $ do
+    it "emits internal error + run-end crashed and sets run.json phase on unexpected exception" $
+      withResumeDirs $ \proj ws -> do
+        writeLlmResumeProject proj
+        workspace <- newWorkspace ws
+        tp <- loadChecked proj
+        result <-
+          expectRun
+            =<< performRun tp workspace (llmStore throwingGateway 0.1) Map.empty proj "run-1" mainQ Map.empty
+        case rrOutcome result of
+          Left err -> reKind err `shouldBe` KInternal
+          Right _ -> expectationFailure "expected crash to surface as internal RuntimeError"
+        lastRunEnd (map teBody (rrEvents result)) `shouldBe` Just Crashed
+        hasInternalError (map teBody (rrEvents result)) `shouldBe` True
+        Right store <- openRunStore (workspaceRoot workspace) "run-1"
+        Right meta <- readRunMeta store
+        rmPhase meta `shouldBe` PhaseCrashed
+
+    it "can resume a crashed run to completion" $
+      withResumeDirs $ \proj ws -> do
+        writeLlmResumeProject proj
+        workspace <- newWorkspace ws
+        tp <- loadChecked proj
+        calls <- newIORef (0 :: Int)
+        _ <-
+          expectRun
+            =<< performRun tp workspace (llmStore throwingGateway 0.1) Map.empty proj "run-1" mainQ Map.empty
+        r2 <-
+          expectRun
+            =<< performResume tp workspace (llmStore (countingGateway calls) 0.1) Map.empty "run-1"
+        readIORef calls `shouldReturn` 1
+        lastRunEnd (map teBody (rrEvents r2)) `shouldBe` Just Completed
+
   describe "Model-catalog invalidation (§8.1, H1.3)" $
     it "recomputes a cached one-shot LLM step when the catalog fingerprint changes" $
       withResumeDirs $ \proj ws -> do
@@ -429,9 +473,16 @@ firstTag (RunStart {} : _) = Just "run-start"
 firstTag _ = Nothing
 
 lastCompleted :: [EventBody] -> Bool
-lastCompleted bodies = case reverse bodies of
-  (RunEnd _ Completed : _) -> True
-  _ -> False
+lastCompleted bodies = lastRunEnd bodies == Just Completed
+
+lastRunEnd :: [EventBody] -> Maybe RunStatus
+lastRunEnd bodies =
+  case [s | RunEnd _ s <- bodies] of
+    [] -> Nothing
+    xs -> Just (last xs)
+
+hasInternalError :: [EventBody] -> Bool
+hasInternalError = any (\case ErrorEvent _ _ _ KInternal -> True; _ -> False)
 
 seqsAreGapless :: [TraceEvent] -> Bool
 seqsAreGapless evs = map teSeq evs == [0 .. length evs - 1]

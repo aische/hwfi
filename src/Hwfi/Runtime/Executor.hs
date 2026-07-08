@@ -76,7 +76,8 @@ import Hwfi.Runtime.Agent
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord, contextValue)
 import Hwfi.Runtime.Error
-  ( RuntimeError (..),
+  ( ErrorKind (..),
+    RuntimeError (..),
     StepRef (..),
     atStep,
     evalError,
@@ -131,10 +132,11 @@ import Hwfi.TypedProject
     TypedStep (..),
     lookupTyped,
   )
+import Control.Exception (SomeException, displayException)
+import Data.Maybe (fromMaybe)
 import System.IO (hClose)
 import UnliftIO.Async (pooledForConcurrentlyN)
-import UnliftIO.Exception (bracket)
-import Data.Maybe (fromMaybe)
+import UnliftIO.Exception (bracket, tryAny)
 
 -- | Everything the executor threads through a run.
 data Runtime = Runtime
@@ -197,7 +199,7 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
       tracer <- newPersistentTracer h [] 0
       let rt = mkRuntime tp ws models store tracer (runInfo runId startedAt entry rootInputs envVars) False
       _ <- emit tracer (RunStart runId (renderQName entry) (redactedJson (VRecord rootInputs)) ph)
-      finish rt store =<< runWorkflow rt "" entry rootInputs
+      guardedFinish rt store entry =<< tryAny (runWorkflow rt "" entry rootInputs)
 
 -- | Resume an interrupted run (spec §8.2): re-acquire the lock, verify the run
 -- is resumable, reconstruct the root inputs and the persisted trace, append a
@@ -255,7 +257,19 @@ resumeWith tp ws models envVars runId store = do
                     updateRunPhase store PhaseRunning
                     let rt = mkRuntime tp ws models store tracer (runInfo runId (rmStartedAt meta) entry rootInputs envVars) True
                     _ <- emit tracer (Resumed runId lastSeq)
-                    Right <$> (finish rt store =<< runWorkflow rt "" entry rootInputs)
+                    Right <$> (guardedFinish rt store entry =<< tryAny (runWorkflow rt "" entry rootInputs))
+
+-- | Run the workflow body and finalise the run, mapping synchronous exceptions
+-- to a deliberate crash path (§8.2, §8.3.2).
+guardedFinish ::
+  Runtime ->
+  RunStore ->
+  QName ->
+  Either SomeException (Either RuntimeError RValue) ->
+  IO RunResult
+guardedFinish rt store entry = \case
+  Right outcome -> finish rt store outcome
+  Left exc -> finishCrash rt store entry exc
 
 -- | Emit @run-end@, finalise @run.json@ status, and package the events.
 finish :: Runtime -> RunStore -> Either RuntimeError RValue -> IO RunResult
@@ -264,6 +278,19 @@ finish rt store outcome = do
   updateRunPhase store (either (const PhaseAborted) (const PhaseCompleted) outcome)
   events <- snapshotEvents (rtTracer rt)
   pure (RunResult outcome events)
+
+-- | Handle an unexpected synchronous exception: record an @internal@ error,
+-- emit @run-end@ with @crashed@, set @run.json@ phase, and surface the fault as
+-- a typed 'RuntimeError' (§8.2).
+finishCrash :: Runtime -> RunStore -> QName -> SomeException -> IO RunResult
+finishCrash rt store entry exc = do
+  let msg = T.pack (displayException exc)
+      runId = riRunId (rtRunInfo rt)
+  _ <- emit (rtTracer rt) (ErrorEvent entry "" msg KInternal)
+  _ <- emit (rtTracer rt) (RunEnd runId Crashed)
+  updateRunPhase store PhaseCrashed
+  events <- snapshotEvents (rtTracer rt)
+  pure (RunResult (Left (internalError msg)) events)
 
 mkRuntime :: TypedProject -> Workspace -> ModelStore -> RunStore -> Tracer -> RunInfo -> Bool -> Runtime
 mkRuntime tp ws models store tracer ri resume =
