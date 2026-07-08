@@ -16,7 +16,7 @@
 -- black box, but every /model call/ and every /tool call/ inside it is
 -- individually content-addressed under the enclosing agent step-key and reused
 -- from 'RunStore' on resume. A resumed loop therefore replays deterministically
--- ˇˇˇ reusing the model's prior choices and tool results ˇˇˇ without re-paying LLM
+-- ùùù reusing the model's prior choices and tool results ùùù without re-paying LLM
 -- calls or re-running tool side effects. Caching is consulted only on resume
 -- ('aeResume'); every attempt writes cache entries (mirroring the executor).
 module Hwfi.Runtime.Agent
@@ -24,7 +24,10 @@ module Hwfi.Runtime.Agent
     SubmitSpec (..),
     AgentSpec (..),
     AgentEnv (..),
+    AgentCheckpoint (..),
     runAgent,
+    agentCheckpointKey,
+    modelSubKey,
     sanitizeToolName,
     advertisedToolDef,
     submitToolDef,
@@ -61,7 +64,7 @@ import Hwfi.Compat
   )
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), llmError)
 import Hwfi.Runtime.Gateways (primaryModel)
-import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, lookupCachedResult)
+import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, deleteCachedResult, lookupCachedResult)
 import Hwfi.Runtime.Schema (recordSchema)
 import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (EventBody (..), Tracer, emit)
@@ -132,11 +135,40 @@ data AgentResponse = AgentResponse
     arToolCalls :: [ToolCall]
   }
 
+-- | Persisted agent-loop position (ù8.2.1 optional 8.g): the conversation
+-- history and the next round index to drive. Lets resume skip re-walking
+-- completed rounds whose intra-step sub-caches may be absent.
+data AgentCheckpoint = AgentCheckpoint
+  { acMessages :: [Turn],
+    acNextRound :: Int
+  }
+  deriving stock (Eq, Show)
+
 -- | Run the agent loop, returning the step's result record (spec ?6.1):
 -- @{ text, rounds }@ for @builtin/llm-agent@ or @{ value, rounds }@ for
 -- @builtin/llm-agent-object@. A 'Left' is a fatal error (?6.1.4).
 runAgent :: AgentEnv -> AgentSpec -> IO (Either RuntimeError RValue)
-runAgent env spec = driveRounds env spec [UserTurn (asPrompt spec)] 0
+runAgent env spec = do
+  (messages, roundIx) <- resolveStart env spec
+  result <- driveRounds env spec messages roundIx
+  case result of
+    Right _ -> clearAgentCheckpoint env
+    Left _ -> pure ()
+  pure result
+
+-- | On resume, reload a persisted checkpoint when present; otherwise replay
+-- from round 0 (ù8.2.1 backward compatibility).
+resolveStart :: AgentEnv -> AgentSpec -> IO ([Turn], Int)
+resolveStart env spec
+  | not (aeResume env) = pure (initialMessages spec, 0)
+  | otherwise = do
+      mCkpt <- loadAgentCheckpoint (aeStore env) (aeStepKey env)
+      pure $ case mCkpt of
+        Just ckpt -> (acMessages ckpt, acNextRound ckpt)
+        Nothing -> (initialMessages spec, 0)
+
+initialMessages :: AgentSpec -> [Turn]
+initialMessages spec = [UserTurn (asPrompt spec)]
 
 -- Round loop -----------------------------------------------------------------
 
@@ -177,7 +209,10 @@ driveRounds env spec messages roundIx
                 FatalTool err -> endRound False >> pure (Left err)
                 Continue results -> do
                   endRound False
-                  driveRounds env spec (messages' <> [ToolTurn results]) (roundIx + 1)
+                  let messages'' = messages' <> [ToolTurn results]
+                      nextRound = roundIx + 1
+                  saveAgentCheckpoint env messages'' nextRound
+                  driveRounds env spec messages'' nextRound
 
 -- | Terminate a round in which the model produced no tool calls: for
 -- @builtin/llm-agent@ this is the final free-text answer; for
@@ -249,7 +284,7 @@ data ToolOutcome
 
 runToolCalls :: AgentEnv -> AgentSpec -> [ToolCall] -> Int -> IO () -> IO ToolOutcome
 runToolCalls env spec toolCalls roundIx ensureStart
-  -- ?6.1.3: a round mixing 'submit' with other calls is rejected wholesale ˇˇˇ no
+  -- ?6.1.3: a round mixing 'submit' with other calls is rejected wholesale ùùù no
   -- call runs, and the model is told to call submit alone.
   | mixesSubmit = rejectMixedSubmit env roundIx ensureStart toolCalls
   | otherwise = go 0 [] toolCalls
@@ -335,7 +370,7 @@ runSubmitCall env spec roundIx callIx ensureStart tc = do
       recoverable env roundIx callIx submitToolName tc "submit is not available for this agent step"
     Just submit -> case validateSubmit (ssSchema submit) tc.tcArguments of
       Left reason ->
-        -- ?6.1.3: a decode failure is recoverable ˇˇˇ the model can retry.
+        -- ?6.1.3: a decode failure is recoverable ùùù the model can retry.
         recoverable env roundIx callIx submitToolName tc ("submit decode error: " <> reason)
       Right validated -> do
         void $
@@ -398,6 +433,43 @@ renderConversation = T.intercalate "\n" . map render
       ToolTurn results -> "tool: " <> T.intercalate " | " (map (\r -> r.trName <> "=" <> r.trContent) results)
 
 -- Sub-keys (?8.2.1) ----------------------------------------------------------
+
+-- | Content-addressed key for the optional agent-loop checkpoint (ß8.2.1 8.g).
+agentCheckpointKey :: Text -> Text
+agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
+
+saveAgentCheckpoint :: AgentEnv -> [Turn] -> Int -> IO ()
+saveAgentCheckpoint env messages nextRound =
+  cacheStepResult (aeStore env) (agentCheckpointKey (aeStepKey env)) (encodeCheckpoint messages nextRound)
+
+loadAgentCheckpoint :: RunStore -> Text -> IO (Maybe AgentCheckpoint)
+loadAgentCheckpoint store stepKey =
+  lookupCachedResult store (agentCheckpointKey stepKey) >>= pure . (>>= decodeCheckpoint)
+
+clearAgentCheckpoint :: AgentEnv -> IO ()
+clearAgentCheckpoint env =
+  deleteCachedResult (aeStore env) (agentCheckpointKey (aeStepKey env))
+
+encodeCheckpoint :: [Turn] -> Int -> Value
+encodeCheckpoint messages nextRound =
+  object
+    [ "messages" .= toJSON messages,
+      "next_round" .= nextRound
+    ]
+
+decodeCheckpoint :: Value -> Maybe AgentCheckpoint
+decodeCheckpoint = \case
+  Object o -> do
+    msgs <- case KM.lookup "messages" o of
+      Just v -> case fromJSON v of
+        Aeson.Success ts -> Just ts
+        Aeson.Error _ -> Nothing
+      Nothing -> Nothing
+    roundIx <- case KM.lookup "next_round" o of
+      Just (Aeson.Number n) -> Just (floor n)
+      _ -> Nothing
+    Just (AgentCheckpoint msgs roundIx)
+  _ -> Nothing
 
 modelSubKey :: AgentEnv -> AgentSpec -> [Turn] -> Int -> Text
 modelSubKey env spec messages roundIx =

@@ -3,7 +3,10 @@
 module Hwfi.Runtime.AgentSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KM
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.Maybe (isJust)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -17,6 +20,8 @@ import Hwfi.Runtime.Agent
     AgentSpec (..),
     SubmitSpec (..),
     advertisedToolDef,
+    agentCheckpointKey,
+    modelSubKey,
     runAgent,
     sanitizeToolName,
     submitToolDef,
@@ -26,7 +31,7 @@ import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
-import Hwfi.Runtime.RunStore (RunStore, createRunStore)
+import Hwfi.Runtime.RunStore (RunStore, createRunStore, deleteCachedResult, lookupCachedResult)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), Tracer, newTracer, snapshotEvents)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace, readTextFile, writeTextFile)
@@ -129,6 +134,29 @@ spec = describe "Agent loop (§6.1)" $ do
         usageAfter `shouldBe` usageBefore
         evs2 <- snapshotEvents tracer2
         length [() | TraceEvent _ _ (LlmCall {}) <- evs2] `shouldBe` 0
+
+    it "resumes from a persisted checkpoint without re-walking earlier rounds (8.g)" $
+      withEnv $ \store tracer usageSeam -> do
+        calls <- newIORef (0 :: Int)
+        let primingSpec = (textSpec crashAfterTwoToolRounds) {asMaxRounds = 4}
+            resumeSpec = (textSpec finishAfterTwoToolRounds) {asMaxRounds = 4}
+            dispatch = countingDispatch calls searchResult
+            agentEnv resume = env store tracer usageSeam resume dispatch
+        first <- runAgent (agentEnv False) primingSpec
+        reKind (fromLeft first) `shouldBe` KLlm
+        ckptVal <- lookupCachedResult store (agentCheckpointKey "step-key-fixed")
+        ckptVal `shouldSatisfy` isJust
+        let resumeEnv = agentEnv True
+        -- Drop intra-step model caches for completed rounds; resume must still
+        -- succeed by jumping to the checkpoint rather than replaying round 0.
+        deleteCachedResult store (modelSubKey resumeEnv primingSpec [UserTurn (asPrompt primingSpec)] 0)
+        case ckptVal >>= decodeCheckpointForTest of
+          Just msgsAtRound2 ->
+            deleteCachedResult store (modelSubKey resumeEnv primingSpec (init (init msgsAtRound2)) 1)
+          Nothing -> expectationFailure "checkpoint missing after partial agent run"
+        resumed <- runAgent resumeEnv resumeSpec
+        resumed `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 3)])
+        lookupCachedResult store (agentCheckpointKey "step-key-fixed") `shouldReturn` Nothing
 
   describe "coding loop end-to-end (§6.2, §6.3, A26)" $
     it "reacts to a failing exec by editing a file and re-running until it passes" $
@@ -350,6 +378,37 @@ explodingDispatch _ _ _ = pure (Left (internalError "dispatch invoked during a f
 searchResult :: RValue
 searchResult = record [("hits", VList [VString "result A", VString "result B"])]
 
+-- Gateways for checkpoint resume (8.g) -----------------------------------------
+
+-- | Two tool rounds, then fail on the third model call (simulated crash).
+crashAfterTwoToolRounds :: LLMGateway
+crashAfterTwoToolRounds =
+  gatewayOf $ \req ->
+    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
+     in pure $
+          if toolRounds < 2
+            then Right (searchCall ("c" <> tshow (toolRounds + 1)))
+            else Left (NetworkError "simulated crash at final model round")
+
+-- | After two tool rounds in the conversation, answer with plain text.
+finishAfterTwoToolRounds :: LLMGateway
+finishAfterTwoToolRounds =
+  gatewayOf $ \req ->
+    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
+     in pure $
+          if toolRounds < 2
+            then Right (searchCall ("c" <> tshow (toolRounds + 1)))
+            else Right (textResp "done")
+
+decodeCheckpointForTest :: Value -> Maybe [Turn]
+decodeCheckpointForTest = \case
+  Object o -> case KM.lookup "messages" o of
+    Just v -> case Aeson.fromJSON v of
+      Aeson.Success ts -> Just ts
+      Aeson.Error _ -> Nothing
+    Nothing -> Nothing
+  _ -> Nothing
+
 -- Fake gateway ---------------------------------------------------------------
 
 modelWith :: LLMGateway -> ModelWithFallbacks
@@ -434,3 +493,6 @@ fromLeft (Right v) = error ("expected Left, got " <> show v)
 recoverableToolResult :: TraceEvent -> Bool
 recoverableToolResult (TraceEvent _ _ (AgentToolResult _ _ _ _ _ _ recov)) = recov
 recoverableToolResult _ = False
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show

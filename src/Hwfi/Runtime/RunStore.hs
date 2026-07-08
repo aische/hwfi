@@ -34,6 +34,7 @@ module Hwfi.Runtime.RunStore
     updateRunPhase,
     cacheStepResult,
     lookupCachedResult,
+    deleteCachedResult,
     cacheWhileDecision,
     lookupWhileDecision,
     readTraceEvents,
@@ -42,6 +43,7 @@ module Hwfi.Runtime.RunStore
   )
 where
 
+import Control.Monad (when)
 import Control.Exception (IOException)
 import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.=), (.:?))
 import Data.Aeson qualified as Aeson
@@ -54,7 +56,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
 import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, renameFile)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, removeFile, renameFile)
 import System.FilePath ((</>))
 import System.IO
   ( BufferMode (LineBuffering),
@@ -247,6 +249,14 @@ lookupCachedResult store key = do
     else do
       result <- eitherDecodeFileStrict' path
       pure (either (const Nothing) Just result)
+
+-- | Remove a cached step result, if present. Used when a checkpoint makes
+-- earlier intra-step sub-keys obsolete on resume (§8.2.1 optional 8.g).
+deleteCachedResult :: RunStore -> Text -> IO ()
+deleteCachedResult store key = do
+  let path = stepPath store key
+  exists <- doesFileExist path
+  when exists (removeFile path)
 
 -- | Persist a pinned @while@ predicate decision (§4.3.5). Stored under the
 -- same @steps/@ tree as step results, keyed by 'computeWhileDecisionKey'.
