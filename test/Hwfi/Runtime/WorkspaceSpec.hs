@@ -3,6 +3,8 @@ module Hwfi.Runtime.WorkspaceSpec (spec) where
 import Control.Monad (void)
 import Data.Either (isLeft, isRight)
 import Hwfi.Runtime.Workspace
+import System.Directory (createFileLink)
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -28,6 +30,29 @@ spec = describe "Workspace sandbox (§7.1, A5)" $ do
     withSystemTempDirectory "hwfi-ws" $ \dir -> do
       ws <- newWorkspace dir
       resolvePath ws "a/b/../c.txt" `shouldSatisfy` isRight
+
+  describe "symlink containment (§7.1 stage 2, H1.2)" $ do
+    it "rejects read-file through a symlink that escapes the workspace" $
+      withSystemTempDirectory "hwfi-ws" $ \dir -> do
+        ws <- newWorkspace dir
+        createFileLink "/etc/passwd" (dir </> "escape")
+        r <- readTextFile ws "escape"
+        r `shouldSatisfy` isLeft
+
+    it "rejects write-file through a symlink that escapes the workspace" $
+      withSystemTempDirectory "hwfi-ws" $ \dir -> do
+        ws <- newWorkspace dir
+        createFileLink "/etc/passwd" (dir </> "escape")
+        w <- writeTextFile ws "escape" "nope"
+        w `shouldSatisfy` isLeft
+
+    it "allows read-file through an in-workspace symlink" $
+      withSystemTempDirectory "hwfi-ws" $ \dir -> do
+        ws <- newWorkspace dir
+        _ <- writeTextFile ws "real.txt" "secret"
+        createFileLink (dir </> "real.txt") (dir </> "link.txt")
+        r <- readTextFile ws "link.txt"
+        r `shouldBe` Right ("secret", 6)
 
   it "round-trips write then read, reporting byte size" $
     withSystemTempDirectory "hwfi-ws" $ \dir -> do

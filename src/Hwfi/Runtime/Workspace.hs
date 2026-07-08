@@ -1,12 +1,14 @@
 -- | The workspace abstraction (spec §7.1): a canonicalised root directory that
--- is the only filesystem area a workflow may read or write, with a
--- path-traversal guard applied to every 'FileRef' before use.
+-- is the only filesystem area a workflow may read or write, with a two-stage
+-- path guard applied to every 'FileRef' before use.
 --
 -- The root is canonicalised once at startup ('newWorkspace'). Every
--- workspace-relative path is then resolved /lexically/ (collapsing @.@ and
--- @..@) and rejected if it would escape the root (A5). Lexical resolution is
--- deliberate: it does not follow symlinks, so a relative path can never reach
--- outside the workspace even through a symlinked entry created during the run.
+-- workspace-relative path is then (1) resolved /lexically/ (collapsing @.@ and
+-- @..@, rejecting absolute paths and @..@ escapes — A5), then (2) passed
+-- through 'canonicalizePath' and rejected unless the canonical path is still
+-- under the workspace root (containing symlink escapes). Directory walks
+-- ('findFiles', 'grepFiles') additionally skip symlinked entries rather than
+-- following them.
 module Hwfi.Runtime.Workspace
   ( Workspace,
     workspaceRoot,
@@ -89,29 +91,55 @@ resolveSegments = go []
       (_ : t) -> go t rest
     go acc (s : rest) = go (s : acc) rest
 
+-- | Lexical resolution followed by canonicalisation and a root-prefix
+-- containment check (spec §7.1 stage 2). Used by every direct file operation.
+resolveContainedPath :: Workspace -> Text -> IO (Either RuntimeError FilePath)
+resolveContainedPath ws rel = case resolvePath ws rel of
+  Left e -> pure (Left e)
+  Right path -> do
+    canon <- canonicalizePath path
+    if isPathUnderRoot (workspaceRoot ws) canon
+      then pure (Right canon)
+      else pure (Left (sandboxError ("path escapes the workspace root: " <> rel)))
+
+-- | True when @child@ is @root@ or a descendant. Both paths should be
+-- canonical (no @..@, symlinks resolved).
+isPathUnderRoot :: FilePath -> FilePath -> Bool
+isPathUnderRoot root child =
+  child == root
+    || case makeRelative root child of
+      rel | isAbsolute rel -> False
+      rel -> case splitDirectories rel of
+        (".." : _) -> False
+        _ -> True
+
 -- | Read a workspace file as UTF-8 text (spec §12: text-only in v1, invalid
 -- UTF-8 is an error). Returns the decoded text and its byte size.
 readTextFile :: Workspace -> Text -> IO (Either RuntimeError (Text, Int))
-readTextFile ws rel = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right path -> do
-    result <- try (BS.readFile path) :: IO (Either IOException ByteString)
-    pure $ case result of
-      Left ex -> Left (ioError_ ("read failed for '" <> rel <> "': " <> T.pack (show ex)))
-      Right bytes -> case decodeUtf8' bytes of
-        Left _ -> Left (ioError_ ("file '" <> rel <> "' is not valid UTF-8 (§12)"))
-        Right txt -> Right (txt, BS.length bytes)
+readTextFile ws rel = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right path -> do
+      result <- try (BS.readFile path) :: IO (Either IOException ByteString)
+      pure $ case result of
+        Left ex -> Left (ioError_ ("read failed for '" <> rel <> "': " <> T.pack (show ex)))
+        Right bytes -> case decodeUtf8' bytes of
+          Left _ -> Left (ioError_ ("file '" <> rel <> "' is not valid UTF-8 (§12)"))
+          Right txt -> Right (txt, BS.length bytes)
 
 -- | Write UTF-8 text to a workspace file, creating parent directories inside
 -- the workspace as needed. Returns the byte size written.
 writeTextFile :: Workspace -> Text -> Text -> IO (Either RuntimeError Int)
-writeTextFile ws rel content = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right path -> do
-    result <- try (doWrite path) :: IO (Either IOException ())
-    pure $ case result of
-      Left ex -> Left (ioError_ ("write failed for '" <> rel <> "': " <> T.pack (show ex)))
-      Right () -> Right (BS.length (encodeUtf8 content))
+writeTextFile ws rel content = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right path -> do
+      result <- try (doWrite path) :: IO (Either IOException ())
+      pure $ case result of
+        Left ex -> Left (ioError_ ("write failed for '" <> rel <> "': " <> T.pack (show ex)))
+        Right () -> Right (BS.length (encodeUtf8 content))
   where
     doWrite path = do
       createDirectoryIfMissing True (takeDirectory path)
@@ -120,17 +148,19 @@ writeTextFile ws rel content = case resolvePath ws rel of
 -- | List a workspace directory, returning entry names sorted lexicographically
 -- (spec §6: @builtin/list-dir@).
 listDir :: Workspace -> Text -> IO (Either RuntimeError [Text])
-listDir ws rel = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right path -> do
-    exists <- doesDirectoryExist path
-    if not exists
-      then pure (Left (ioError_ ("not a directory: '" <> rel <> "'")))
-      else do
-        result <- try (listDirectory path) :: IO (Either IOException [FilePath])
-        pure $ case result of
-          Left ex -> Left (ioError_ ("list failed for '" <> rel <> "': " <> T.pack (show ex)))
-          Right entries -> Right (sort (map T.pack entries))
+listDir ws rel = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right path -> do
+      exists <- doesDirectoryExist path
+      if not exists
+        then pure (Left (ioError_ ("not a directory: '" <> rel <> "'")))
+        else do
+          result <- try (listDirectory path) :: IO (Either IOException [FilePath])
+          pure $ case result of
+            Left ex -> Left (ioError_ ("list failed for '" <> rel <> "': " <> T.pack (show ex)))
+            Right entries -> Right (sort (map T.pack entries))
 
 -- Navigation (§6.2) ----------------------------------------------------------
 
@@ -174,43 +204,47 @@ readFileSlice ws rel offset limit = do
 -- @builtin/find-files@). Matching is against paths relative to @path@; results
 -- are workspace-relative and sorted. Symlinks and hidden entries are skipped.
 findFiles :: Workspace -> Text -> Text -> IO (Either RuntimeError [Text])
-findFiles ws rel glob = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right root -> do
-    isDir <- doesDirectoryExist root
-    if not isDir
-      then pure (Left (ioError_ ("not a directory: '" <> rel <> "'")))
-      else do
-        entries <- walkEntries root
-        let globSegs = splitGlob glob
-            matched =
-              [ T.pack (makeRelative (workspaceRoot ws) full)
-              | (segs, full, _) <- entries,
-                matchGlob globSegs segs
-              ]
-        pure (Right (sort matched))
+findFiles ws rel glob = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right root -> do
+      isDir <- doesDirectoryExist root
+      if not isDir
+        then pure (Left (ioError_ ("not a directory: '" <> rel <> "'")))
+        else do
+          entries <- walkEntries root
+          let globSegs = splitGlob glob
+              matched =
+                [ T.pack (makeRelative (workspaceRoot ws) full)
+                | (segs, full, _) <- entries,
+                  matchGlob globSegs segs
+                ]
+          pure (Right (sort matched))
 
 -- | Regex-search workspace files under @path@ (spec §6.2, @builtin/grep@). A
 -- malformed pattern is an @eval@ error. @path@ may be a single file or a
 -- directory (walked recursively). Binary and oversize files are skipped.
 -- Returns @(workspace-relative file, 1-based line, matching line text)@.
 grepFiles :: Workspace -> Text -> Text -> IO (Either RuntimeError [(Text, Int, Text)])
-grepFiles ws pattern rel = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right root -> case compile defaultCompOpt defaultExecOpt (T.unpack pattern) of
-    Left err -> pure (Left (evalError ("invalid grep pattern: " <> T.pack err)))
-    Right regex -> do
-      isDir <- doesDirectoryExist root
-      isFile <- doesFileExist root
-      if not (isDir || isFile)
-        then pure (Left (ioError_ ("path does not exist: '" <> rel <> "'")))
-        else do
-          files <-
-            if isFile
-              then pure [root]
-              else map (\(_, f, _) -> f) . filter (\(_, _, d) -> not d) <$> walkEntries root
-          matches <- concat <$> traverse (grepOne ws regex) (sort files)
-          pure (Right matches)
+grepFiles ws pattern rel = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right root -> case compile defaultCompOpt defaultExecOpt (T.unpack pattern) of
+      Left err -> pure (Left (evalError ("invalid grep pattern: " <> T.pack err)))
+      Right regex -> do
+        isDir <- doesDirectoryExist root
+        isFile <- doesFileExist root
+        if not (isDir || isFile)
+          then pure (Left (ioError_ ("path does not exist: '" <> rel <> "'")))
+          else do
+            files <-
+              if isFile
+                then pure [root]
+                else map (\(_, f, _) -> f) . filter (\(_, _, d) -> not d) <$> walkEntries root
+            matches <- concat <$> traverse (grepOne ws regex) (sort files)
+            pure (Right matches)
 
 grepOne :: Workspace -> Regex -> FilePath -> IO [(Text, Int, Text)]
 grepOne ws regex full = do
@@ -269,27 +303,33 @@ copyFile = mutate2 copyFileWithMetadata "copy"
 
 -- | Remove a workspace file (spec §6.2, @builtin/remove-file@).
 removeFile :: Workspace -> Text -> IO (Either RuntimeError ())
-removeFile ws rel = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right path -> guardIo ("remove failed for '" <> rel <> "'") (removePathForcibly path)
+removeFile ws rel = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right path -> guardIo ("remove failed for '" <> rel <> "'") (removePathForcibly path)
 
 -- | Create a workspace directory and any missing parents (spec §6.2,
 -- @builtin/make-dir@).
 makeDir :: Workspace -> Text -> IO (Either RuntimeError ())
-makeDir ws rel = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right path -> guardIo ("make-dir failed for '" <> rel <> "'") (createDirectoryIfMissing True path)
+makeDir ws rel = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right path -> guardIo ("make-dir failed for '" <> rel <> "'") (createDirectoryIfMissing True path)
 
 -- | Remove a workspace directory and its contents recursively (spec §6.2,
 -- @builtin/remove-dir@), confined to the workspace.
 removeDir :: Workspace -> Text -> IO (Either RuntimeError ())
-removeDir ws rel = case resolvePath ws rel of
-  Left e -> pure (Left e)
-  Right path -> do
-    isDir <- doesDirectoryExist path
-    if not isDir
-      then pure (Left (ioError_ ("not a directory: '" <> rel <> "'")))
-      else guardIo ("remove-dir failed for '" <> rel <> "'") (removeDirectoryRecursive path)
+removeDir ws rel = do
+  resolved <- resolveContainedPath ws rel
+  case resolved of
+    Left e -> pure (Left e)
+    Right path -> do
+      isDir <- doesDirectoryExist path
+      if not isDir
+        then pure (Left (ioError_ ("not a directory: '" <> rel <> "'")))
+        else guardIo ("remove-dir failed for '" <> rel <> "'") (removeDirectoryRecursive path)
 
 -- | Resolve both endpoints of a two-path mutation (move\/copy) and run it,
 -- creating the destination's parent directory inside the workspace.
@@ -300,12 +340,15 @@ mutate2 ::
   Text ->
   Text ->
   IO (Either RuntimeError ())
-mutate2 act label ws from to = case (,) <$> resolvePath ws from <*> resolvePath ws to of
-  Left e -> pure (Left e)
-  Right (fromPath, toPath) ->
-    guardIo
-      (label <> " failed for '" <> from <> "' -> '" <> to <> "'")
-      (createDirectoryIfMissing True (takeDirectory toPath) >> act fromPath toPath)
+mutate2 act label ws from to = do
+  fromResolved <- resolveContainedPath ws from
+  toResolved <- resolveContainedPath ws to
+  case (,) <$> fromResolved <*> toResolved of
+    Left e -> pure (Left e)
+    Right (fromPath, toPath) ->
+      guardIo
+        (label <> " failed for '" <> from <> "' -> '" <> to <> "'")
+        (createDirectoryIfMissing True (takeDirectory toPath) >> act fromPath toPath)
 
 -- | Run an effectful mutation, mapping any 'IOException' to an @io@ error.
 guardIo :: Text -> IO () -> IO (Either RuntimeError ())
