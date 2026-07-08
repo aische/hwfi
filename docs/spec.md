@@ -2035,22 +2035,20 @@ A29. With `project.json` `budget.max_cost_usd` set, a provider call that
   per-call `cost_usd` on `llm-call`, optional `project.json` budget;
   cached/resumed provider calls are free. Full design: §8.4.
 
-## 14. Known implementation gaps (2026-07-08)
+## 14. Known implementation gaps
 
-Code review ([code-issues.md](code-issues.md)) found gaps between this spec
-and the current engine. Backlog: [TASKS.md](TASKS.md) → **H1**. Normative
-requirements are already stated in the sections cited below; this table tracks
-what remains to implement.
+**H1 (2026-07-08): complete.** Regression map: [h1-verification.md](h1-verification.md).
 
-| ID | Spec | Gap | Fix |
-|----|------|-----|-----|
-| H1.1 | §7.6 | ~~`hwfi` executable and test suite are built without `-threaded`~~ **done** (2026-07-08). | — |
-| H1.2 | §7.1, §6.2 | Workspace guard is lexical only; `read-file` / mutation builtins follow symlinks and can escape the root. Module comment overstates the guarantee. | After lexical resolve, `canonicalizePath` and verify prefix ⊆ workspace root; regression test with `ln -s`. |
-| H1.3 | §8.1, §7.3 | One-shot `builtin/llm-*` step-keys omit the model-catalog fingerprint; editing `model-catalog.json` does not invalidate cached LLM results on resume (agent path is correct). | Fold `modelCatalogFingerprint` into `stepKeyFor` for LLM builtins. |
-| H1.4 | §4.1 | `runWorkflow` resets scope to `""` at sub-workflow entry; two `par` iterations with identical args share internal step caches. | Thread caller `scope` into `runWorkflow` / `dispatchResolved`. |
-| H1.5 | §8.2, §8.3.2 | Unexpected exceptions bypass `finish`; no `run-end`, `run.json.status` stays `running`. | `withException` / `onException` around run body → `error` + `run-end` (`crashed`) + `PhaseCrashed`. |
+| ID | Spec | Status |
+|----|------|--------|
+| H1.1 | §7.6 | **done** — threaded RTS in `hwfi.cabal` |
+| H1.2 | §7.1, §6.2 | **done** — `resolveContainedPath`; `WorkspaceSpec` symlink tests |
+| H1.3 | §8.1, §7.3 | **done** — model-catalog fingerprint in one-shot LLM step-keys |
+| H1.4 | §4.1 | **done** — sub-workflow scope threading; `ControlFlowSpec` |
+| H1.5 | §8.2, §8.3.2 | **done** — `guardedFinish` crash path; `ExecutorSpec` |
 
-**Deferred hardening** (spec silent or acceptable for v1; track in TASKS if
+**Deferred hardening** (acceptable for v1; track in [TASKS.md](TASKS.md) if
 needed): O(n²) `ctx.trace` rebuild per step (§8.3.5, perf); O(n²)
 `find-files`/`grep` walk; `read-file-slice` re-reads whole file per page
-(§6.2, bounded by read cap).
+(§6.2, bounded by read cap); agent tool-result redaction to model
+([code-issues.md](code-issues.md) D3).
