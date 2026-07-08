@@ -146,13 +146,15 @@ data EventBody
   | -- | @if-branch@ (§13, M8): qname, if-id, the branch taken
     -- (@"then"@\/@"else"@\/@"none"@).
     IfBranch QName Ident Text
-  | -- | @loop-start@ (§13, M8): qname, loop-id, kind (@"foreach"@\/@"par"@),
-    -- iteration count.
-    LoopStart QName Ident Text Int
+  | -- | @loop-start@ (§13, M8; §4.3, M9): qname, loop-id, kind
+  -- (@"foreach"@\/@"par"@\/@"while"@), iteration count (@Nothing@ for @while@).
+    LoopStart QName Ident Text (Maybe Int)
   | -- | @loop-iter@ (§13, M8): qname, loop-id, 0-based iteration index.
     LoopIter QName Ident Int
   | -- | @loop-end@ (§13, M8): qname, loop-id, iteration count.
     LoopEnd QName Ident Int
+  | -- | @while-pred@ (§4.3, M9): qname, while-id, iteration, predicate decision.
+    WhilePred QName Ident Int Bool Text
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int
   | -- | @run-end@: run id, terminal status.
@@ -271,13 +273,13 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "step_id" .= sid,
           "branch" .= branch
         ]
-      LoopStart q sid kind count ->
+      LoopStart q sid kind mCount ->
         [ "tag" .= ("loop-start" :: Text),
           "qname" .= renderQName q,
           "step_id" .= sid,
-          "kind" .= kind,
-          "count" .= count
+          "kind" .= kind
         ]
+          <> maybe [] (\n -> ["count" .= n]) mCount
       LoopIter q sid ix ->
         [ "tag" .= ("loop-iter" :: Text),
           "qname" .= renderQName q,
@@ -289,6 +291,14 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "qname" .= renderQName q,
           "step_id" .= sid,
           "count" .= count
+        ]
+      WhilePred q sid ix cont reason ->
+        [ "tag" .= ("while-pred" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "iteration" .= ix,
+          "continue" .= cont,
+          "reason" .= reason
         ]
       Resumed runId fromSeq ->
         [ "tag" .= ("resumed" :: Text),
@@ -373,11 +383,13 @@ parseEvent = withObject "TraceEvent" $ \o -> do
       "if-branch" ->
         IfBranch <$> qn o <*> o .: "step_id" <*> o .: "branch"
       "loop-start" ->
-        LoopStart <$> qn o <*> o .: "step_id" <*> o .: "kind" <*> o .: "count"
+        LoopStart <$> qn o <*> o .: "step_id" <*> o .: "kind" <*> o .:? "count"
       "loop-iter" ->
         LoopIter <$> qn o <*> o .: "step_id" <*> o .: "index"
       "loop-end" ->
         LoopEnd <$> qn o <*> o .: "step_id" <*> o .: "count"
+      "while-pred" ->
+        WhilePred <$> qn o <*> o .: "step_id" <*> o .: "iteration" <*> o .: "continue" <*> o .: "reason"
       "resumed" ->
         Resumed <$> o .: "run_id" <*> o .: "from_seq"
       "run-end" ->
@@ -443,12 +455,25 @@ renderEvent (TraceEvent s at body) =
         "agent-round " <> step q sid <> "  round=" <> T.pack (show round_) <> (if finished then " end [final]" else " end")
       IfBranch q sid branch ->
         "if-branch   " <> step q sid <> "  -> " <> branch
-      LoopStart q sid kind count ->
-        "loop-start  " <> step q sid <> "  " <> kind <> "  count=" <> T.pack (show count)
+      LoopStart q sid kind mCount ->
+        "loop-start  "
+          <> step q sid
+          <> "  "
+          <> kind
+          <> maybe "" (\n -> "  count=" <> T.pack (show n)) mCount
       LoopIter q sid ix ->
         "loop-iter   " <> step q sid <> "  #" <> T.pack (show ix)
       LoopEnd q sid count ->
         "loop-end    " <> step q sid <> "  count=" <> T.pack (show count)
+      WhilePred q sid ix cont reason ->
+        "while-pred  "
+          <> step q sid
+          <> "  #"
+          <> T.pack (show ix)
+          <> "  continue="
+          <> (if cont then "true" else "false")
+          <> "  "
+          <> reason
       Resumed runId fromSeq ->
         "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
       RunEnd runId status ->

@@ -5,6 +5,8 @@ module Hwfi.Check.Expr
   ( Env (..),
     inferExpr,
     checkExpr,
+    checkExprWithCarry,
+    inferExprWithCarry,
   )
 where
 
@@ -37,8 +39,20 @@ data Env = Env
     -- @ToolRef@/@WorkflowRef@ type (§3.2). 'Nothing' if it is not a callable.
     envRefType :: QName -> Maybe Type,
     -- | Source path for diagnostics.
-    envPath :: FilePath
+    envPath :: FilePath,
+    -- | When checking @while@ argument records, the type of @${carry}@ (§4.3.4).
+    envCarryType :: Maybe Type
   }
+
+-- | Like 'inferExpr', but with an optional @${carry}@ type in scope (§4.3.4).
+inferExprWithCarry :: Maybe Type -> Env -> Pos -> Expr -> Either [TypeError] Type
+inferExprWithCarry mCarry env pos e =
+  inferExpr env {envCarryType = mCarry} pos e
+
+-- | Like 'checkExpr', but with an optional @${carry}@ type in scope (§4.3.4).
+checkExprWithCarry :: Maybe Type -> Env -> Pos -> Type -> Expr -> Either [TypeError] ()
+checkExprWithCarry mCarry env pos expected e =
+  checkExpr env {envCarryType = mCarry} pos expected e
 
 -- | Infer the type of an expression. @pos@ is the location errors are
 -- attributed to (expressions carry no spans of their own; the enclosing
@@ -165,17 +179,29 @@ checkInterpPart env pos (SInterp rp) = do
 -- accessors. Field access on records and 'TyContext' is checked; access on an
 -- opaque 'TyJson' is not (§5.6.7).
 resolveRef :: Env -> Pos -> RefPath -> Either [TypeError] Type
-resolveRef env pos (RefPath root accs) =
-  case Map.lookup root (envRoots env) of
-    Nothing ->
-      Left
-        [ typeError
-            (envPath env)
-            pos
-            UndeclaredRef
-            ("'" <> root <> "' is not in scope")
-        ]
-    Just rootTy -> foldAccessors env pos root rootTy accs
+resolveRef env pos (RefPath root accs)
+  | root == "carry" =
+      case envCarryType env of
+        Just t -> foldAccessors env pos "carry" t accs
+        Nothing ->
+          Left
+            [ typeError
+                (envPath env)
+                pos
+                UndeclaredRef
+                ("'carry' is not in scope; it is only available in while(...) predicate_args/body_args after the first body iteration (§4.3.4)")
+            ]
+  | otherwise =
+      case Map.lookup root (envRoots env) of
+        Nothing ->
+          Left
+            [ typeError
+                (envPath env)
+                pos
+                UndeclaredRef
+                ("'" <> root <> "' is not in scope")
+            ]
+        Just rootTy -> foldAccessors env pos root rootTy accs
 
 foldAccessors :: Env -> Pos -> Text -> Type -> [Accessor] -> Either [TypeError] Type
 foldAccessors _ _ _ ty [] = Right ty

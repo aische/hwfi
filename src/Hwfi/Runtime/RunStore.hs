@@ -34,6 +34,8 @@ module Hwfi.Runtime.RunStore
     updateRunPhase,
     cacheStepResult,
     lookupCachedResult,
+    cacheWhileDecision,
+    lookupWhileDecision,
     readTraceEvents,
     openTraceAppend,
     withWorkspaceLock,
@@ -245,6 +247,21 @@ lookupCachedResult store key = do
     else do
       result <- eitherDecodeFileStrict' path
       pure (either (const Nothing) Just result)
+
+-- | Persist a pinned @while@ predicate decision (§4.3.5). Stored under the
+-- same @steps/@ tree as step results, keyed by 'computeWhileDecisionKey'.
+cacheWhileDecision :: RunStore -> Text -> Bool -> Text -> IO ()
+cacheWhileDecision store key continue reason =
+  cacheStepResult store key (object ["continue" .= continue, "reason" .= reason])
+
+-- | Look up a pinned @while@ predicate decision; 'Nothing' if absent.
+lookupWhileDecision :: RunStore -> Text -> IO (Maybe (Bool, Text))
+lookupWhileDecision store key = do
+  mJson <- lookupCachedResult store key
+  pure (mJson >>= parseDecision)
+  where
+    parseDecision = parseMaybe (withObject "WhileDecision" parseBody)
+    parseBody o = (,) <$> o .: "continue" <*> o .: "reason"
 
 -- trace.jsonl ----------------------------------------------------------------
 

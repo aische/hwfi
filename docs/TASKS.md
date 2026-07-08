@@ -5,20 +5,9 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 Grouped by milestone. Milestones are ordered; within a milestone, tasks are
 roughly ordered but can be reshuffled.
 
-## Now — M9 `while` loops (§4.3)
-
-Spec written 2026-07-09. Predicate/body workflow loop with `carry`, decision
-pinning, and `max_iterations`.
-
-- [ ] M9.1 AST + parser: `WhileStmt`, reserved words; extend §3.4 grammar in code
-- [ ] M9.2 Checker: predicate output shape, args, `${carry}` scoping, graph/fps
-- [ ] M9.3 Executor: `execWhile`, scope prefixes (`#i/p/`, `#i/b/`), decision keys
-- [ ] M9.4 Trace + `hwfi show`: `while-pred`, `loop-start` without count for `while`
-- [ ] M9.5 Tests A30–A33; example (e.g. split `coding` into `check`/`fix` + `while`)
-
 ## Later — optional items
 
-M1–M8 complete. After M9, remaining near-term work is optional / perf:
+M1–M9 complete. Near-term work is optional / perf:
 
 - [ ] 8.g (Optional) serialise agent machine state to skip the replay re-walk
       on resume (§8.2.1) — performance only.
@@ -32,11 +21,20 @@ M1–M8 complete. After M9, remaining near-term work is optional / perf:
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
 
+- [ ] A32 integration test: `while` predicate containing `builtin/llm-agent`
+      replays pinned decision on resume (mechanism implemented; covered by A31
+      pinning tests today)
+
 ## Done
 
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] M9 `while` loops (§4.3, 2026-07-09): `WhileStmt` AST + parser;
+      checker (predicate `continue`/`reason`, `carry` scoping, callee graph);
+      `execWhile` with `#i/p/` / `#i/b/` scopes and decision-key resume;
+      `while-pred` trace + optional `loop-start.count`; tests A30/A31/A33;
+      parser test. 243 tests green.
 - [x] M1 Project skeleton (1.1–1.7): cabal project, `llm-simple` wiring,
       hspec suite, CLI stub, `project.json` parser, `KeyStore`, model
       catalog loader + provider-key validation. `cabal build`/`cabal test`

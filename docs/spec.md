@@ -436,7 +436,7 @@ keeps cache keys and resume unambiguous.
 
 ### 4.3 `while` — predicate/body workflow loop
 
-**Status: specified — not yet implemented (milestone M9).**
+**Status: implemented (milestone M9).**
 
 `while` is a **value-producing** control-flow construct that repeatedly
 invokes two declared workflows — a **predicate** `p` and a **body** `b` — until

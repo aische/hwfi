@@ -37,10 +37,12 @@ sampleEvents =
     q (AgentRoundEnd wf "agent" 1 True),
     q (IfBranch wf "choose" "then"),
     q (IfBranch wf "choose" "none"),
-    q (LoopStart wf "loop" "foreach" 3),
+    q (LoopStart wf "loop" "foreach" (Just 3)),
     q (LoopIter wf "loop" 2),
     q (LoopEnd wf "loop" 3),
-    q (LoopStart wf "fan" "par" 0),
+    q (LoopStart wf "fan" "par" (Just 0)),
+    q (LoopStart wf "refine" "while" Nothing),
+    q (WhilePred wf "refine" 1 True "needs another pass"),
     q (Resumed "run-1" 12),
     q (RunEnd "run-1" Completed)
   ]

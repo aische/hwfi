@@ -207,6 +207,7 @@ allStepStmts = concatMap go
       SReturn _ _ -> []
       SIf s -> allStepStmts (ifThen s) <> maybe [] allStepStmts (ifElse s)
       SLoop s -> allStepStmts (loopBody s)
+      SWhile _ -> []
 
 declStatements :: Declaration -> [Statement]
 declStatements = \case

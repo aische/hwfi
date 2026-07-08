@@ -51,6 +51,7 @@ import Hwfi.Ast.Step
     LoopStmt (..),
     Statement (..),
     StepStmt (..),
+    WhileStmt (..),
   )
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
@@ -82,6 +83,7 @@ import Hwfi.Runtime.Error
     atStep,
     evalError,
     internalError,
+    userError_,
   )
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
 import Hwfi.Project.Manifest (ProjectManifest (..), budgetMaxCostUsd)
@@ -91,9 +93,11 @@ import Hwfi.Runtime.RunStore
     RunPhase (..),
     RunStore,
     cacheStepResult,
+    cacheWhileDecision,
     createRunStore,
     isResumable,
     lookupCachedResult,
+    lookupWhileDecision,
     openRunStore,
     openTraceAppend,
     phaseText,
@@ -103,7 +107,7 @@ import Hwfi.Runtime.RunStore
     withWorkspaceLock,
     writeRunMeta,
   )
-import Hwfi.Runtime.StepKey (computeStepKey, sha256Hex)
+import Hwfi.Runtime.StepKey (computeStepKey, computeWhileDecisionKey, sha256Hex)
 import Hwfi.Runtime.Trace
   ( EventBody (..),
     RunStatus (..),
@@ -402,6 +406,7 @@ execStmt rt typedSteps q sections scope bindings = \case
   SStep s -> execStep rt typedSteps q sections scope bindings s
   SIf s -> execIf rt typedSteps q sections scope bindings s
   SLoop s -> execLoop rt typedSteps q sections scope bindings s
+  SWhile s -> execWhile rt q sections scope bindings s
   SReturn _ _ -> pure (Left (internalError "unexpected 'return' in statement position"))
 
 -- | Run a control-flow block (an @if@ branch or a loop body) in a child
@@ -482,7 +487,7 @@ execLoop rt typedSteps q sections scope bindings s = do
   case evalExpr env (loopList s) of
     Left e -> Left <$> failWith rt stepRef e
     Right (VList xs) -> do
-      _ <- emit (rtTracer rt) (LoopStart q (loopId s) kindLabel (length xs))
+      _ <- emit (rtTracer rt) (LoopStart q (loopId s) kindLabel (Just (length xs)))
       res <- case loopKind s of
         LoopSeq -> runSeq xs
         LoopPar mMax -> runPar mMax xs
@@ -528,6 +533,135 @@ ifScope scope sid branch = scope <> sid <> "?" <> branch <> "/"
 -- | The step-key scope prefix for a loop iteration (§8.1, §13).
 iterScope :: Text -> Ident -> Int -> Text
 iterScope scope sid i = scope <> sid <> "#" <> T.pack (show i) <> "/"
+
+-- | The step-key scope prefix for a @while@ predicate/body invocation (§4.3.5).
+whilePredScope :: Text -> Ident -> Int -> Text
+whilePredScope scope sid i = iterScope scope sid i <> "p/"
+
+whileBodyScope :: Text -> Ident -> Int -> Text
+whileBodyScope scope sid i = iterScope scope sid i <> "b/"
+
+-- | Execute a @while@ loop (§4.3, M9).
+execWhile ::
+  Runtime ->
+  QName ->
+  [Section] ->
+  Text ->
+  Map Ident RValue ->
+  WhileStmt ->
+  IO (Either RuntimeError (Map Ident RValue, RValue))
+execWhile rt q sections scope bindings s = do
+  let stepRef = StepRef q (whileId s)
+  ctx <- buildCtx rt q (whileId s)
+  let baseEnv = mkEvalEnv rt sections (Map.insert "ctx" ctx bindings)
+  case evalExpr baseEnv (whileMaxIterations s) of
+    Left e -> failStep rt stepRef e
+    Right (VInt n) | n >= 1 -> do
+      let maxIter = fromInteger n
+      _ <- emit (rtTracer rt) (LoopStart q (whileId s) "while" Nothing)
+      go stepRef 0 [] Nothing baseEnv maxIter
+    Right _ -> failStep rt stepRef (evalError "while max_iterations must evaluate to an Int >= 1 (§4.3)")
+  where
+    go stepRef i acc mCarry env maxIter = do
+      _ <- emit (rtTracer rt) (LoopIter q (whileId s) i)
+      let decisionKey = computeWhileDecisionKey q scope (whileId s) i
+      decisionRes <- case rtResume rt of
+        True -> lookupWhileDecision (rtStore rt) decisionKey >>= \case
+          Just pinned -> pure (Right pinned)
+          Nothing -> runPredicate i env mCarry decisionKey
+        False -> runPredicate i env mCarry decisionKey
+      case decisionRes of
+        Left e -> pure (Left e)
+        Right (cont, _reason)
+          | not cont -> do
+              _ <- emit (rtTracer rt) (LoopEnd q (whileId s) (i + 1))
+              let v = VList (reverse acc)
+              pure (Right (bindResult (whileBinder s) v bindings, v))
+          | i >= maxIter ->
+              failStep
+                rt
+                stepRef
+                ( userError_
+                    ( "while loop reached max_iterations ("
+                        <> T.pack (show maxIter)
+                        <> ") without predicate returning continue = false (§4.3)"
+                    )
+                )
+          | otherwise -> do
+              bodyRes <-
+                runWhileCallee
+                  rt
+                  (whileBodyScope scope (whileId s) i)
+                  env
+                  (whileBody s)
+                  (whileBodyArgs s)
+                  mCarry
+              case bodyRes of
+                Left e -> pure (Left e)
+                Right bv -> go stepRef (i + 1) (bv : acc) (Just bv) env maxIter
+
+    runPredicate i env mCarry decisionKey = do
+      predRes <-
+        runWhileCallee
+          rt
+          (whilePredScope scope (whileId s) i)
+          env
+          (whilePredicate s)
+          (whilePredicateArgs s)
+          mCarry
+      case predRes of
+        Left e -> pure (Left e)
+        Right pv -> case extractPredDecision pv of
+          Left e -> pure (Left e)
+          Right decision@(cont, rsn) -> do
+            _ <- emit (rtTracer rt) (WhilePred q (whileId s) i cont rsn)
+            cacheWhileDecision (rtStore rt) decisionKey cont rsn
+            pure (Right decision)
+
+runWhileCallee ::
+  Runtime ->
+  Text ->
+  EvalEnv ->
+  Expr ->
+  [Arg] ->
+  Maybe RValue ->
+  IO (Either RuntimeError RValue)
+runWhileCallee rt scope env calleeExpr args mCarry =
+  case resolveWhileCallee env calleeExpr of
+    Left e -> pure (Left e)
+    Right target -> case evalWhileArgs env mCarry args of
+      Left e -> pure (Left e)
+      Right argMap -> runWorkflow rt scope target argMap
+
+resolveWhileCallee :: EvalEnv -> Expr -> Either RuntimeError QName
+resolveWhileCallee env = \case
+  EQName q -> Right q
+  ERef (RefPath root []) ->
+    case Map.lookup root (eeBindings env) of
+      Just (VRef _ q) -> Right q
+      _ -> Left (evalError "while callee ref is not a ToolRef/WorkflowRef value")
+  _ -> Left (evalError "while callee must be a static qname or a bound ref value")
+
+evalWhileArgs :: EvalEnv -> Maybe RValue -> [Arg] -> Either RuntimeError (Map Ident RValue)
+evalWhileArgs env mCarry args = do
+  let env' =
+        case mCarry of
+          Nothing -> env
+          Just v -> env {eeBindings = Map.insert "carry" v (eeBindings env)}
+  pairs <- evalArgs env' args
+  pure (Map.fromList pairs)
+
+extractPredDecision :: RValue -> Either RuntimeError (Bool, Text)
+extractPredDecision (VRecord m) = do
+  cont <- case Map.lookup "continue" m of
+    Just (VBool b) -> Right b
+    _ -> Left (evalError "while predicate output missing continue: Bool (§4.3.2)")
+  reason <- case Map.lookup "reason" m of
+    Just (VString t) -> Right t
+    Just (VFileRef t) -> Right t
+    _ -> Left (evalError "while predicate output missing reason: String (§4.3.2)")
+  pure (cont, reason)
+extractPredDecision _ = Left (evalError "while predicate output is not a record (§4.3.2)")
 
 -- | Execute a single step, honouring the step cache (§8.1, §8.2):
 --

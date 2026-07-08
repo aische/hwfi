@@ -8,6 +8,7 @@ import Hwfi.Ast.Name (Ident, QName, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Check.Error (TypeError (..), TypeErrorKind (..))
 import Hwfi.Parse.Project (loadProject)
+import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), reKind)
 import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
 import Hwfi.Runtime.RunStore (RunPhase (..), openRunStore, updateRunPhase)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..))
@@ -43,14 +44,15 @@ writeProject dir mainMd = writeProjectWithSub dir mainMd Nothing
 
 -- | Like 'writeProject', optionally adding a @workflows/tick.md@ sub-workflow.
 writeProjectWithSub :: FilePath -> Text -> Maybe Text -> IO ()
-writeProjectWithSub dir mainMd mSubMd = do
+writeProjectWithSub dir mainMd mSubMd = writeProjectWithSubs dir mainMd (maybe Map.empty (\s -> Map.singleton "tick.md" s) mSubMd)
+
+writeProjectWithSubs :: FilePath -> Text -> Map.Map Text Text -> IO ()
+writeProjectWithSubs dir mainMd subs = do
   createDirectoryIfMissing True (dir </> "workflows")
   TIO.writeFile (dir </> "project.json") projectJson
   TIO.writeFile (dir </> "model-catalog.json") "[]\n"
   TIO.writeFile (dir </> "workflows" </> "main.md") mainMd
-  case mSubMd of
-    Just subMd -> TIO.writeFile (dir </> "workflows" </> "tick.md") subMd
-    Nothing -> pure ()
+  mapM_ (\(name, md) -> TIO.writeFile (dir </> "workflows" </> T.unpack name) md) (Map.toList subs)
 
 loadChecked :: FilePath -> IO TypedProject
 loadChecked dir = do
@@ -76,9 +78,13 @@ runProject mainMd inputs k = runProjectWithSub mainMd Nothing inputs k
 
 runProjectWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
 runProjectWithSub mainMd mSubMd inputs k =
+  runProjectWithSubs mainMd (maybe Map.empty (\s -> Map.singleton "tick.md" s) mSubMd) inputs k
+
+runProjectWithSubs :: Text -> Map.Map Text Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
+runProjectWithSubs mainMd subs inputs k =
   withSystemTempDirectory "hwfi-cf-proj" $ \proj ->
     withSystemTempDirectory "hwfi-cf-ws" $ \ws -> do
-      writeProjectWithSub proj mainMd mSubMd
+      writeProjectWithSubs proj mainMd subs
       tp <- loadChecked proj
       workspace <- newWorkspace ws
       res <- performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
@@ -86,15 +92,18 @@ runProjectWithSub mainMd mSubMd inputs k =
         Left e -> error ("run failed: " <> T.unpack e)
         Right rr -> k rr ws
 
--- | Run to completion, mark the run resumable (aborted), then resume.
-runThenResume :: Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
-runThenResume mainMd inputs k = runThenResumeWithSub mainMd Nothing inputs k
+checkOnlyWithSubs :: Text -> Map.Map Text Text -> IO (Either [TypeError] TypedProject)
+checkOnlyWithSubs mainMd subs =
+  withSystemTempDirectory "hwfi-cf-check" $ \dir -> do
+    writeProjectWithSubs dir mainMd subs
+    eproj <- loadProject dir
+    either (\ds -> error ("parse failed: " <> show ds)) (pure . checkProject) eproj
 
-runThenResumeWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
-runThenResumeWithSub mainMd mSubMd inputs k =
+runThenResumeWithSubs :: Text -> Map.Map Text Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
+runThenResumeWithSubs mainMd subs inputs k =
   withSystemTempDirectory "hwfi-cf-proj" $ \proj ->
     withSystemTempDirectory "hwfi-cf-ws" $ \ws -> do
-      writeProjectWithSub proj mainMd mSubMd
+      writeProjectWithSubs proj mainMd subs
       tp <- loadChecked proj
       workspace <- newWorkspace ws
       r1 <- expectRun =<< performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
@@ -104,6 +113,14 @@ runThenResumeWithSub mainMd mSubMd inputs k =
       k r1 r2 ws
   where
     expectRun = either (\e -> error ("run failed: " <> T.unpack e)) pure
+
+-- | Run to completion, mark the run resumable (aborted), then resume.
+runThenResume :: Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
+runThenResume mainMd inputs k = runThenResumeWithSub mainMd Nothing inputs k
+
+runThenResumeWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
+runThenResumeWithSub mainMd mSubMd inputs k =
+  runThenResumeWithSubs mainMd (maybe Map.empty (\s -> Map.singleton "tick.md" s) mSubMd) inputs k
 
 -- Workflow bodies ------------------------------------------------------------
 
@@ -212,6 +229,225 @@ ifMd =
       "```"
     ]
 
+-- @while@ predicate/body sub-workflows (§4.3, M9).
+predMd :: Text
+predMd =
+  T.unlines
+    [ "---",
+      "name: workflows/pred",
+      "inputs:",
+      "  stop: Bool",
+      "outputs:",
+      "  continue: Bool",
+      "  reason: String",
+      "imports:",
+      "  - workflows/go-out",
+      "  - workflows/stop-out",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "r <- if ${inputs.stop} {",
+      "  x <- workflows/stop-out() @s",
+      "} else {",
+      "  x <- workflows/go-out() @g",
+      "} @pick",
+      "return { continue = ${r.continue}, reason = ${r.reason} }",
+      "```"
+    ]
+
+goOutMd :: Text
+goOutMd =
+  T.unlines
+    [ "---",
+      "name: workflows/go-out",
+      "inputs: {}",
+      "outputs:",
+      "  continue: Bool",
+      "  reason: String",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "return { continue = true, reason = \"go\" }",
+      "```"
+    ]
+
+stopOutMd :: Text
+stopOutMd =
+  T.unlines
+    [ "---",
+      "name: workflows/stop-out",
+      "inputs: {}",
+      "outputs:",
+      "  continue: Bool",
+      "  reason: String",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "return { continue = false, reason = \"finished\" }",
+      "```"
+    ]
+
+-- | Pred that always stops (zero body iterations).
+predStopMd :: Text
+predStopMd =
+  T.unlines
+    [ "---",
+      "name: workflows/pred",
+      "inputs: {}",
+      "outputs:",
+      "  continue: Bool",
+      "  reason: String",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "return { continue = false, reason = \"done\" }",
+      "```"
+    ]
+
+bodyMd :: Text
+bodyMd =
+  T.unlines
+    [ "---",
+      "name: workflows/body",
+      "inputs: {}",
+      "outputs:",
+      "  ok: String",
+      "  stop: Bool",
+      "imports:",
+      "  - builtin/exec",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "_ <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo body >> log.txt\"], stdin = \"\", timeout_ms = 0) @work",
+      "return { ok = \"done\", stop = true }",
+      "```"
+    ]
+
+foreverPredMd :: Text
+foreverPredMd =
+  T.unlines
+    [ "---",
+      "name: workflows/pred",
+      "inputs: {}",
+      "outputs:",
+      "  continue: Bool",
+      "  reason: String",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "return { continue = true, reason = \"forever\" }",
+      "```"
+    ]
+
+whileSubs :: Map.Map Text Text
+whileSubs =
+  Map.fromList
+    [ ("pred.md", predMd),
+      ("body.md", bodyMd),
+      ("go-out.md", goOutMd),
+      ("stop-out.md", stopOutMd)
+    ]
+
+whileStopSubs :: Map.Map Text Text
+whileStopSubs = Map.fromList [("pred.md", predStopMd), ("body.md", bodyMd)]
+
+foreverSubs :: Map.Map Text Text
+foreverSubs = Map.fromList [("pred.md", foreverPredMd), ("body.md", bodyMd)]
+
+whileMainMd :: Text
+whileMainMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs: {}",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - builtin/exec",
+      "  - workflows/pred",
+      "  - workflows/body",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rs <- while(",
+      "  predicate = workflows/pred,",
+      "  predicate_args = { stop = false },",
+      "  body = workflows/body,",
+      "  body_args = {},",
+      "  max_iterations = 1",
+      ") @loop",
+      "return { got = ${rs[0].ok} }",
+      "```"
+    ]
+
+foreverMainMd :: Text
+foreverMainMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs: {}",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - workflows/pred",
+      "  - workflows/body",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "_ <- while(",
+      "  predicate = workflows/pred,",
+      "  predicate_args = {},",
+      "  body = workflows/body,",
+      "  body_args = {},",
+      "  max_iterations = 2",
+      ") @loop",
+      "return { got = \"x\" }",
+      "```"
+    ]
+
+whileStopMainMd :: Text
+whileStopMainMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs: {}",
+      "outputs:",
+      "  done: Bool",
+      "imports:",
+      "  - workflows/pred",
+      "  - workflows/body",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "_ <- while(",
+      "  predicate = workflows/pred,",
+      "  predicate_args = {},",
+      "  body = workflows/body,",
+      "  body_args = {},",
+      "  max_iterations = 10",
+      ") @loop",
+      "return { done = true }",
+      "```"
+    ]
+
 items3 :: Map.Map Ident RValue
 items3 = Map.fromList [("items", VList [VString "a", VString "b", VString "c"])]
 
@@ -249,7 +485,7 @@ spec = do
     it "brackets iterations with loop-start/loop-end carrying the count" $
       runProject foreachMd items3 $ \rr _ -> do
         let bodies = map teBody (rrEvents rr)
-        [n | LoopStart _ "loop" "foreach" n <- bodies] `shouldBe` [3]
+        [n | LoopStart _ "loop" "foreach" n <- bodies] `shouldBe` [Just 3]
         [n | LoopEnd _ "loop" n <- bodies] `shouldBe` [3]
 
     it "does not re-apply per-iteration side effects on resume (§8.2)" $
@@ -425,6 +661,94 @@ spec = do
               [("items", "List<String>")]
               [("out", "String")]
       errKinds <$> checkOnly md `shouldReturn` [ReturnRule]
+
+  describe "while (§4.3, M9)" $ do
+    it "runs predicate then body until max_iterations when predicate never stops (A30)" $
+      runProjectWithSubs whileMainMd whileSubs Map.empty $ \rr ws -> do
+        case rrOutcome rr of
+          Left err -> reKind err `shouldBe` KUser
+          Right _ -> expectationFailure "expected max_iterations user error"
+        lineCount (ws </> "log.txt") `shouldReturn` 1
+        length [() | TraceEvent _ _ (WhilePred {}) <- rrEvents rr] `shouldBe` 2
+        loopIters (rrEvents rr) `shouldBe` 2
+
+    it "produces an empty list when the predicate immediately returns continue = false (A30)" $
+      runProjectWithSubs whileStopMainMd whileStopSubs Map.empty $ \rr _ -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("done", VBool True)]))
+        length [() | TraceEvent _ _ (WhilePred {}) <- rrEvents rr] `shouldBe` 1
+
+    it "aborts with kind user when max_iterations is reached (A30)" $
+      runProjectWithSubs foreverMainMd foreverSubs Map.empty $ \rr _ -> do
+        case rrOutcome rr of
+          Left err -> reKind err `shouldBe` KUser
+          Right _ -> expectationFailure "expected max_iterations user error"
+
+    it "emits loop-start without count for while" $
+      runProjectWithSubs whileMainMd whileSubs Map.empty $ \rr _ -> do
+        let bodies = map teBody (rrEvents rr)
+        [k | LoopStart _ "loop" "while" k <- bodies] `shouldBe` [Nothing]
+
+    it "does not re-apply completed body iterations or re-run pinned predicates on resume (A31)" $
+      runThenResumeWithSubs whileMainMd whileSubs Map.empty $ \r1 r2 ws -> do
+        lineCount (ws </> "log.txt") `shouldReturn` 1
+        resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
+        length [() | TraceEvent _ _ (WhilePred {}) <- drop (length (rrEvents r1)) (rrEvents r2)] `shouldBe` 0
+
+    it "rejects carry outside while predicate_args/body_args at check time (A33)" $ do
+      let bodyNoteMd = T.replace "inputs: {}" "inputs:\n  note: String" bodyMd
+          md =
+            wrapBodyWithImports
+              ["workflows/pred", "workflows/body"]
+              [ "rs <- while(",
+                "  predicate = workflows/pred,",
+                "  predicate_args = { stop = false },",
+                "  body = workflows/body,",
+                "  body_args = {},",
+                "  max_iterations = 3",
+                ") @loop",
+                "x <- workflows/body(note = ${carry.ok}) @bad",
+                "return { got = \"x\" }"
+              ]
+              []
+              [("got", "String")]
+      ks <- errKinds <$> checkOnlyWithSubs md (Map.insert "body.md" bodyNoteMd whileSubs)
+      ks `shouldContain` [UndeclaredRef]
+
+    it "accepts carry in while body_args when the body output type is known" $ do
+      let bodyCarryMd = T.replace "inputs: {}" "inputs:\n  note: String" bodyMd
+          subs = Map.insert "body.md" bodyCarryMd whileSubs
+          md =
+            wrapBodyWithImports
+              ["workflows/pred", "workflows/body"]
+              [ "rs <- while(",
+                "  predicate = workflows/pred,",
+                "  predicate_args = { stop = false },",
+                "  body = workflows/body,",
+                "  body_args = { note = ${carry.ok} },",
+                "  max_iterations = 3",
+                ") @loop",
+                "return { got = \"x\" }"
+              ]
+              []
+              [("got", "String")]
+      errKinds <$> checkOnlyWithSubs md subs `shouldReturn` []
+
+-- | Assemble a @main.md@ with extra import lines and body lines.
+wrapBodyWithImports :: [Text] -> [Text] -> [(Text, Text)] -> [(Text, Text)] -> Text
+wrapBodyWithImports extraImports bodyLines ins outs =
+  T.unlines $
+    ["---", "name: workflows/main", "inputs:"]
+      <> ["  " <> n <> ": " <> t | (n, t) <- ins]
+      <> ["outputs:"]
+      <> ["  " <> n <> ": " <> t | (n, t) <- outs]
+      <> [ "imports:",
+           "  - builtin/exec",
+           "  - builtin/read-file"
+         ]
+      <> map ("  - " <>) extraImports
+      <> [ "---", "", "## flow", "", "```step" ]
+      <> bodyLines
+      <> ["```"]
 
 -- | Assemble a @main.md@ from body lines and simple scalar/list field specs.
 wrapBody :: [Text] -> [(Text, Text)] -> [(Text, Text)] -> Text

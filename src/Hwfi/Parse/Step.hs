@@ -1,6 +1,6 @@
 -- | Parser for the step DSL: the contents of a @step@ fenced block
 -- (spec §3.1, §3.4) plus the M8 control-flow constructs (§13): @if@\/@else@,
--- @foreach@, and @par@.
+-- @foreach@, @par@, and @while@.
 --
 -- Statement-level tokens (binder, @<-@, target qname, @\@id@) are parsed with
 -- the horizontal-only lexer so a newline terminates a statement; argument
@@ -13,7 +13,10 @@ module Hwfi.Parse.Step
   )
 where
 
+import Control.Monad (unless)
 import Data.Text (Text)
+import Data.Text qualified as T
+import Hwfi.Ast.Expr (Expr (..))
 import Hwfi.Ast.Name (Ident)
 import Hwfi.Ast.Step
 import Hwfi.Parse.Expr (expr)
@@ -59,13 +62,14 @@ returnStmt = do
   pure (SReturn fields (spanFromTo start end))
 
 -- | A binding statement: @binder \<- rhs \@id?@, where the right-hand side is a
--- call ('SStep'), an @if@ ('SIf'), or a @foreach@\/@par@ loop ('SLoop').
+-- call ('SStep'), an @if@ ('SIf'), a @foreach@\/@par@ loop ('SLoop'), or a
+-- @while@ ('SWhile').
 bindingStmt :: Parser Statement
 bindingStmt = do
   start <- getPos
   b <- binder
   _ <- symbol "<-"
-  choice [ifRhs start b, loopRhs start b, callRhs start b]
+  choice [ifRhs start b, loopRhs start b, whileRhs start b, callRhs start b]
 
 -- | A step call right-hand side: @target(args)@.
 callRhs :: Pos -> Binder -> Parser Statement
@@ -104,6 +108,53 @@ loopRhs start b = do
   end <- getPos
   sid <- resolveStepId b mId
   pure (SLoop (LoopStmt kind b var lst body sid (spanFromTo start end)))
+
+-- | A @while(predicate = …, …)@ right-hand side (§4.3, M9).
+whileRhs :: Pos -> Binder -> Parser Statement
+whileRhs start b = do
+  _ <- keyword "while"
+  _ <- symbolN "("
+  fields <- sepEndBy argField (symbolN ",")
+  _ <- symbol ")"
+  mId <- optional stepIdP
+  end <- getPos
+  sid <- resolveStepId b mId
+  (predE, predArgs, bodyE, bodyArgs, maxIter) <- parseWhileFields fields
+  pure
+    ( SWhile
+        ( WhileStmt
+            b
+            predE
+            predArgs
+            bodyE
+            bodyArgs
+            maxIter
+            sid
+            (spanFromTo start end)
+        )
+    )
+
+-- | Extract the required @while@ fields from a parsed argument list.
+parseWhileFields :: [Arg] -> Parser (Expr, [Arg], Expr, [Arg], Expr)
+parseWhileFields fields = do
+  predE <- reqField "predicate"
+  predArgs <- reqRecordArgs "predicate_args"
+  bodyE <- reqField "body"
+  bodyArgs <- reqRecordArgs "body_args"
+  maxIter <- reqField "max_iterations"
+  let allowed = ["predicate", "predicate_args", "body", "body_args", "max_iterations"]
+  mapM_ (\a -> unless (argName a `elem` allowed) (fail ("unexpected while(...) argument '" <> T.unpack (argName a) <> "' (§4.3)"))) fields
+  pure (predE, predArgs, bodyE, bodyArgs, maxIter)
+  where
+    reqField name =
+      case lookup name [(argName a, argValue a) | a <- fields] of
+        Just e -> pure e
+        Nothing -> fail ("while(...) requires '" <> T.unpack name <> "' (§4.3)")
+    reqRecordArgs name =
+      case lookup name [(argName a, argValue a) | a <- fields] of
+        Just (ERecord fs) -> pure [Arg n e (spanFromTo (Pos 0 0) (Pos 0 0)) | (n, e) <- fs]
+        Just _ -> fail ("while(...) '" <> T.unpack name <> "' must be a record literal (§4.3)")
+        Nothing -> fail ("while(...) requires '" <> T.unpack name <> "' (§4.3)")
 
 loopKindP :: Parser LoopKind
 loopKindP =

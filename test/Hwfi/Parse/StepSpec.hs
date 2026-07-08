@@ -87,5 +87,24 @@ spec = describe "step DSL parser (spec §3.1, §3.4)" $ do
 
   it "requires an explicit @id for a discarding control-flow statement" $
     parseB (Pos 1 1) (T.unlines ["_ <- foreach x in ${xs} {", "  a <- foo/bar()", "}"]) `shouldSatisfy` isLeft
+
+  it "parses a while(predicate, body) loop (§4.3, M9)" $ do
+    let src =
+          T.unlines
+            [ "rs <- while(",
+              "  predicate = workflows/pred,",
+              "  predicate_args = { stop = false },",
+              "  body = workflows/body,",
+              "  body_args = {},",
+              "  max_iterations = 10",
+              ") @loop"
+            ]
+    case parseB (Pos 1 1) src of
+      Right [SWhile s] -> do
+        whileBinder s `shouldBe` BindName "rs"
+        whileId s `shouldBe` "loop"
+        whileMaxIterations s `shouldBe` EInt 10
+        length (whilePredicateArgs s) `shouldBe` 1
+      other -> expectationFailure ("unexpected: " <> show other)
   where
     isLeft = either (const True) (const False)

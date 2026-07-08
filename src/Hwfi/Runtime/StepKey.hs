@@ -30,6 +30,7 @@
 -- one-way hash so nothing is leaked.
 module Hwfi.Runtime.StepKey
   ( computeStepKey,
+    computeWhileDecisionKey,
     sha256Hex,
   )
 where
@@ -100,3 +101,17 @@ sha256Hex :: Text -> Text
 sha256Hex t = T.pack (show digest)
   where
     digest = hash (encodeUtf8 t) :: Digest SHA256
+
+-- | Compute the hex decision-key for a @while@ predicate evaluation (§4.3.5).
+computeWhileDecisionKey :: QName -> Text -> Ident -> Int -> Text
+computeWhileDecisionKey q scope whileId i =
+  sha256Hex payload
+  where
+    payload =
+      T.intercalate
+        "\n"
+        [ "qname:" <> renderQName q,
+          "step:" <> scope <> whileId,
+          "kind:while-pred",
+          "iter:" <> T.pack (show i)
+        ]

@@ -1,6 +1,6 @@
 -- | The step DSL AST: statements inside @step@ blocks. See spec §3.1, §3.4,
--- and the control-flow constructs (§13, M8): @if@\/@else@, @foreach@, and
--- @par@.
+-- and the control-flow constructs (§13, M8; §4.3, M9): @if@\/@else@,
+-- @foreach@, @par@, and @while@.
 --
 -- Every statement other than @return@ shares the @binder \<- rhs \@id@ shape,
 -- where the right-hand side is either a call ('SStep') or a control-flow
@@ -16,6 +16,7 @@ module Hwfi.Ast.Step
     LoopKind (..),
     IfStmt (..),
     LoopStmt (..),
+    WhileStmt (..),
     Statement (..),
     statementSpan,
     statementId,
@@ -94,6 +95,22 @@ data LoopStmt = LoopStmt
   }
   deriving stock (Eq, Show)
 
+-- | A @while(predicate, body)@ predicate/body loop (§4.3, M9). The predicate
+-- and body are static callees (qnames or @${ref}@ values); their argument
+-- records are evaluated before each invocation. After each body iteration,
+-- @${carry}@ holds the previous body result for the next round.
+data WhileStmt = WhileStmt
+  { whileBinder :: Binder,
+    whilePredicate :: Expr,
+    whilePredicateArgs :: [Arg],
+    whileBody :: Expr,
+    whileBodyArgs :: [Arg],
+    whileMaxIterations :: Expr,
+    whileId :: Ident,
+    whileSpan :: Span
+  }
+  deriving stock (Eq, Show)
+
 -- | A statement within a @step@ block or a control-flow block.
 data Statement
   = SStep StepStmt
@@ -102,6 +119,7 @@ data Statement
     SReturn [Arg] Span
   | SIf IfStmt
   | SLoop LoopStmt
+  | SWhile WhileStmt
   deriving stock (Eq, Show)
 
 -- | The source span of a statement.
@@ -111,6 +129,7 @@ statementSpan = \case
   SReturn _ sp -> sp
   SIf s -> ifSpan s
   SLoop s -> loopSpan s
+  SWhile s -> whileSpan s
 
 -- | The static id of a statement, if it has one (@return@ has none). Step ids
 -- and control-flow ids must be unique within each block (§4.2); sibling
@@ -122,6 +141,7 @@ statementId = \case
   SReturn _ _ -> Nothing
   SIf s -> Just (ifId s)
   SLoop s -> Just (loopId s)
+  SWhile s -> Just (whileId s)
 
 -- | The immediate child statement blocks of a statement (empty for steps and
 -- returns). Used to walk the control-flow tree in the checker and graph.
@@ -131,3 +151,4 @@ blockStatements = \case
   SReturn _ _ -> []
   SIf s -> ifThen s : maybe [] pure (ifElse s)
   SLoop s -> [loopBody s]
+  SWhile _ -> []

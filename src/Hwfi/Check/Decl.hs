@@ -21,14 +21,14 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
-import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameSegments, renderQName)
+import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameFromText, qnameSegments, renderQName)
 import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
 import Hwfi.Check.Builtins (Callee (..), introspectQName, isAgentBuiltin, llmAgentObjectQName)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
-import Hwfi.Check.Expr (Env (..), checkExpr, inferExpr)
+import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
 import Hwfi.Source (Pos (..), Span (..))
 import Hwfi.Type
@@ -121,6 +121,7 @@ duplicateIdErrors path statements =
     dupNested = \case
       SIf s -> duplicateIdErrors path (ifThen s) <> maybe [] (duplicateIdErrors path) (ifElse s)
       SLoop s -> duplicateIdErrors path (loopBody s)
+      SWhile _ -> []
       _ -> []
 
     dupInBlock stmts = go [] idPositions
@@ -152,6 +153,7 @@ checkStmt ctx path sections st = \case
   SStep s -> checkStep ctx path sections st s
   SIf s -> checkIf ctx path sections st s
   SLoop s -> checkLoop ctx path sections st s
+  SWhile s -> checkWhile ctx path sections st s
   SReturn _ sp ->
     st
       { bsErrors =
@@ -322,6 +324,132 @@ checkLoop ctx path sections st s =
 
     (roots', bound', bindErrs) = bindResult path pos (loopBinder s) resultType st
 
+-- | Check a @while@ loop (§4.3, M9). The predicate must expose @continue@ and
+-- @reason@; argument records must match callee inputs; @max_iterations@ must be
+-- @Int@; a value-binding @while@ yields @List<U>@ from the body outputs.
+checkWhile :: CheckCtx -> FilePath -> [Section] -> BodyState -> WhileStmt -> BodyState
+checkWhile ctx path sections st s =
+  st
+    { bsErrors =
+        bsErrors st
+          <> targetErrs
+          <> predShapeErrs
+          <> predArgErrs
+          <> bodyArgErrs
+          <> maxErrs
+          <> resErrs
+          <> bindErrs,
+      bsRoots = roots',
+      bsBound = bound',
+      bsLastResult = resultType
+    }
+  where
+    env = mkEnv ctx path sections (bsRoots st)
+    pos = spanStart (whileSpan s)
+
+    (mPredCallee, predTargetErrs) = resolveExprTarget ctx env path pos (whilePredicate s)
+    (mBodyCallee, bodyTargetErrs) = resolveExprTarget ctx env path pos (whileBody s)
+    targetErrs = predTargetErrs <> bodyTargetErrs
+
+    predShapeErrs = case mPredCallee of
+      Nothing -> []
+      Just callee -> predicateShapeErrors path pos callee
+
+    bodyOutTy = mBodyCallee >>= calleeResultType
+
+    predArgErrs = case mPredCallee of
+      Nothing -> []
+      Just callee -> checkArgsWithCarry bodyOutTy env callee (whilePredicateArgs s)
+    bodyArgErrs = case mBodyCallee of
+      Nothing -> []
+      Just callee -> checkArgsWithCarry bodyOutTy env callee (whileBodyArgs s)
+
+    maxErrs = fromLeft [] (checkExpr env pos TyInt (whileMaxIterations s))
+
+    (resultType, resErrs) = case whileBinder s of
+      BindDiscard -> (Nothing, [])
+      BindName _ -> case bodyOutTy of
+        Just t -> (Just (TyList t), [])
+        Nothing ->
+          ( Nothing,
+            [ typeError
+                path
+                pos
+                ReturnRule
+                "a value-binding 'while' requires a body workflow with known outputs (§4.3.3)"
+            ]
+          )
+
+    (roots', bound', bindErrs) = bindResult path pos (whileBinder s) resultType st
+
+-- | Resolve a @while@ callee expression (@qname@ or @${ref}@) to a 'Callee'.
+resolveExprTarget :: CheckCtx -> Env -> FilePath -> Pos -> Expr -> (Maybe Callee, [TypeError])
+resolveExprTarget ctx env path pos = \case
+  EQName q -> resolveTarget ctx env path pos q
+  ERef (RefPath root [])
+    | root `elem` Map.keys (envRoots env) ->
+        resolveTarget ctx env path pos (qnameFromText root)
+  _ ->
+    ( Nothing,
+      [ typeError
+          path
+          pos
+          UndeclaredTarget
+          "while(...) 'predicate' and 'body' must be a static qname or a bound ToolRef/WorkflowRef (§4.3.1)"
+      ]
+    )
+
+predicateShapeErrors :: FilePath -> Pos -> Callee -> [TypeError]
+predicateShapeErrors path pos callee =
+  [ typeError path pos TypeMismatch msg
+  | not (hasField outs TyBool "continue" && hasField outs TyString "reason")
+  ]
+  where
+    outs = calleeOutputs callee
+    msg =
+      "while(...) predicate outputs must structurally include continue: Bool and reason: String (§4.3.2); got "
+        <> renderType (TyRecord outs)
+    hasField fields ty name = case lookup name fields of
+      Just t -> structEq t ty
+      Nothing -> False
+
+calleeResultType :: Callee -> Maybe Type
+calleeResultType callee = Just (TyRecord (calleeOutputs callee))
+
+checkArgsWithCarry :: Maybe Type -> Env -> Callee -> [Arg] -> [TypeError]
+checkArgsWithCarry mCarry env callee args = missingErrs <> extraErrs <> valueErrs
+  where
+    inputs = calleeInputs callee
+    argNames = map argName args
+    inputNames = map fst inputs
+
+    missingErrs =
+      [ typeError
+          (envPath env)
+          (envArgPos args)
+          ArgMismatch
+          ("missing argument '" <> n <> "'")
+        | n <- inputNames,
+          n `notElem` argNames
+      ]
+
+    extraErrs =
+      [ typeError
+          (envPath env)
+          (spanStart (argSpan a))
+          ArgMismatch
+          ("unexpected argument '" <> argName a <> "'")
+        | a <- args,
+          argName a `notElem` inputNames
+      ]
+
+    valueErrs =
+      concat
+        [ fromLeft [] (checkExprWithCarry mCarry env (spanStart (argSpan a)) t (argValue a))
+        | a <- args,
+          Just t <- [lookup (argName a) inputs]
+        ]
+
 mkEnv :: CheckCtx -> FilePath -> [Section] -> Map Ident Type -> Env
 mkEnv ctx path sections roots =
   Env
@@ -329,7 +457,8 @@ mkEnv ctx path sections roots =
       envEnv = ccEnvRecord ctx,
       envSections = sections,
       envRefType = ccRefType ctx,
-      envPath = path
+      envPath = path,
+      envCarryType = Nothing
     }
 
 -- | Check one step statement and thread the binding environment forward.
