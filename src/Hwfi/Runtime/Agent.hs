@@ -45,6 +45,8 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
+import Data.Functor ((<&>))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -73,7 +75,7 @@ import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
 import Hwfi.Type (Type (..))
 import LLM (defaultDebugHooks)
-import Data.Maybe (fromMaybe)
+import Data.Either (fromRight)
 
 -- | One tool advertised to the model: the resolved ref's qname, its provider
 -- 'ToolDef' (schema-translated inputs, ?6.1.1), the declared input\/output
@@ -195,7 +197,8 @@ driveRounds env spec messages roundIx
           endRound finished = do
             started <- readIORef startedRef
             when started $
-              void $ emit (aeTracer env) (AgentRoundEnd (aeQName env) (aeStepId env) roundIx finished)
+              void $
+                emit (aeTracer env) (AgentRoundEnd (aeQName env) (aeStepId env) roundIx finished)
       modelResult <- runModelCall env spec messages roundIx ensureStart
       case modelResult of
         Left err -> pure (Left err)
@@ -449,7 +452,7 @@ saveAgentCheckpoint env messages nextRound =
 
 loadAgentCheckpoint :: RunStore -> Text -> IO (Maybe AgentCheckpoint)
 loadAgentCheckpoint store stepKey =
-  lookupCachedResult store (agentCheckpointKey stepKey) >>= pure . (>>= decodeCheckpoint)
+  lookupCachedResult store (agentCheckpointKey stepKey) <&> (>>= decodeCheckpoint)
 
 clearAgentCheckpoint :: AgentEnv -> IO ()
 clearAgentCheckpoint env =
@@ -603,7 +606,7 @@ advertisedToolDef q inputs =
   ToolDef
     { toolName = sanitizeToolName q,
       toolDescription = "Call the '" <> renderQName q <> "' tool.",
-      toolParameters = either (const (object [])) id (recordSchema inputs),
+      toolParameters = fromRight (object []) (recordSchema inputs),
       toolReadonly = False
     }
 
@@ -625,7 +628,7 @@ submitToolDef schema =
 -- Small helpers --------------------------------------------------------------
 
 toolResult :: ToolCall -> Text -> ToolResult
-toolResult tc content = ToolResult tc.tcId tc.tcName content
+toolResult tc = ToolResult tc.tcId tc.tcName
 
 -- | JSON tool-result text for the model: redact secrets using the callee output
 -- type when the cached value can be coerced (D3).

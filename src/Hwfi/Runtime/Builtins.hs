@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-type-defaults #-}
 -- | The engine-provided @builtin/*@ tools (spec §6, tasks 4.4, 4.5, 4.7).
 --
 -- Each builtin takes the already-resolved argument map and runs in IO,
@@ -16,6 +17,7 @@ import Control.Monad (void)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
+import Data.Functor ((<&>))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
@@ -617,7 +619,7 @@ traceSliceTool env args =
   where
     loadTrace rid
       | rid == "current" || rid == beRunId env =
-          snapshotEvents (beTracer env) >>= pure . Right
+          snapshotEvents (beTracer env) <&> Right
       | otherwise =
           readRunTrace (workspaceRoot (beWorkspace env)) (beRunId env) rid
 

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 
 module Hwfi.Runtime.EvalWorkflowSpec (spec) where
 
@@ -42,7 +43,7 @@ import LLM.Core.Types
     mkToolCall,
   )
 import LLM.Core.Usage (PricingInfo (..), Usage (..))
-import LLM.Generate.ModelConfig (ModelConfig (..), ModelWithFallbacks (..))
+import LLM.Generate.ModelConfig (ModelWithFallbacks (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)

@@ -56,6 +56,7 @@ import Data.Aeson.Types (parseMaybe, withObject)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
+import Data.Functor ((<&>))
 import Data.List (isSuffixOf, sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Ord (Down (..))
@@ -390,7 +391,7 @@ readRunTrace wsRoot currentRunId requestedRunId = do
           exists <- doesFileExist (rsTracePath s)
           if not exists
             then pure (Left ("no trace.jsonl for run '" <> runId <> "'"))
-            else readTraceEvents s >>= pure . Right
+            else readTraceEvents s <&> Right
 
 -- | Reject @run_id@ values that could escape @.hwfi/runs/@ (§6.5.1).
 validateRunId :: Text -> Either Text Text

@@ -145,6 +145,7 @@ import Data.Maybe (fromMaybe)
 import System.IO (hClose)
 import UnliftIO.Async (pooledForConcurrentlyN)
 import UnliftIO.Exception (bracket, tryAny)
+import Data.Either (lefts, rights)
 
 -- | Everything the executor threads through a run.
 data Runtime = Runtime
@@ -522,10 +523,10 @@ execLoop rt typedSteps q sections scope bindings s = do
 
     runPar mMax xs = do
       let n = max 1 (fromMaybe defaultParallelism mMax)
-      results <- pooledForConcurrentlyN n (zip [0 ..] xs) (\(i, x) -> runIter i x)
-      case [e | Left e <- results] of
+      results <- pooledForConcurrentlyN n (zip [0 ..] xs) (uncurry runIter)
+      case lefts results of
         (e : _) -> pure (Left e)
-        [] -> pure (Right [v | Right v <- results])
+        [] -> pure (Right (rights results))
 
 -- | The step-key scope prefix for a taken @if@ branch (§8.1, §13).
 ifScope :: Text -> Ident -> Text -> Text
@@ -566,11 +567,9 @@ execWhile rt q sections scope bindings s = do
     go stepRef i acc mCarry env maxIter = do
       _ <- emit (rtTracer rt) (LoopIter q (whileId s) i)
       let decisionKey = computeWhileDecisionKey q scope (whileId s) i
-      decisionRes <- case rtResume rt of
-        True -> lookupWhileDecision (rtStore rt) decisionKey >>= \case
-          Just pinned -> pure (Right pinned)
-          Nothing -> runPredicate i env mCarry decisionKey
-        False -> runPredicate i env mCarry decisionKey
+      decisionRes <- (if rtResume rt then lookupWhileDecision (rtStore rt) decisionKey >>= \case
+        Just pinned -> pure (Right pinned)
+        Nothing -> runPredicate i env mCarry decisionKey else runPredicate i env mCarry decisionKey)
       case decisionRes of
         Left e -> pure (Left e)
         Right (cont, _reason)
