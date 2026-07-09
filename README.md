@@ -6,13 +6,16 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 ## Features
 
 - Static type-checking (`hwfi check`) before any execution
-- Workflows, tools, type aliases, and optional `skills/` declarations
+- Workflows, tools, type aliases, and optional `skills/` (callable or
+  instruction; runtime discover/load in spec §6.7)
 - LLM steps (`llm-generate`, `llm-chat`, `llm-gen-object`) and agent loops
   (`llm-agent`, `llm-agent-object`)
 - Sandboxed file I/O, mutation tools, and allowlisted `exec`
 - Control flow: `if`/`else`, `foreach`, `par`, `while`
 - Content-addressed step cache and `hwfi resume`
 - Cross-run trace reading and skill extraction (Mode A)
+- Agent skill discovery and loading (`discover-skills`, `load-skill`) —
+  specified §6.7, not yet implemented (task 9.15)
 
 ## Prerequisites
 

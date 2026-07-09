@@ -21,8 +21,10 @@ A command-line workflow engine, written in Haskell (GHC2021), that:
    happened before them.
 6. Is designed so that agent steps can synthesize new workflows at runtime,
    type-check them against the same checker used at load time, and execute
-   them via `builtin/eval-workflow` (§6.4). Reading prior runs' traces and
-   extracting reusable skills are specified in §6.5–§6.6 (implemented).
+   them via `builtin/eval-workflow` (§6.4). Reading prior runs' traces,
+   extracting reusable skills, and **discovering/loading skills at agent
+   runtime** are specified in §6.5–§6.7 (extraction implemented; discovery
+   and loading **[deferred v1.2]**).
 
 Non-goals for v1: GUI, remote/distributed execution, multi-tenant isolation,
 a package registry for workflows.
@@ -42,8 +44,8 @@ tools/
   <name>.md                 # tool definitions (prompt-backed or built-in ref)
 types/
   <name>.md                 # shared type declarations (see §2.1)
-skills/                     # optional: trace-derived reusable tools/workflows (§6.6)
-  <name>.md
+skills/                     # optional: reusable agent skills (§6.6–§6.7)
+  <name>.md                 # callable declarations and/or instruction guides
 ```
 
 - Every `.md` file is a single top-level declaration (one workflow, one tool,
@@ -874,6 +876,18 @@ Provided by the engine, addressed as `builtin/<name>`:
   `{ message: String, fields: Json } -> { logged: Bool }` — emit a
   `workflow-log` trace event (§8.3.2) with secrets in `fields` redacted
   (§8.3.4). Non-cacheable (§8.1).
+- `builtin/discover-skills` :
+  `{ query: String, kinds: List<String>, limit: Int }
+   -> { ok: Bool, skills: List<SkillEntry>, error: String }` — list
+  skills from the project catalog whose metadata matches the filter (§6.7.1).
+  Read-only, cacheable. Agent-eligible.
+- `builtin/load-skill` :
+  `{ id: String }
+   -> { ok: Bool, kind: String, loaded: Bool, content: String, error: String }`
+  — load one skill by qname (§6.7.2). When called **inside** an agent loop,
+  mutates that step's active context (callable tools and/or instruction
+  text). When called from a scripted step, returns metadata only (no agent
+  mutation). Non-cacheable. Agent-eligible.
 
 For all LLM tools, `model` names an entry in the **model catalog** (§7.3),
 not a raw provider model id. Retry, timeout, temperature, and pricing
@@ -1029,6 +1043,60 @@ posture (§4, §13). Failures are classified:
   hand the whole run (including the full trace) to the model's context.
   Passing a callee that (transitively) calls `builtin/introspect` as an
   agent tool is rejected at `hwfi check`.
+
+#### 6.1.6 Dynamic tools and skill loading
+
+**Status: specified; implementation deferred (task 9.15).**
+
+Today the `tools` argument must be a **list literal** of bare tool/workflow
+names at `hwfi check` time, and the advertised set is **fixed for the
+entire** agent loop. §6.7 extends this so agents can discover and load
+skills based on the prompt (Cursor-style progressive disclosure).
+
+**Baseline tool set.** Every agent that uses dynamic skills must advertise
+`builtin/discover-skills` and `builtin/load-skill` in its `tools` list
+(alongside domain builtins such as `builtin/read-file`). There is no
+implicit injection — authors include the meta-tools explicitly, or via a
+shared prompt fragment.
+
+**Runtime `tools` list (phase 2).** The checker is relaxed so `tools` may
+be any expression of type `List<ToolRef<_, _> | WorkflowRef<_, _>>`, not
+only a list literal. A scripted step may assemble the initial toolbox from
+prior `discover-skills` / `load-skill` results before calling
+`builtin/llm-agent`. Eligibility rules (§6.1.1, §6.1.5) still apply to
+every ref in the list at check time when the list is statically known; for
+fully dynamic lists the checker validates only that the expression's type is
+correct and emits a warning if refs cannot be resolved statically.
+
+**Mid-loop expansion (phase 3).** When the model calls `builtin/load-skill`
+inside an agent step:
+
+- **`kind = "callable"`** — if the skill resolves to an agent-eligible
+  declaration that passed `hwfi check`, it is added to the **active tool
+  set** for subsequent rounds. The provider receives updated tool
+  definitions on the next model call.
+- **`kind = "instruction"`** — the skill body (markdown after frontmatter)
+  is appended to the agent's **instruction context** (see §6.7.2). This
+  does not add a callable tool.
+
+Loading the same `id` twice is idempotent: `loaded = false` with a tool
+message explaining it is already active.
+
+**Recoverable failures** for `load-skill`: unknown `id`, skill failed
+`hwfi check`, ineligible callable (§6.1.1), instruction over token budget,
+or load cap exceeded (§6.7.3).
+
+**Caching and resume (§8.2.1).** The agent checkpoint records, per round:
+
+- `active-tool-ids` — ordered list of callable skill qnames loaded so far
+  (plus the baseline `tools` from the step arguments).
+- `loaded-instruction-ids` — instruction skills merged into context.
+
+The `advertised-tools-fingerprint` for model-call sub-keys incorporates
+`active-tool-ids` at the **start of each round**, so a cache hit only
+occurs when the same tools were active when that round was first executed.
+Instruction loads affect `messages-so-far` directly and therefore the
+model-call sub-key without a separate fingerprint field.
 
 ### 6.2 Filesystem mutation and navigation tools
 
@@ -1275,45 +1343,84 @@ Each builtin emits a `file-io` trace event with op `"list"` (for
 `list-runs`, path `.hwfi/runs`) or op `"read"` (for `read-run-trace`, path
 `.hwfi/runs/<run_id>/trace.jsonl`). No new `TraceEvent` variants in v1.1.
 
-### 6.6 Skills (trace-derived reusable declarations)
+### 6.6 Skills (declarations and extraction)
 
-**Status: implemented (2026-07-09, tasks 9.4.1–9.4.3). Mode B (`extract-skill`) optional.**
+**Status: extraction implemented (2026-07-09, tasks 9.4.1–9.4.3). Mode B
+(`extract-skill`) optional. Runtime discovery/loading specified in §6.7
+(deferred).**
 
-A **skill** is a normal project declaration (tool or workflow markdown
-file) plus optional **provenance metadata** recording which run and step
-it was distilled from. Skills are not a separate AST node or type: they
-use the same parser, checker, and executor as `tools/` and `workflows/`.
-The `skills/` directory is a convention for declarations an agent (or
-author) created by learning from traces; the engine treats
-`skills/fix-import` like `tools/fix-import` once the file exists and
-`hwfi check` passes.
+A **skill** is a markdown file under `skills/` registered in the project
+catalog. Skills are not a separate AST node: they use the same parser,
+checker, and executor as `tools/` and `workflows/`. Two **kinds** are
+supported (§6.6.1):
 
-Rationale: reuse static typing, Merkle fingerprints, agent eligibility,
-and `ToolRef`/`WorkflowRef` dispatch instead of inventing a parallel
-"skill runtime."
+- **`callable`** — a full tool or workflow declaration (default). The
+  engine treats `skills/fix-import` like `tools/fix-import` once
+  `hwfi check` passes.
+- **`instruction`** — prose guidance only (no executable steps). Loaded
+  into the agent's instruction context at runtime (§6.7.2), not into the
+  call graph.
 
-#### 6.6.1 Skill file layout
+Rationale: reuse static typing and Merkle fingerprints for callable skills;
+avoid forcing every reusable pattern into a typed declaration when prose
+suffices (Cursor-style progressive disclosure).
 
-Skills live under `skills/<name>.md` with the same single-declaration
-markdown format as §2. Optional frontmatter fields (ignored by the checker
-except as comments / future lint):
+#### 6.6.1 Skill kinds and file layout
+
+Skills live under `skills/<name>.md`. The `skill:` frontmatter block
+carries catalog metadata; remaining fields are convention / future lint.
+
+**Callable skill** (default — backward compatible with existing projects):
 
 ```yaml
 ---
 name: skills/fix-import
 skill:
+  kind: callable
+  summary: "Repair a missing import after a cabal build failure"
+  tags: ["cabal", "haskell"]
   source_run: "<run-id>"
   source_qname: "workflows/fix"
   source_step_id: "agent"
   extracted_at: "2026-07-09T12:00:00.000Z"
-  summary: "Repair a missing import after a cabal build failure"
 ---
 ```
 
-Authors or agents add `imports:` entries elsewhere to call the skill like
-any other tool or workflow. There is no automatic registration:
-**promotion is explicit** (import the skill or pass a `ToolRef` to an
-agent's `tools` list).
+Omitting `kind` defaults to `callable`. The file body is a normal tool or
+workflow declaration (§2).
+
+**Instruction skill**:
+
+```yaml
+---
+name: skills/shell-repair-guide
+skill:
+  kind: instruction
+  summary: "Procedure for fixing sh syntax errors with sh -n"
+  tags: ["shell", "syntax"]
+---
+# Shell repair guide
+
+1. Run `sh -n <file>` before editing.
+2. Read the file; make the smallest fix.
+3. Re-run `sh -n` until exit 0.
+```
+
+Instruction skills **must not** contain executable `step` blocks. The
+checker rejects `kind: instruction` files that parse as tool/workflow
+declarations with steps. Authors may include markdown sections (`## agent`,
+etc.) as documentation only.
+
+**Promotion paths** (how a skill becomes available to an agent):
+
+| Path | Callable | Instruction |
+|------|----------|-------------|
+| Explicit | `imports:` or `tools = [skills/foo, …]` on `llm-agent` | Concatenate body into `system` before the agent step |
+| Dynamic | `builtin/load-skill` inside an agent loop (§6.7.2) | Same |
+
+There is no automatic registration at project load: even callable skills
+must be **loaded** (dynamically or listed in `tools`) before the model can
+invoke them.
 
 #### 6.6.2 Trace slice (deterministic extraction input)
 
@@ -1435,7 +1542,7 @@ implementation adds `skills/` to the project parser roots (task 9.4.1).
   inputs). An extracted stub that calls `builtin/introspect` fails
   `hwfi check` when promoted to an agent tool — by design.
 
-#### 6.6.6 Implementation order
+#### 6.6.6 Implementation order (extraction)
 
 1. **9.3** — `list-runs`, `read-run-trace`, RunStore helpers, tests A36–A37.
 2. **9.4.1** — load `skills/` declarations in the project parser/checker.
@@ -1443,9 +1550,183 @@ implementation adds `skills/` to the project parser roots (task 9.4.1).
 4. **9.4.3** — example `examples/skills` agent-driven extraction workflow
    (Mode A); optional `extract-skill` (Mode B) and A40.
 
+Runtime discovery and loading: §6.7, task 9.15.
+
 Extended rationale and example flows: [skills-design.md](skills-design.md).
 
-### 6.7 Data plumbing and workflow logging
+### 6.7 Agent skill catalog and loading
+
+**Status: specified; implementation deferred (task 9.15).**
+
+Agents discover skills from a **catalog** built at `hwfi check` time from
+every `skills/*.md` file's frontmatter plus type-check status. They load
+skills mid-loop via `builtin/load-skill` (§6.1.6). This is the Cursor-style
+**progressive disclosure** model: the model sees summaries first, then pulls
+full callable tools or instruction text only when needed.
+
+#### 6.7.1 Skill catalog and `builtin/discover-skills`
+
+At check time the engine builds an in-memory **skill catalog** from the
+project:
+
+| Field | Source |
+|-------|--------|
+| `id` | Frontmatter `name` (qualified, e.g. `skills/fix-shell`) |
+| `kind` | `skill.kind`, default `callable` |
+| `summary` | `skill.summary`, or first non-empty line of body if absent |
+| `tags` | `skill.tags`, default `[]` |
+| `path` | Project-relative file path |
+| `checked` | Whether the declaration passed `hwfi check` (`callable` only) |
+| `agent_eligible` | Whether a callable skill may be advertised as an agent tool (§6.1.1, §6.1.5) |
+
+```
+builtin/discover-skills :
+  { query: String,
+    kinds: List<String>,
+    limit: Int
+  }
+  -> { ok: Bool, skills: List<SkillEntry>, error: String }
+```
+
+`SkillEntry` is a record:
+
+```
+{ id: String, kind: String, summary: String, tags: List<String>,
+  checked: Bool, agent_eligible: Bool }
+```
+
+Behaviour:
+
+- `query` — case-insensitive substring match against `id`, `summary`, and
+  `tags`. Empty `query` returns all skills (subject to `kinds` and `limit`).
+- `kinds` — filter by skill kind. Empty list means no kind filter. Unknown
+  kind strings in the filter are ignored. Valid kinds: `"callable"`,
+  `"instruction"`.
+- `limit` — maximum entries returned, most relevant first. Relevance order:
+  tag match, then summary match, then id match. Must be ≥ 1; default 20 at
+  the builtin boundary if authors pass `0`.
+- Read-only: scans the checked project's catalog only (not arbitrary
+  workspace paths). **Cacheable** (§8.1).
+- Emits a `skill-discover` trace event (§8.3.2) with `query`, `kinds`,
+  `limit`, and result count (no full skill bodies).
+
+When called from inside an agent loop, results are returned to the model as
+a normal tool message. The model is expected to call `discover-skills`
+before `load-skill` when the catalog is unknown.
+
+#### 6.7.2 `builtin/load-skill`
+
+```
+builtin/load-skill :
+  { id: String }
+  -> { ok: Bool, kind: String, loaded: Bool, content: String, error: String }
+```
+
+- `id` — skill qname (e.g. `skills/fix-shell`). Must exist in the catalog.
+- On success: `ok = true`, `kind` echoes the skill kind, `loaded = true` on
+  first load in the current agent step, `loaded = false` if already active.
+- **`callable` + inside agent loop:** adds the skill to `active-tool-ids`
+  (§6.1.6) if `checked` and `agent_eligible`. `content` is empty. The callee
+  is advertised on the **next** model round.
+- **`callable` + scripted step:** does not mutate any agent. Returns
+  `{ ok = true, loaded = false, content = "" }` — use explicit `tools`
+  lists or call from within an agent instead.
+- **`instruction` + inside agent loop:** appends the markdown body (after
+  frontmatter) to the agent instruction context. The engine inserts a
+  synthetic system message of the form:
+
+  ```
+  ## Loaded skill: <id>
+
+  <body>
+  ```
+
+  before the next model round. `content` echoes the inserted text (for
+  scripted callers). Instruction skills do not require `hwfi check` beyond
+  frontmatter validation.
+- **`instruction` + scripted step:** returns the body in `content` without
+  agent mutation; callers may concatenate into `system` manually.
+- Recoverable failures (`ok = false`): unknown `id`, callable not checked,
+  callable not agent-eligible, instruction body exceeds
+  `skills.max_instruction_chars` (§6.7.3), or load cap exceeded.
+- **Non-cacheable** (§8.1). Emits a `skill-load` trace event with `id`,
+  `kind`, and `loaded`.
+
+#### 6.7.3 Limits and project manifest
+
+Extend the optional `project.json` `skills` stanza (§6.6.4):
+
+```json
+{
+  "skills": {
+    "directory": "skills",
+    "allow_overwrite": false,
+    "max_callable_loads": 8,
+    "max_instruction_loads": 5,
+    "max_instruction_chars": 12000
+  }
+}
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `max_callable_loads` | `8` | Per agent step; baseline `tools` do not count |
+| `max_instruction_loads` | `5` | Per agent step |
+| `max_instruction_chars` | `12000` | Total instruction body chars across all loaded instruction skills in one agent step |
+
+#### 6.7.4 Recommended agent workflow
+
+```step
+result <- builtin/llm-agent(
+  system = @self#agent,
+  prompt = "...",
+  model = "smart",
+  tools = [
+    builtin/discover-skills,
+    builtin/load-skill,
+    builtin/read-file,
+    builtin/edit-file,
+    builtin/exec
+  ],
+  max_rounds = 16
+)
+```
+
+The model discovers relevant skills, loads them, then uses newly advertised
+callable skills or follows loaded instructions. Authors keep a small
+**baseline** toolbox (filesystem, exec, meta-tools); domain skills stay in
+`skills/` until loaded.
+
+#### 6.7.5 Security
+
+- Callable skills loaded at runtime must have passed `hwfi check` and satisfy
+  §6.1.1 / §6.1.5 — same rules as statically listed tools.
+- Instruction skills are prose only; they cannot execute code. The checker
+  rejects instruction files with executable steps (§6.6.1).
+- `discover-skills` never returns full skill bodies — only metadata — so
+  large instruction files are not dumped into context until explicitly
+  loaded.
+- Instruction content is subject to the same redaction rules as system
+  prompts if it interpolates secrets (authors should not embed secrets in
+  skills).
+
+#### 6.7.6 Implementation order
+
+Phased delivery (task 9.15):
+
+1. **9.15.1** — Skill catalog at check time; `kind` frontmatter; instruction
+   vs callable validation; `discover-skills` builtin; tests A45–A46.
+2. **9.15.2** — `load-skill` for instruction skills (context injection);
+   scripted-step behaviour; `skill-discover` / `skill-load` trace events;
+   tests A47.
+3. **9.15.3** — `load-skill` for callable skills (mid-loop tool expansion);
+   agent checkpoint fields; `advertised-tools-fingerprint` per round;
+   tests A48–A49.
+4. **9.15.4** — Relax `tools` to runtime `List<Ref>` expressions (§6.1.6
+   phase 2); example in `examples/ship` or new `examples/skills-runtime`;
+   test A50.
+
+### 6.8 Data plumbing and workflow logging
 
 **Status: implemented (R1, tasks 9.5 subset).**
 
@@ -1709,8 +1990,8 @@ the AST node.
 
 The following builtins are also **always non-cacheable** regardless of
 arguments: `builtin/eval-workflow`, `builtin/list-runs`,
-`builtin/read-run-trace`, `builtin/trace-slice`, and `builtin/log`
-(§6.5, §6.7).
+`builtin/read-run-trace`, `builtin/trace-slice`, `builtin/log`
+(§6.5, §6.8), `builtin/load-skill` (§6.7).
 
 An agent step (`builtin/llm-agent` / `builtin/llm-agent-object`, §6.1) is
 **also non-cacheable as a whole**: its behaviour — which tools it calls, in
@@ -1790,6 +2071,12 @@ Two kinds of unit are cached under the enclosing agent step-key:
   model-catalog-fingerprint, advertised-tools-fingerprint)`. The
   `messages-so-far` already encode every prior round's assistant turn and
   tool results, so the key chain is self-consistent.
+- **`advertised-tools-fingerprint`** incorporates the ordered
+  `active-tool-ids` at the start of the round (baseline `tools` plus any
+  callable skills loaded via `builtin/load-skill`, §6.1.6). When the active
+  set changes between rounds, subsequent model-call sub-keys change
+  accordingly — a round cached with three tools must not replay as if five
+  were advertised.
 
 **Canonicalization caveat.** Sub-keys hash the **actual** message content
 and resolved args (as stored in `steps/*.json`, non-redacted — §6.1.2),
@@ -1964,6 +2251,21 @@ TraceEvent =
       seq, at, qname, step_id,
       message : String,
       fields  : Json              -- secrets redacted (§8.3.4)
+    }
+  | SkillDiscover {
+      tag    : "skill-discover",
+      seq, at, qname, step_id,
+      query  : String,
+      kinds  : List<String>,
+      limit  : Int,
+      count  : Int                 -- entries returned
+    }
+  | SkillLoad {
+      tag    : "skill-load",
+      seq, at, qname, step_id,
+      id     : String,
+      kind   : String,
+      loaded : Bool
     }
   | Resumed {
       tag      : "resumed",
@@ -2392,6 +2694,22 @@ The following are specified but not yet implemented:
 
 A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
     refuses overwrite when `allow_overwrite` is false.
+A45. `builtin/discover-skills` returns catalog metadata for skills under
+    `skills/` filtered by `query`, `kinds`, and `limit`; empty catalog
+    yields `ok = true` and `skills = []`.
+A46. `discover-skills` never includes full instruction bodies — only
+    `id`, `kind`, `summary`, `tags`, `checked`, and `agent_eligible`.
+A47. `builtin/load-skill` with `kind = instruction` inside an agent loop
+    injects the markdown body into the agent context; loading the same
+    `id` twice returns `loaded = false` without duplicating context.
+A48. `builtin/load-skill` with `kind = callable` inside an agent loop
+    adds an agent-eligible checked skill to the active tool set for
+    subsequent rounds.
+A49. Agent resume replays mid-loop skill loads: checkpoint records
+    `active-tool-ids` and `loaded-instruction-ids`; model-call sub-keys
+    use the round's `advertised-tools-fingerprint` (§8.2.1).
+A50. `builtin/llm-agent` accepts a runtime `List<ToolRef | WorkflowRef>`
+    expression for `tools`, not only a list literal (§6.1.6 phase 2).
 
 ## 12. Edge cases and known tricky bits
 
@@ -2422,6 +2740,8 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
 - Cross-run trace reading — §6.5 (implemented).
 - Skill extraction from traces — §6.6 Mode A (implemented); Mode B
   (`builtin/extract-skill`) optional / not implemented.
+- Agent skill discovery and loading — §6.7 (`discover-skills`,
+  `load-skill`, mid-loop callable expansion) — specified, not implemented.
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
@@ -2474,9 +2794,9 @@ giant string interpolations or ad-hoc LLM calls:
   `Record<{…}>` values (expression forms and/or small builtins).
   **[deferred]**
 - **JSON path access** — `builtin/json-get` over `Json` values with dot-separated
-  keys and recoverable `{ ok, error }` on missing paths. **[implemented, §6.7]**
+  keys and recoverable `{ ok, error }` on missing paths. **[implemented, §6.8]**
 - **String concatenation** — `builtin/concat` concatenates strings without
-  JSON-encoding entire records via interpolation (§3.2.1). **[implemented, §6.7]**
+  JSON-encoding entire records via interpolation (§3.2.1). **[implemented, §6.8]**
 
 #### 13.1.3 Simpler loop syntax
 
@@ -2516,7 +2836,7 @@ for authoring and debugging:
 
 - **`builtin/log`** — emits a `workflow-log` trace event (§8.3.2) with
   named fields in `fields` (secrets redacted, §8.3.4). Non-cacheable so
-  resume replays log lines. **[implemented, §6.7]**
+  resume replays log lines. **[implemented, §6.8]**
 - Optional stdout mirroring and richer field typing remain deferred.
 
 #### 13.1.6 Dynamic dispatch ergonomics (`WorkflowRef` / `ToolRef`)
@@ -2529,8 +2849,26 @@ for authoring and debugging:
   values.
 - Optional **checker hints** or lint for common mistakes (e.g. ref passed
   where a qname call was intended).
-- Cross-link from §6.1 (agent tools) and §6.4 (`eval-workflow` vs existing
-  declarations).
+- Cross-link from §6.1 (agent tools), §6.4 (`eval-workflow` vs existing
+  declarations), and §6.7 (dynamic skill loading).
+
+#### 13.1.7 Agent skill runtime (discover / load)
+
+**Priority: 3.** Specified in §6.7; tracked as task 9.15 in
+[TASKS.md](TASKS.md). Cursor-style progressive disclosure: agents browse a
+skill catalog, then load callable tools or instruction prose on demand.
+
+**Phased delivery:**
+
+1. Catalog + `discover-skills` + `kind` frontmatter (callable /
+   instruction).
+2. `load-skill` for instruction skills (context injection).
+3. `load-skill` for callable skills (mid-loop tool expansion + checkpoint).
+4. Runtime `tools` list expressions on `llm-agent` (§6.1.6).
+
+**Relationship to §6.6:** extraction (trace → `skills/foo.md`) is the
+*authoring* path; §6.7 is the *runtime* path. A distilled callable skill
+must still pass `hwfi check` before `load-skill` can advertise it.
 
 ## 14. Known implementation gaps
 
