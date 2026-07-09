@@ -4,20 +4,19 @@ Last updated: 2026-07-09
 
 ## Current focus
 
-**R1 v1.0.0 release prep.** Tutorial examples hardened with DeepSeek E2E tests;
-tutorials (R1.11) and tag 0.1.0.0 remain.
+**R1 v1.0.0 release prep.** New `examples/ship` capstone added; tutorials
+(R1.11) and tag 0.1.0.0 remain.
 
 ## Done recently
 
-- **R1.9 (2026-07-09):** `summarise` + `coding/fix` use DeepSeek
-  (`deepseek-v4-flash`); `.env.example` per example; `ExamplesE2ESpec` live E2E
-  on clean workspaces (pending without `DEEPSEEK_API_KEY`).
-- **Spec sync (2026-07-09):** `spec.md` aligned with R1 — D3 cache semantics,
-  `json-get`/`concat`/`log`, `workflow-log`, `hwfi cache clear`, §8.4 usage/cost,
-  acceptance A27–A44; `spec-issues.md` / `h1-verification.md` D3 closed.
-- **R1 P0/P1 (2026-07-09):** D3 agent cache fix; `docs/caching-and-resume.md`;
-  `builtin/json-get`, `builtin/concat`, `builtin/log`; `hwfi cache clear`;
-  root + `summarise` READMEs; `while` example (`tick-stop`); doc sync.
+- **examples/ship (2026-07-09):** Capstone coding-agent pipeline — plan
+  (`llm-gen-object`), per-task `llm-agent`, `while` repair, `par` validation,
+  review, audit, optional `distill` skill entry; static check in
+  `ExamplesE2ESpec`.
+- **R1.9 (2026-07-09):** `summarise` + `coding/fix` DeepSeek E2E; `.env.example`
+  per example; live E2E on clean workspaces.
+- **R1 P0/P1 (2026-07-09):** D3 cache fix; caching guide; `json-get`/`concat`/`log`;
+  `while` example; doc sync.
 
 ## Blockers
 

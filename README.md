@@ -63,6 +63,7 @@ hwfi cache clear <workspace-dir> <run-id>
 | [`examples/coding`](examples/coding) | Agent coding loop + `exec` |
 | [`examples/control-flow`](examples/control-flow) | `if` / `foreach` / `par` / `while` |
 | [`examples/research`](examples/research) | Full feature matrix (advanced) |
+| [`examples/ship`](examples/ship) | Capstone coding agent pipeline |
 | [`examples/skills`](examples/skills) | Trace → skill extraction |
 
 ## Documentation

@@ -38,6 +38,9 @@ summariseDir = "examples/summarise"
 codingDir :: FilePath
 codingDir = "examples/coding"
 
+shipDir :: FilePath
+shipDir = "examples/ship"
+
 brokenShFixture :: FilePath
 brokenShFixture = codingDir </> "sample-workspace/broken.sh"
 
@@ -49,6 +52,9 @@ spec = do
 
     it "coding passes hwfi check" $
       expectCheckOk codingDir
+
+    it "ship passes hwfi check" $
+      expectCheckOk shipDir
 
   describe "tutorial examples (live E2E)" $ do
     it "summarise reads, summarises, and writes on a clean workspace" $

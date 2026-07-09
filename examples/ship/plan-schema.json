@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "goal": { "type": "string" },
+    "approach": { "type": "string" },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["goal", "approach", "risks"]
+}

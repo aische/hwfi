@@ -1,0 +1,26 @@
+[
+  {
+    "modelConfigName": "fast",
+    "providerName": "deepseek",
+    "modelName": "deepseek-v4-flash",
+    "pricing": { "pricePerMillionInput": 0.14, "pricePerMillionOutput": 0.28 },
+    "maxTokens": 1024,
+    "temperature": 0.2,
+    "requestTimeout": 60000,
+    "throttleDelay": 0,
+    "retryCount": 2,
+    "jitterBackoff": 1000
+  },
+  {
+    "modelConfigName": "smart",
+    "providerName": "deepseek",
+    "modelName": "deepseek-v4-flash",
+    "pricing": { "pricePerMillionInput": 0.14, "pricePerMillionOutput": 0.28 },
+    "maxTokens": 2048,
+    "temperature": 0.1,
+    "requestTimeout": 120000,
+    "throttleDelay": 0,
+    "retryCount": 2,
+    "jitterBackoff": 1000
+  }
+]

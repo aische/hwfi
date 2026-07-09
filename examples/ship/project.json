@@ -1,0 +1,12 @@
+{
+  "name": "ship",
+  "version": "0.1.0",
+  "entrypoint": "workflows/main",
+  "env": ["ENGINEER_NAME", "SHIP_API_TOKEN"],
+  "exec": {
+    "allow": ["sh"],
+    "env": ["PATH"],
+    "timeout_ms": 15000,
+    "max_output_bytes": 65536
+  }
+}

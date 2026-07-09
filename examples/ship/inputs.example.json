@@ -1,0 +1,17 @@
+{
+  "spec": "Repair the shell greeting library so every script passes `sh -n` and greets correctly.",
+  "tasks": [
+    {
+      "id": "greet",
+      "description": "Fix lib/greet.sh: close the if block and keep the greet function working.",
+      "target": "lib/greet.sh"
+    },
+    {
+      "id": "farewell",
+      "description": "Fix lib/farewell.sh: close the if block and keep the farewell function working.",
+      "target": "lib/farewell.sh"
+    }
+  ],
+  "targets": ["lib/greet.sh", "lib/farewell.sh"],
+  "plan_schema": "@plan-schema.json"
+}
