@@ -23,8 +23,8 @@ A command-line workflow engine, written in Haskell (GHC2021), that:
    type-check them against the same checker used at load time, and execute
    them via `builtin/eval-workflow` (§6.4). Reading prior runs' traces,
    extracting reusable skills, and **discovering/loading skills at agent
-   runtime** are specified in §6.5–§6.7 (extraction implemented; discovery
-   and loading **[deferred v1.2]**).
+   runtime** are specified and implemented in §6.5–§6.7 (Mode B
+   `extract-skill` optional — §6.6.3).
 
 Non-goals for v1: GUI, remote/distributed execution, multi-tenant isolation,
 a package registry for workflows.
@@ -1046,12 +1046,13 @@ posture (§4, §13). Failures are classified:
 
 #### 6.1.6 Dynamic tools and skill loading
 
-**Status: specified; implementation deferred (task 9.15).**
+**Status: implemented (2026-07-09, task 9.15).**
 
-Today the `tools` argument must be a **list literal** of bare tool/workflow
-names at `hwfi check` time, and the advertised set is **fixed for the
-entire** agent loop. §6.7 extends this so agents can discover and load
-skills based on the prompt (Cursor-style progressive disclosure).
+The `tools` argument on `builtin/llm-agent` / `builtin/llm-agent-object`
+may be a **list literal** of bare tool/workflow names or any expression of
+type `List<ToolRef<_, _> | WorkflowRef<_, _>>` (§6.1.6 phase 2). Agents
+may also **discover and load** skills mid-loop via §6.7 (Cursor-style
+progressive disclosure).
 
 **Baseline tool set.** Every agent that uses dynamic skills must advertise
 `builtin/discover-skills` and `builtin/load-skill` in its `tools` list
@@ -1346,8 +1347,8 @@ Each builtin emits a `file-io` trace event with op `"list"` (for
 ### 6.6 Skills (declarations and extraction)
 
 **Status: extraction implemented (2026-07-09, tasks 9.4.1–9.4.3). Mode B
-(`extract-skill`) optional. Runtime discovery/loading specified in §6.7
-(deferred).**
+(`extract-skill`) optional / not implemented (A40). Runtime
+discovery/loading implemented in §6.7 (task 9.15).**
 
 A **skill** is a markdown file under `skills/` registered in the project
 catalog. Skills are not a separate AST node: they use the same parser,
@@ -1524,14 +1525,18 @@ Optional `project.json` stanza:
 }
 ```
 
-- `directory` — where Mode B writes files (default `"skills"`). Mode A
-  authors may write anywhere; only the convention path is validated by
-  `extract-skill`.
-- `allow_overwrite` — safety gate for Mode B (§6.6.3).
+- `directory` — reserved for Mode B writes (default `"skills"`). The
+  project parser currently walks the fixed top-level `skills/` directory;
+  a non-default `directory` is parsed but not yet honored by the loader
+  (§14).
+- `allow_overwrite` — safety gate for Mode B (§6.6.3); unused until
+  `extract-skill` is implemented.
 
-The project loader **does not** auto-scan `skills/` separately: files there
-are loaded with the same directory walk as `tools/` and `workflows/` once
-implementation adds `skills/` to the project parser roots (task 9.4.1).
+The project loader walks `skills/` alongside `tools/`, `workflows/`, and
+`types/` (task 9.4.1). Callable **tool** skills and `kind: instruction`
+files are registered in the runtime catalog (§6.7); callable **workflow**
+declarations under `skills/` are loaded for `hwfi check` but are not
+catalog entries for `discover-skills` / `load-skill` today.
 
 #### 6.6.5 Security and secrets
 
@@ -1550,13 +1555,13 @@ implementation adds `skills/` to the project parser roots (task 9.4.1).
 4. **9.4.3** — example `examples/skills` agent-driven extraction workflow
    (Mode A); optional `extract-skill` (Mode B) and A40.
 
-Runtime discovery and loading: §6.7, task 9.15.
+Runtime discovery and loading: §6.7 (**done**, task 9.15).
 
 Extended rationale and example flows: [skills-design.md](skills-design.md).
 
 ### 6.7 Agent skill catalog and loading
 
-**Status: specified; implementation deferred (task 9.15).**
+**Status: implemented (2026-07-09, task 9.15).**
 
 Agents discover skills from a **catalog** built at `hwfi check` time from
 every `skills/*.md` file's frontmatter plus type-check status. They load
@@ -1712,7 +1717,7 @@ callable skills or follows loaded instructions. Authors keep a small
 
 #### 6.7.6 Implementation order
 
-Phased delivery (task 9.15):
+Delivered (task 9.15, 2026-07-09):
 
 1. **9.15.1** — Skill catalog at check time; `kind` frontmatter; instruction
    vs callable validation; `discover-skills` builtin; tests A45–A46.
@@ -1722,9 +1727,8 @@ Phased delivery (task 9.15):
 3. **9.15.3** — `load-skill` for callable skills (mid-loop tool expansion);
    agent checkpoint fields; `advertised-tools-fingerprint` per round;
    tests A48–A49.
-4. **9.15.4** — Relax `tools` to runtime `List<Ref>` expressions (§6.1.6
-   phase 2); example in `examples/ship` or new `examples/skills-runtime`;
-   test A50.
+4. **9.15.4** — Runtime `List<Ref>` expressions for `tools` (§6.1.6
+   phase 2); example `examples/skills-runtime`; test A50.
 
 ### 6.8 Data plumbing and workflow logging
 
@@ -2689,11 +2693,6 @@ A43. `builtin/log` emits a `workflow-log` trace event with redacted `fields`
     and is re-executed on resume (non-cacheable).
 A44. `hwfi cache clear` removes cached step results so a subsequent
     `hwfi resume` re-runs previously cached steps.
-
-The following are specified but not yet implemented:
-
-A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
-    refuses overwrite when `allow_overwrite` is false.
 A45. `builtin/discover-skills` returns catalog metadata for skills under
     `skills/` filtered by `query`, `kinds`, and `limit`; empty catalog
     yields `ok = true` and `skills = []`.
@@ -2710,6 +2709,11 @@ A49. Agent resume replays mid-loop skill loads: checkpoint records
     use the round's `advertised-tools-fingerprint` (§8.2.1).
 A50. `builtin/llm-agent` accepts a runtime `List<ToolRef | WorkflowRef>`
     expression for `tools`, not only a list literal (§6.1.6 phase 2).
+
+The following are specified but not yet implemented:
+
+A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
+    refuses overwrite when `allow_overwrite` is false.
 
 ## 12. Edge cases and known tricky bits
 
@@ -2737,11 +2741,10 @@ A50. `builtin/llm-agent` accepts a runtime `List<ToolRef | WorkflowRef>`
   **no longer deferred**: it is specified in §6.2/§6.3/§7.5. What remains
   deferred is only stronger per-process containment beyond the allowlist +
   empty-environment model.)
-- Cross-run trace reading — §6.5 (implemented).
-- Skill extraction from traces — §6.6 Mode A (implemented); Mode B
-  (`builtin/extract-skill`) optional / not implemented.
-- Agent skill discovery and loading — §6.7 (`discover-skills`,
-  `load-skill`, mid-loop callable expansion) — specified, not implemented.
+- Cross-run trace reading — §6.5 (**implemented**).
+- Skill extraction from traces — §6.6 Mode A (**implemented**); Mode B
+  (`builtin/extract-skill`) optional / **not implemented** (A40).
+- Agent skill discovery and loading — §6.7 (**implemented**, task 9.15).
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
@@ -2854,21 +2857,18 @@ for authoring and debugging:
 
 #### 13.1.7 Agent skill runtime (discover / load)
 
-**Priority: 3.** Specified in §6.7; tracked as task 9.15 in
-[TASKS.md](TASKS.md). Cursor-style progressive disclosure: agents browse a
-skill catalog, then load callable tools or instruction prose on demand.
-
-**Phased delivery:**
-
-1. Catalog + `discover-skills` + `kind` frontmatter (callable /
-   instruction).
-2. `load-skill` for instruction skills (context injection).
-3. `load-skill` for callable skills (mid-loop tool expansion + checkpoint).
-4. Runtime `tools` list expressions on `llm-agent` (§6.1.6).
+**Implemented (2026-07-09, task 9.15).** Normative spec: §6.7;
+`examples/skills-runtime`. Cursor-style progressive disclosure: agents browse
+a skill catalog via `discover-skills`, then load callable tools or
+instruction prose via `load-skill`.
 
 **Relationship to §6.6:** extraction (trace → `skills/foo.md`) is the
 *authoring* path; §6.7 is the *runtime* path. A distilled callable skill
 must still pass `hwfi check` before `load-skill` can advertise it.
+
+**Follow-ups (not blocking):** semantic/embedding discover (substring match
+today); `hwfi skill list` CLI; honor `skills.directory` in the project
+walker; catalog entries for callable workflow skills under `skills/`.
 
 ## 14. Known implementation gaps
 
@@ -2886,3 +2886,11 @@ must still pass `hwfi check` before `load-skill` can advertise it.
 needed): O(n²) `ctx.trace` rebuild per step (§8.3.5, perf); O(n²)
 `find-files`/`grep` walk; `read-file-slice` re-reads whole file per page
 (§6.2, bounded by read cap).
+
+**Skill runtime polish** (§6.7 implemented; minor spec/code drift):
+
+| Item | Spec / intent | Current engine |
+|------|---------------|----------------|
+| `skills.directory` | Configurable catalog root | Parsed in `project.json`; walker hardcodes `skills/` |
+| Callable workflow skills | `skills/foo.md` as workflow | Loaded by checker; not in discover/load catalog |
+| Mode B | `builtin/extract-skill` | Not implemented (A40); `allow_overwrite` unused |

@@ -13,6 +13,7 @@ Original review predates M1–M9 and H1. Updated 2026-07-09.
 | 5 | Interpolation of complex types | §3.2.1 rendering table; interpolation JSON-encodes structured types. |
 | 6 | `ctx.trace` on resume | §8.3.5: preload persisted `trace.jsonl`; test A15. |
 | 7 | Eval errors | `KEval` / `"eval"` kind in runtime (§8.3.2). |
+| 8 | Agent skill runtime (§6.7) | `discover-skills`, `load-skill`, catalog, checkpoint/resume; tests A45–A50; `examples/skills-runtime`. |
 
 ## Still accurate (by design or deferred)
 

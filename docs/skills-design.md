@@ -10,7 +10,7 @@ learn from past runs, materialize reusable **skills**, and **load the right
 skills at runtime** based on the task (Cursor-style progressive disclosure).
 
 v1 shipped cross-run trace reading (§6.5) and skill **extraction** (§6.6).
-v1.2 adds skill **discovery and loading** (§6.7).
+v1.2 adds skill **discovery and loading** (§6.7) — **implemented** (task 9.15).
 
 ## Design principles
 
@@ -193,12 +193,12 @@ Author runs `hwfi check`, commits the file. On the next run the agent can
 
 | Task | Scope | Tests |
 |------|-------|-------|
-| 9.4.1–9.4.3 (done) | `skills/` loader, trace-slice, examples | A38–A39 |
+| 9.4.1–9.4.3 (**done**) | `skills/` loader, trace-slice, examples | A38–A39 |
 | 9.4.4 (optional) | `extract-skill` stub writer | A40 |
-| 9.15.1 | Catalog, `kind` frontmatter, `discover-skills` | A45–A46 |
-| 9.15.2 | `load-skill` instruction path, trace events | A47 |
-| 9.15.3 | `load-skill` callable path, agent checkpoint | A48–A49 |
-| 9.15.4 | Runtime `tools` list on `llm-agent` | A50 |
+| 9.15.1 (**done**) | Catalog, `kind` frontmatter, `discover-skills` | A45–A46 |
+| 9.15.2 (**done**) | `load-skill` instruction path, trace events | A47 |
+| 9.15.3 (**done**) | `load-skill` callable path, agent checkpoint | A48–A49 |
+| 9.15.4 (**done**) | Runtime `tools` list on `llm-agent` | A50 |
 
 ### Module touchpoints (9.15)
 

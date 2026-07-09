@@ -9,6 +9,9 @@ R1.12 release tag. Optional follow-up: `examples/skills-runtime` E2E in CI.
 
 ## Done recently
 
+- **Spec sync (2026-07-09):** `spec.md` §6.7 / §6.1.6 marked implemented;
+  A45–A50 acceptance; §14 skill-runtime polish; `spec-issues`, `TASKS`,
+  `README` aligned.
 - **9.15 Skill runtime (2026-07-09):** `SkillCatalog` + `kind` frontmatter;
   `builtin/discover-skills` / `builtin/load-skill`; agent mid-loop instruction
   injection and callable expansion; extended checkpoint/resume; per-round tools
