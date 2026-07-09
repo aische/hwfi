@@ -924,7 +924,8 @@ builtinEnv rt stepRef bindings scope =
       beExecPolicy = (tpManifest (rtProject rt)).execPolicy,
       beUsage = rtUsage rt,
       beIntrospect = introspectDump rt stepRef bindings,
-      beEvalWorkflow = Just (evalWorkflowSeam rt scope)
+      beEvalWorkflow = Just (evalWorkflowSeam rt scope),
+      beRunId = riRunId (rtRunInfo rt)
     }
 
 evalWorkflowSeam :: Runtime -> Text -> EvalWorkflowSeam

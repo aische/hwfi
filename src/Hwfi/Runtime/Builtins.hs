@@ -35,7 +35,8 @@ import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sand
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
-import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit)
+import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
+import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, snapshotEvents)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
 import Hwfi.Runtime.Workspace
@@ -51,6 +52,7 @@ import Hwfi.Runtime.Workspace
     readTextFile,
     removeDir,
     removeFile,
+    workspaceRoot,
     writeTextFile,
   )
 import LLM (defaultDebugHooks)
@@ -69,7 +71,9 @@ data BuiltinEnv = BuiltinEnv
     -- by the executor because it needs the live bindings and trace.
     beIntrospect :: IO Value,
     -- | Dynamic workflow evaluation seam (§6.4). 'Nothing' outside the executor.
-    beEvalWorkflow :: Maybe EvalWorkflowSeam
+    beEvalWorkflow :: Maybe EvalWorkflowSeam,
+    -- | The current logical run id (§6.5).
+    beRunId :: Text
   }
 
 -- | Dispatch a builtin call. The caller guarantees @q@ is a builtin qname.
@@ -93,6 +97,8 @@ runBuiltin env q args = case renderQName q of
   "builtin/llm-gen-object" -> llmGenObjectTool env args
   "builtin/introspect" -> introspectTool env
   "builtin/eval-workflow" -> evalWorkflowTool env args
+  "builtin/list-runs" -> listRunsTool env args
+  "builtin/read-run-trace" -> readRunTraceTool env args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------
@@ -489,3 +495,65 @@ evalWorkflowTool env args =
       Just (VJson j) -> Right j
       Just VNull -> Right Null
       _ -> Left "not Json"
+
+-- Cross-run trace reading (§6.5) ---------------------------------------------
+
+listRunsTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+listRunsTool env args = orFail (argInt args "limit") $ \limit -> do
+  let clamped = max 1 (min 100 limit)
+  runs <- listRuns (workspaceRoot (beWorkspace env)) clamped
+  emitFileIo env OpList ".hwfi/runs" 0
+  pure (Right (record [("runs", VList (map runSummaryValue runs))]))
+  where
+    runSummaryValue RunSummary {..} =
+      record
+        [ ("id", VString rsId),
+          ("started_at", VString rsStartedAt),
+          ("entrypoint", VString rsEntrypoint),
+          ("status", VString rsStatus)
+        ]
+
+readRunTraceTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+readRunTraceTool env args = orFail (argText args "run_id") $ \runId -> do
+  let resolved =
+        if runId == "current"
+          then beRunId env
+          else runId
+  if resolved == beRunId env
+    then do
+      events <- snapshotEvents (beTracer env)
+      let tracePath = ".hwfi/runs/" <> resolved <> "/trace.jsonl"
+      emitFileIo env OpRead tracePath 0
+      pure
+        ( Right
+            ( record
+                [ ("ok", VBool True),
+                  ("events", VList (map (VJson . eventToJson) events)),
+                  ("error", VString "")
+                ]
+            )
+        )
+    else
+      readRunTrace (workspaceRoot (beWorkspace env)) (beRunId env) runId >>= \case
+        Left err ->
+          pure
+            ( Right
+                ( record
+                    [ ("ok", VBool False),
+                      ("events", VList []),
+                      ("error", VString err)
+                    ]
+                )
+            )
+        Right events -> do
+          let tracePath = ".hwfi/runs/" <> resolved <> "/trace.jsonl"
+          emitFileIo env OpRead tracePath 0
+          pure
+            ( Right
+                ( record
+                    [ ("ok", VBool True),
+                      ("events", VList (map (VJson . eventToJson) events)),
+                      ("error", VString "")
+                    ]
+                )
+            )

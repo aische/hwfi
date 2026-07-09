@@ -22,11 +22,13 @@ module Hwfi.Runtime.RunStore
     rsRunDir,
     rsTracePath,
     rsMetaPath,
+    runsRoot,
     RunPhase (..),
     phaseText,
     phaseFromText,
     isResumable,
     RunMeta (..),
+    RunSummary (..),
     createRunStore,
     openRunStore,
     writeRunMeta,
@@ -38,6 +40,8 @@ module Hwfi.Runtime.RunStore
     cacheWhileDecision,
     lookupWhileDecision,
     readTraceEvents,
+    listRuns,
+    readRunTrace,
     openTraceAppend,
     withWorkspaceLock,
   )
@@ -49,6 +53,8 @@ import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.=), (.:?
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (parseMaybe, withObject)
 import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
+import Data.List (sortOn)
+import Data.Ord (Down (..))
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
@@ -56,7 +62,14 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
 import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, removeFile, renameFile)
+import System.Directory
+  ( createDirectoryIfMissing,
+    doesDirectoryExist,
+    doesFileExist,
+    listDirectory,
+    removeFile,
+    renameFile,
+  )
 import System.FilePath ((</>))
 import System.IO
   ( BufferMode (LineBuffering),
@@ -128,6 +141,15 @@ data RunMeta = RunMeta
     rmPhase :: RunPhase,
   -- | Accumulated LLM spend for the logical run (§8.4.4).
     rmUsage :: RunUsage
+  }
+  deriving stock (Eq, Show)
+
+-- | A run directory summary for @builtin/list-runs@ (§6.5.1).
+data RunSummary = RunSummary
+  { rsId :: Text,
+    rsStartedAt :: Text,
+    rsEntrypoint :: Text,
+    rsStatus :: Text
   }
   deriving stock (Eq, Show)
 
@@ -289,6 +311,78 @@ readTraceEvents store = do
       raw <- BS.readFile (rsTracePath store)
       let lns = filter (not . BS.null) (BS8.lines raw)
       pure [ev | ln <- lns, Just v <- [Aeson.decodeStrict ln], Just ev <- [eventFromJson v]]
+
+-- | List persisted runs under @\<workspace>/.hwfi/runs/@, most recent first
+-- (§6.5.1). @limit@ is clamped to @[1, 100]@. Entries without a readable
+-- @run.json@ are skipped.
+listRuns :: FilePath -> Int -> IO [RunSummary]
+listRuns wsRoot limit = do
+  let root = runsRoot wsRoot
+      cap = max 1 (min 100 limit)
+  exists <- doesDirectoryExist root
+  if not exists
+    then pure []
+    else do
+      dirs <- listDirectory root
+      summaries <-
+        mapM
+          ( \name -> do
+              let dir = root </> name
+              isDir <- doesDirectoryExist dir
+              if not isDir
+                then pure Nothing
+                else do
+                  let store = storeFor wsRoot (T.pack name)
+                  mMeta <- readRunMeta store
+                  pure (metaSummary <$> eitherToMaybe mMeta)
+          )
+          dirs
+      pure $
+        take cap $
+          sortByStartedAtDesc $
+            [s | Just s <- summaries]
+  where
+    metaSummary m =
+      RunSummary
+        { rsId = rmRunId m,
+          rsStartedAt = rmStartedAt m,
+          rsEntrypoint = rmEntrypoint m,
+          rsStatus = phaseText (rmPhase m)
+        }
+    sortByStartedAtDesc = sortOn (Down . rsStartedAt)
+    eitherToMaybe = \case
+      Right m -> Just m
+      Left _ -> Nothing
+
+-- | Read a prior run's @trace.jsonl@ (§6.5.1). @requestedRunId@ may be
+-- @\"current\"@, resolved against @currentRunId@. Returns 'Left' with a
+-- human-readable message when the run directory is missing, @run_id@ is
+-- invalid, or @trace.jsonl@ cannot be read.
+readRunTrace :: FilePath -> Text -> Text -> IO (Either Text [TraceEvent])
+readRunTrace wsRoot currentRunId requestedRunId = do
+  let resolved =
+        if requestedRunId == "current"
+          then currentRunId
+          else requestedRunId
+  case validateRunId resolved of
+    Left err -> pure (Left err)
+    Right runId -> do
+      store <- openRunStore wsRoot runId
+      case store of
+        Left err -> pure (Left err)
+        Right s -> do
+          exists <- doesFileExist (rsTracePath s)
+          if not exists
+            then pure (Left ("no trace.jsonl for run '" <> runId <> "'"))
+            else readTraceEvents s >>= pure . Right
+
+-- | Reject @run_id@ values that could escape @.hwfi/runs/@ (§6.5.1).
+validateRunId :: Text -> Either Text Text
+validateRunId rid
+  | T.null rid = Left "run_id must not be empty"
+  | T.any (`elem` ['/', '\\']) rid = Left "run_id must not contain path separators"
+  | ".." `T.isInfixOf` rid = Left "run_id must not contain '..'"
+  | otherwise = Right rid
 
 -- | Open @trace.jsonl@ for line-buffered appending (fresh run or resume).
 openTraceAppend :: RunStore -> IO Handle

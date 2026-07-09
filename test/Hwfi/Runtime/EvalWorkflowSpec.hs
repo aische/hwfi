@@ -121,7 +121,8 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
                 beExecPolicy = Nothing,
                 beUsage = usageSeam,
                 beIntrospect = pure Null,
-                beEvalWorkflow = Just seam
+                beEvalWorkflow = Just seam,
+                beRunId = "run-agent"
               }
           dispatch q _sid args = do
             modifyIORef' calls (+ 1)

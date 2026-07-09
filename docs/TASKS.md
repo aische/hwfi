@@ -11,8 +11,6 @@ M1–M9 complete. Near-term work is optional / perf:
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
       allowlist + empty-env model (§7.5)
-- [ ] 9.3 Cross-run trace reading (§6.5): `builtin/list-runs`,
-      `builtin/read-run-trace`; RunStore helpers; A36–A37
 - [ ] 9.4 Skill extraction from traces (§6.6):
       - [ ] 9.4.1 Load `skills/` in project parser/checker (A39)
       - [ ] 9.4.2 `builtin/trace-slice` (A38–A39)
@@ -38,6 +36,9 @@ M1–M9 complete. Near-term work is optional / perf:
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] 9.3 Cross-run trace reading (§6.5, 2026-07-09): `builtin/list-runs`,
+      `builtin/read-run-trace`; `RunStore` helpers; non-cacheable;
+      agent-eligible; A36/A37 in `CrossRunTraceSpec`. 257 tests green.
 - [x] 9.2 `builtin/eval-workflow` (§6.4, 2026-07-09): parse+check+run dynamic
       source; `{ ok, outputs, errors }` recoverable failures; non-cacheable;
       agent-eligible; tests A34/A35. 249 tests green.

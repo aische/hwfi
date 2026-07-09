@@ -1,16 +1,22 @@
 module Hwfi.Runtime.RunStoreSpec (spec) where
 
+import Control.Monad (join)
 import Data.Aeson (object, (.=))
 import Data.Either (isLeft)
+import Data.Text (Text)
+import Data.Text qualified as T
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),
+    RunSummary (..),
     cacheStepResult,
     createRunStore,
     isResumable,
+    listRuns,
     lookupCachedResult,
     openRunStore,
     readRunMeta,
+    readRunTrace,
     updateRunPhase,
     withWorkspaceLock,
     writeRunMeta,
@@ -18,7 +24,6 @@ import Hwfi.Runtime.RunStore
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import Control.Monad (join)
 
 sampleMeta :: RunMeta
 sampleMeta =
@@ -72,6 +77,20 @@ spec = do
       withSystemTempDirectory "hwfi-rs" $ \root ->
         openRunStore root "nope" >>= (`shouldSatisfy` isLeft)
 
+  describe "cross-run helpers (§6.5)" $ do
+    it "listRuns orders by started_at descending" $
+      withSystemTempDirectory "hwfi-rs" $ \root -> do
+        forMRuns root
+        runs <- listRuns root 10
+        map rsId runs `shouldBe` ["run-new", "run-mid", "run-old"]
+
+    it "readRunTrace rejects invalid run_id" $
+      withSystemTempDirectory "hwfi-rs" $ \root ->
+        readRunTrace root "current" ".."
+          >>= (`shouldSatisfy` \case
+                Left err -> ".." `T.isInfixOf` err
+                _ -> False)
+
   describe "workspace lock (§12)" $ do
     it "grants the lock to a single holder" $
       withSystemTempDirectory "hwfi-rs" $ \root ->
@@ -82,3 +101,20 @@ spec = do
         outer <- withWorkspaceLock root $ do
           withWorkspaceLock root (pure ())
         join outer `shouldSatisfy` isLeft
+
+forMRuns :: FilePath -> IO ()
+forMRuns root = do
+  writeSample root "run-old" "2026-07-01T00:00:00.000Z" PhaseCompleted
+  writeSample root "run-mid" "2026-07-02T00:00:00.000Z" PhaseAborted
+  writeSample root "run-new" "2026-07-03T00:00:00.000Z" PhaseRunning
+
+writeSample :: FilePath -> Text -> Text -> RunPhase -> IO ()
+writeSample root runId startedAt phase = do
+  store <- createRunStore root runId
+  writeRunMeta
+    store
+    sampleMeta
+      { rmRunId = runId,
+        rmStartedAt = startedAt,
+        rmPhase = phase
+      }

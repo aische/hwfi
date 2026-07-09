@@ -140,6 +140,7 @@ test-suite hwfi-test
         Hwfi.Project.ManifestSpec
         Hwfi.Runtime.AgentSpec
         Hwfi.Runtime.ControlFlowSpec
+        Hwfi.Runtime.CrossRunTraceSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec

@@ -15,6 +15,8 @@ module Hwfi.Check.Builtins
     llmAgentQName,
     llmAgentObjectQName,
     evalWorkflowQName,
+    listRunsQName,
+    readRunTraceQName,
     isAgentBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
@@ -59,6 +61,14 @@ llmAgentObjectQName = qnameFromText "builtin/llm-agent-object"
 -- dynamically synthesized workflow source.
 evalWorkflowQName :: QName
 evalWorkflowQName = qnameFromText "builtin/eval-workflow"
+
+-- | The @builtin/list-runs@ qname (§6.5): list prior runs under the workspace.
+listRunsQName :: QName
+listRunsQName = qnameFromText "builtin/list-runs"
+
+-- | The @builtin/read-run-trace@ qname (§6.5): read a prior run's trace.
+readRunTraceQName :: QName
+readRunTraceQName = qnameFromText "builtin/read-run-trace"
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
 -- bespoke argument checking (the @tools@ argument is a heterogeneous list of
@@ -169,7 +179,25 @@ builtinCallees =
       builtin
         "builtin/eval-workflow"
         [("source", TyString), ("inputs", TyJson)]
-        [("ok", TyBool), ("outputs", TyJson), ("errors", TyList TyString)]
+        [("ok", TyBool), ("outputs", TyJson), ("errors", TyList TyString)],
+      builtin
+        "builtin/list-runs"
+        [("limit", TyInt)]
+        [ ( "runs",
+            TyList
+              ( TyRecord
+                  [ ("id", TyString),
+                    ("started_at", TyString),
+                    ("entrypoint", TyString),
+                    ("status", TyString)
+                  ]
+              )
+          )
+        ],
+      builtin
+        "builtin/read-run-trace"
+        [("run_id", TyString)]
+        [("ok", TyBool), ("events", TyList TyTraceEvent), ("error", TyString)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)
