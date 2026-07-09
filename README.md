@@ -3,6 +3,12 @@
 A command-line workflow engine: projects are **markdown + JSON**, type-checked
 before run, executed in a sandboxed workspace with **durable traces and resume**.
 
+> **Version 0.1.0.0 (first release).** The [tutorials](docs/tutorials/README.md)
+> core path is `examples/hello` and `examples/coding/fix`. Some examples —
+> notably [`examples/ship`](examples/ship) — are experimental reference
+> orchestrations (check-only in the test suite; live runs are costly and
+> non-deterministic).
+
 ## Features
 
 - Static type-checking (`hwfi check`) before any execution
@@ -19,7 +25,11 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 ## Prerequisites
 
 - GHC 9.x (GHC2021)
-- [llm-simple](../llm-simple) as a sibling package (see `cabal.project`)
+- **[llm-simple](https://github.com/aische/llm-simple)** — required, **not on
+  Hackage**. Clone from GitHub (use **v0.1.0.0** with this release) as a sibling
+  of this repo so the layout is `hwfi/` and `llm-simple/` side by side;
+  `cabal.project` references `../llm-simple`. All LLM provider calls
+  (`llm-generate`, `llm-chat`, `llm-agent`, …) go through `llm-simple`.
 - For hosted providers: API keys via project `.env`, `--env-file`, or
   `$XDG_CONFIG_HOME/hwfi/.env` (tutorial examples use **DeepSeek**;
   see each example's `.env.example`)
@@ -27,10 +37,13 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 ## Build
 
 ```bash
-cd /path/to/hwfi
+cd /path/to/hwfi   # with ../llm-simple present
 cabal build
 cabal test
 ```
+
+Live example E2E tests in `cabal test` need `DEEPSEEK_API_KEY` for LLM examples
+(`summarise`, `coding/fix`); `hello` always runs.
 
 ## Quick start
 
@@ -48,8 +61,13 @@ cabal run hwfi -- run examples/hello \
   --input out=greeting.txt
 ```
 
-For an LLM pipeline, see [`examples/summarise`](examples/summarise) (requires
-`DEEPSEEK_API_KEY`; see `.env.example`).
+For a linear LLM pipeline (optional branch), see
+[`examples/summarise`](examples/summarise) (requires `DEEPSEEK_API_KEY`; see
+`.env.example`).
+
+After the tutorials, see [`examples/ship`](examples/ship) for a full
+plan → build → review orchestration (**experimental** — see that README before
+running).
 
 ## CLI
 
@@ -63,16 +81,37 @@ hwfi cache clear <workspace-dir> <run-id>
 
 ## Examples
 
+### Tutorials (core path)
+
 | Example | Purpose |
 |---------|---------|
-| [`examples/hello`](examples/hello) | Tutorial 1: read → concat → write (no LLM) |
-| [`examples/summarise`](examples/summarise) | LLM pipeline: read → generate → write |
-| [`examples/coding`](examples/coding) | Agent coding loop + `exec` |
+| [`examples/hello`](examples/hello) | Tutorials 1–2: read → concat → write (no LLM) |
+| [`examples/coding`](examples/coding) | Tutorials 3–4: agent loop + `exec` (`workflows/fix`) |
+
+Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
+`DEEPSEEK_API_KEY`).
+
+### Hardened optional
+
+| Example | Purpose |
+|---------|---------|
+| [`examples/summarise`](examples/summarise) | LLM pipeline: read → generate → write (live E2E with API key) |
+
+### Advanced reference
+
+| Example | Purpose |
+|---------|---------|
 | [`examples/control-flow`](examples/control-flow) | `if` / `foreach` / `par` / `while` |
-| [`examples/research`](examples/research) | Full feature matrix (advanced) |
-| [`examples/ship`](examples/ship) | Universal coding agent (plan → build → review) |
+| [`examples/research`](examples/research) | Full feature matrix |
 | [`examples/skills`](examples/skills) | Trace → skill extraction |
 | [`examples/skills-runtime`](examples/skills-runtime) | Discover/load skills in an agent loop |
+
+### Experimental
+
+| Example | Purpose |
+|---------|---------|
+| [`examples/ship`](examples/ship) | Universal coding agent (plan → build → review); check-only in test suite |
+| [`examples/webapp`](examples/webapp) | Single-agent HTML builder from a prompt; Ollama by default; not in test suite |
 
 ## Documentation
 

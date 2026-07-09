@@ -17,13 +17,16 @@ for detail.
 
 | Example | Topic |
 |---------|-------|
-| [`examples/summarise`](../../examples/summarise) | LLM pipeline (`read` → `llm-generate` → `write`) |
+| [`examples/summarise`](../../examples/summarise) | LLM pipeline (`read` → `llm-generate` → `write`); live E2E in `cabal test` with API key |
 | [`examples/control-flow`](../../examples/control-flow) | `if` / `foreach` / `par` / `while` |
 | [`examples/research`](../../examples/research) | Full feature tour |
-| [`examples/ship`](../../examples/ship) | Plan → build → review orchestration |
+| [`examples/skills-runtime`](../../examples/skills-runtime) | Discover/load skills in an agent loop |
+| [`examples/ship`](../../examples/ship) | Plan → build → review orchestration (**experimental**) |
 
 ## Prerequisites
 
+- GHC 9.x and **[llm-simple](https://github.com/aische/llm-simple)** v0.1.0.0 as a
+  sibling package — see root [README.md](../../README.md#prerequisites)
 - Built `hwfi` from this repo (`cabal build`)
 - For tutorials 3–4: `DEEPSEEK_API_KEY` (see each example's `.env.example`)
 

@@ -1053,6 +1053,6 @@ Not available in v1 (see spec §13):
 | [examples/summarise/README.md](../examples/summarise/README.md) | LLM pipeline |
 | [examples/coding/README.md](../examples/coding/README.md) | Agent + resume |
 | [examples/research/README.md](../examples/research/README.md) | Full feature tour + typed agent |
-| [examples/ship/README.md](../examples/ship/README.md) | Full orchestration |
+| [examples/ship/README.md](../examples/ship/README.md) | Full orchestration (**experimental**) |
 | [examples/skills-runtime/README.md](../examples/skills-runtime/README.md) | Skill discover/load |
 | [examples/control-flow/README.md](../examples/control-flow/README.md) | Control flow |

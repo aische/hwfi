@@ -2,9 +2,9 @@
 
 The smallest useful **LLM** workflow: read a text file, summarise it with an
 LLM, write the result. For the core learning path start with
-[docs/tutorials/README.md](../../docs/tutorials/README.md) (`examples/hello`, no
-API key); use this example when you want a linear LLM pipeline before
-`examples/coding`.
+[docs/tutorials/README.md](../../docs/tutorials/README.md) (`examples/hello` →
+`examples/coding`). Use this example as an **optional** linear LLM branch; it
+has live E2E coverage in `cabal test` when `DEEPSEEK_API_KEY` is set.
 
 ## What it does
 

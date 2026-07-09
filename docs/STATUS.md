@@ -8,8 +8,13 @@ Last updated: 2026-07-10
 
 ## Done recently
 
-- **`examples/ship/README.md` (2026-07-10):** experimental status, `llm-simple`
-  prerequisite, learning path, run expectations, troubleshooting.
+- **README accuracy pass (2026-07-10):** example tiers aligned with tutorials
+  hub; test-suite wording (not CI); `llm-simple` Hackage vs GitHub; ship
+  experimental markers in tutorials/workflow-reference.
+- **Root + ship README split (2026-07-10):** `llm-simple` unpublished dep and
+  example tiers in root README; ship README trimmed to capstone-specific ops.
+- **`examples/ship/README.md` (2026-07-10):** experimental status, run
+  expectations, troubleshooting (ship-specific).
 - **Tutorials (2026-07-10):** `docs/tutorials/` hub + hello/check/agent/show-resume;
   new `examples/hello` (no LLM); README and workflow-reference links; E2E tests.
 - **Workflow reference expansion (2026-07-10):** `llm-agent-object` / `submit`,

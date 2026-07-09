@@ -1,14 +1,10 @@
 # `ship` — universal coding agent (experimental)
 
 > **Experimental capstone.** `ship` is a reference orchestration pattern, not a
-> hardened tutorial example. CI covers `hwfi check` and static structure only —
-> not a full live run. Expect non-deterministic results, API cost, and occasional
-> failures.
->
-> **Requires [llm-simple](../../README.md#prerequisites)** as a sibling package
-> (`../llm-simple` in `cabal.project`). It is not published to Hackage; clone it
-> next to `hwfi` before `cabal build`. All LLM steps go through `llm-simple` via
-> the hwfi runtime.
+> hardened tutorial example. The test suite covers `hwfi check` and static
+> structure only — not a full live run. Expect non-deterministic results, API
+> cost, and occasional failures. Build and LLM prerequisites are in the root
+> [README.md](../../README.md#prerequisites).
 
 A **prompt-only** greenfield coding agent: you supply a natural-language `spec`,
 start from an **empty workspace** (there is intentionally no `sample-workspace`),
@@ -19,20 +15,11 @@ Compared to [`../webapp`](../webapp) (single-agent single-file HTML builder) and
 full orchestration capstone: structured planning, per-task builder agents with
 `discover-skills` / `load-skill`, review, and audit.
 
-## Recommended path
-
-Work through the tutorials first — do not start here:
-
-1. [`examples/hello`](../hello) — no LLM
-2. [`examples/summarise`](../summarise) — linear LLM pipeline
-3. [`examples/coding`](../coding) — agent loop + `exec` (`workflows/fix`)
-4. [`examples/skills-runtime`](../skills-runtime) — discover/load skills
-5. **`examples/ship`** — plan → foreach build → review
-
-See [docs/tutorials/README.md](../../docs/tutorials/README.md),
+Complete the [tutorials](../../docs/tutorials/README.md) first — `ship` is the
+capstone, not a starting point. See also
 [docs/workflow-reference.md](../../docs/workflow-reference.md) (orchestration
-patterns), and [docs/skills-design.md](../../docs/skills-design.md) (skill
-kinds and limits).
+patterns) and [docs/skills-design.md](../../docs/skills-design.md) (skill kinds
+and limits).
 
 ## What it does
 
@@ -74,13 +61,6 @@ Instruction guides under `skills/` (discovered at runtime):
 
 ## Prerequisites
 
-### Build hwfi
-
-Clone **`llm-simple`** as a sibling of this repo and build hwfi (see root
-[README.md](../../README.md#prerequisites)).
-
-### API key
-
 The catalog uses **DeepSeek** (`deepseek-v4-flash`). Set `DEEPSEEK_API_KEY` via
 one of:
 
@@ -88,8 +68,6 @@ one of:
 2. `--env-file` on the CLI
 3. `$XDG_CONFIG_HOME/hwfi/.env`
 4. Export in your shell: `export DEEPSEEK_API_KEY=...`
-
-### Host toolchain
 
 `project.json` `exec.allow` includes `sh`, `npm`, `npx`, `node`, `cabal`, and
 `ghc` so agents can scaffold real stacks. Install the tools your `spec` implies
