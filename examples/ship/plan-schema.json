@@ -2,11 +2,25 @@
   "type": "object",
   "properties": {
     "goal": { "type": "string" },
+    "stack": { "type": "string" },
     "approach": { "type": "string" },
     "risks": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "tasks": {
+      "type": "object",
+      "description": "String-keyed task slots (0, 1, 2, …). Omit unused slots.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "verify_command": { "type": "string" }
+        },
+        "required": ["id", "description"]
+      }
     }
   },
-  "required": ["goal", "approach", "risks"]
+  "required": ["goal", "stack", "tasks"]
 }

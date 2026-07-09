@@ -56,6 +56,13 @@ spec = do
     it "ship passes hwfi check" $
       expectCheckOk shipDir
 
+    it "ship static structure includes skills and build workflow" $ do
+      doesFileExist (shipDir </> "workflows/build.md") `shouldReturn` True
+      doesFileExist (shipDir </> "skills/typescript-vite-guide.md") `shouldReturn` True
+      doesFileExist (shipDir </> "skills/haskell-cabal-guide.md") `shouldReturn` True
+      doesFileExist (shipDir </> "skills/webapp-html-guide.md") `shouldReturn` True
+      doesFileExist (shipDir </> "sample-workspace") `shouldReturn` False
+
   describe "tutorial examples (live E2E)" $ do
     it "summarise reads, summarises, and writes on a clean workspace" $
       withDeepSeekKey summariseDir $ \projectDir -> do

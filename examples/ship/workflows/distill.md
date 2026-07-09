@@ -22,8 +22,8 @@ Distill a reusable hwfi declaration from a trace slice (Mode A, spec §6.6).
 
 ## flow
 
-Optional post-run entrypoint: slice a successful implement/repair agent step and
-write a draft skill under `skills/`.
+Optional post-run entrypoint: slice a successful build agent step and write a
+draft skill under `skills/`.
 
 ```step
 slice <- builtin/trace-slice(

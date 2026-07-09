@@ -1,7 +1,7 @@
 ---
 name: tools/task-line
 inputs:
-  task: types/task
+  task: Json
 outputs:
   line: String
 imports:
@@ -10,18 +10,11 @@ imports:
 
 ## flow
 
-Render a one-line task summary with `builtin/concat` (§13.1.2).
+Render a one-line task summary for the ship report.
 
 ```step
 line <- builtin/concat(
-  parts = [
-    "[",
-    ${inputs.task.id},
-    "] ",
-    ${inputs.task.description},
-    " → ",
-    ${inputs.task.target}
-  ]
+  parts = ["Task JSON: ", "${inputs.task}"]
 )
 return { line = ${line.text} }
 ```

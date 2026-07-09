@@ -2,11 +2,17 @@
   "name": "ship",
   "version": "0.1.0",
   "entrypoint": "workflows/main",
-  "env": ["ENGINEER_NAME", "SHIP_API_TOKEN"],
+  "env": [],
   "exec": {
-    "allow": ["sh"],
-    "env": ["PATH"],
-    "timeout_ms": 15000,
-    "max_output_bytes": 65536
+    "allow": ["sh", "npm", "npx", "node", "cabal", "ghc"],
+    "env": ["PATH", "HOME"],
+    "timeout_ms": 120000,
+    "max_output_bytes": 262144
+  },
+  "skills": {
+    "directory": "skills",
+    "max_callable_loads": 8,
+    "max_instruction_loads": 5,
+    "max_instruction_chars": 12000
   }
 }
