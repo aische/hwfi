@@ -12,7 +12,7 @@ module Hwfi.Runtime.Builtins
   )
 where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -32,6 +32,7 @@ import Hwfi.Compat
   )
 import Hwfi.Project.Manifest (ExecPolicy)
 import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sandboxError)
+import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit)
@@ -66,7 +67,9 @@ data BuiltinEnv = BuiltinEnv
     beUsage :: UsageSeam,
     -- | Produce the @builtin/introspect@ dump for the current step (§6). Built
     -- by the executor because it needs the live bindings and trace.
-    beIntrospect :: IO Value
+    beIntrospect :: IO Value,
+    -- | Dynamic workflow evaluation seam (§6.4). 'Nothing' outside the executor.
+    beEvalWorkflow :: Maybe EvalWorkflowSeam
   }
 
 -- | Dispatch a builtin call. The caller guarantees @q@ is a builtin qname.
@@ -89,6 +92,7 @@ runBuiltin env q args = case renderQName q of
   "builtin/llm-chat" -> llmChatTool env args
   "builtin/llm-gen-object" -> llmGenObjectTool env args
   "builtin/introspect" -> introspectTool env
+  "builtin/eval-workflow" -> evalWorkflowTool env args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------
@@ -464,3 +468,24 @@ fieldText (VRecord m) name = case Map.lookup name m of
   Just _ -> Left (evalError ("chat message field '" <> name <> "' is not a string"))
   Nothing -> Left (evalError ("chat message missing field '" <> name <> "'"))
 fieldText _ _ = Left (evalError "chat message is not a record")
+
+-- Dynamic workflow evaluation (§6.4) -----------------------------------------
+
+evalWorkflowTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+evalWorkflowTool env args =
+  case (Map.lookup "source" args, jsonArg args "inputs") of
+    (Just (VString source), Right inputs) ->
+      case beEvalWorkflow env of
+        Nothing ->
+          pure (Left (evalError "builtin/eval-workflow is unavailable outside a workflow run"))
+        Just seam -> runEvalWorkflow seam source inputs
+    _ ->
+      pure
+        ( Left
+            (evalError "builtin/eval-workflow requires source: String and inputs: Json")
+        )
+  where
+    jsonArg m name = case Map.lookup name m of
+      Just (VJson j) -> Right j
+      Just VNull -> Right Null
+      _ -> Left "not Json"

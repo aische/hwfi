@@ -172,7 +172,8 @@ spec = describe "Agent loop (§6.1)" $ do
                   beStep = StepRef mainQ "agent",
                   beExecPolicy = Just codingPolicy,
                   beUsage = usageSeam,
-                  beIntrospect = pure Null
+                  beIntrospect = pure Null,
+                  beEvalWorkflow = Nothing
                 }
             dispatch q _sid args = runBuiltin benv q args
         res <- runAgent (env store tracer usageSeam False dispatch) codingSpec

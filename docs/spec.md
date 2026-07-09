@@ -860,8 +860,6 @@ Provided by the engine, addressed as `builtin/<name>`:
   `{ source: String, inputs: Json }
    -> { ok: Bool, outputs: Json, errors: List<String> }` — parse,
   type-check, and run a workflow definition produced at runtime (§6.4).
-  **Implementation deferred** (task 9.2); specified here so v1 data model
-  and agent error posture stay compatible.
 
 For all LLM tools, `model` names an entry in the **model catalog** (§7.3),
 not a raw provider model id. Retry, timeout, temperature, and pricing
@@ -1104,7 +1102,7 @@ event) like every other tool.
 
 ### 6.4 Dynamic workflow evaluation (`builtin/eval-workflow`)
 
-**Status: specified; implementation deferred (task 9.2).**
+**Status: implemented (task 9.2).**
 
 `builtin/eval-workflow` lets an agent (or any step) parse, type-check, and
 run a workflow definition produced at runtime — e.g. markdown the model

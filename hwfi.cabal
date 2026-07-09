@@ -59,6 +59,7 @@ library
         Hwfi.Runtime.Context
         Hwfi.Runtime.Error
         Hwfi.Runtime.Eval
+        Hwfi.Runtime.EvalWorkflow
         Hwfi.Runtime.Exec
         Hwfi.Runtime.Executor
         Hwfi.Runtime.Gateways
@@ -140,6 +141,7 @@ test-suite hwfi-test
         Hwfi.Runtime.AgentSpec
         Hwfi.Runtime.ControlFlowSpec
         Hwfi.Runtime.EvalSpec
+        Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec
         Hwfi.Runtime.ExecutorSpec
         Hwfi.Runtime.GatewaysSpec

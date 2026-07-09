@@ -14,6 +14,7 @@ module Hwfi.Check.Builtins
     execQName,
     llmAgentQName,
     llmAgentObjectQName,
+    evalWorkflowQName,
     isAgentBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
@@ -53,6 +54,11 @@ llmAgentQName = qnameFromText "builtin/llm-agent"
 -- | The @builtin/llm-agent-object@ qname (§6.1.3): the typed-output variant.
 llmAgentObjectQName :: QName
 llmAgentObjectQName = qnameFromText "builtin/llm-agent-object"
+
+-- | The @builtin/eval-workflow@ qname (§6.4): parse, type-check, and run
+-- dynamically synthesized workflow source.
+evalWorkflowQName :: QName
+evalWorkflowQName = qnameFromText "builtin/eval-workflow"
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
 -- bespoke argument checking (the @tools@ argument is a heterogeneous list of
@@ -159,7 +165,11 @@ builtinCallees =
           ("schema", TyJson),
           ("max_rounds", TyInt)
         ]
-        [("value", TyJson), ("rounds", TyInt)]
+        [("value", TyJson), ("rounds", TyInt)],
+      builtin
+        "builtin/eval-workflow"
+        [("source", TyString), ("inputs", TyJson)]
+        [("ok", TyBool), ("outputs", TyJson), ("errors", TyList TyString)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

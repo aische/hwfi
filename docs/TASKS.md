@@ -11,8 +11,6 @@ M1–M9 complete. Near-term work is optional / perf:
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
       allowlist + empty-env model (§7.5)
-- [ ] 9.2 `builtin/eval-workflow` — implement §6.4 (parse+check+run dynamic
-      source; `ok`/`errors` result; recoverable in agent loop)
 - [ ] 9.3 Cross-run trace reading built-in tool
 - [ ] 9.4 Skill extraction from traces
 - [ ] 9.5 `Bytes`-typed file I/O
@@ -23,6 +21,9 @@ M1–M9 complete. Near-term work is optional / perf:
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] 9.2 `builtin/eval-workflow` (§6.4, 2026-07-09): parse+check+run dynamic
+      source; `{ ok, outputs, errors }` recoverable failures; non-cacheable;
+      agent-eligible; tests A34/A35. 249 tests green.
 - [x] A32 integration test (2026-07-09): `while` predicate with
       `builtin/llm-agent` replays pinned decision on resume without
       re-invoking the model (`ControlFlowSpec`; 245 tests).

@@ -9,6 +9,8 @@
 module Hwfi.Parse.Project
   ( loadProject,
     parseDeclaration,
+    parseEvalWorkflowSource,
+    evalWorkflowDiagPath,
     qnameFromRelPath,
   )
 where
@@ -20,7 +22,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Hwfi.Ast.Name (QName (..), renderQName)
+import Hwfi.Ast.Name (QName (..), qnameFromText, renderQName)
 import Hwfi.Ast.Project
 import Hwfi.Ast.Step (Statement)
 import Hwfi.Ast.Tool (Tool (..))
@@ -54,6 +56,52 @@ loadProject projectDir = do
 assemble :: ProjectManifest -> [(QName, Declaration)] -> Project
 assemble manifest pairs =
   Project {projManifest = manifest, projDecls = Map.fromList pairs}
+
+-- | The virtual diagnostic path for dynamically evaluated workflow source
+-- (spec §6.4.2).
+evalWorkflowDiagPath :: FilePath
+evalWorkflowDiagPath = "<eval-workflow>"
+
+-- | Parse runtime-synthesized workflow source for @builtin/eval-workflow@
+-- (spec §6.4). Unlike 'parseDeclaration', the qualified name comes from the
+-- frontmatter @name@ field (not the file path), and all diagnostics use
+-- 'evalWorkflowDiagPath'.
+parseEvalWorkflowSource :: Text -> Either [Diagnostic] Declaration
+parseEvalWorkflowSource content = do
+  md <- parseMarkdown evalWorkflowDiagPath content
+  mObj <- case mdFrontmatter md of
+    Nothing -> Right Nothing
+    Just yamlText -> Just . (,) yamlText <$> parseYamlObject evalWorkflowDiagPath yamlText
+  let kindTag =
+        case classify "" (snd <$> mObj >>= frontmatterKind) of
+          CUnknown -> CWorkflow
+          k -> k
+  case kindTag of
+    CWorkflow -> buildEvalWorkflowDecl md mObj
+    CTool ->
+      Left
+        [ diag evalWorkflowDiagPath "eval-workflow source must be a workflow declaration, not a tool"
+        ]
+    _ ->
+      Left
+        [ diag evalWorkflowDiagPath "eval-workflow source must be a workflow declaration"
+        ]
+
+buildEvalWorkflowDecl ::
+  MarkdownFile -> Maybe (Text, Object) -> Either [Diagnostic] Declaration
+buildEvalWorkflowDecl md mObj = do
+  (yamlText, o) <- case mObj of
+    Just pair -> Right pair
+    Nothing -> Left [diag evalWorkflowDiagPath "eval-workflow source must have YAML frontmatter"]
+  qname <- case frontmatterName o of
+    Just n -> Right (qnameFromText n)
+    Nothing -> Left [diag evalWorkflowDiagPath "eval-workflow source must declare 'name' in frontmatter"]
+  sig <- signatureFromYaml evalWorkflowDiagPath yamlText o
+  stmts <- concat <$> collect (map parseBlock (mdStepBlocks md))
+  let sections = buildSections (mdSourceLines md) (mdHeadings md)
+  pure (DeclWorkflow (Workflow qname sig stmts sections))
+  where
+    parseBlock b = parseStepBlock evalWorkflowDiagPath (Pos (msStartLine b) 1) (msContent b)
 
 -- | Parse a single declaration file. @relpath@ is the file path relative to
 -- the project root (used both for diagnostics and to derive the qualified

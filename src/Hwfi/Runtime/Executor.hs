@@ -85,6 +85,7 @@ import Hwfi.Runtime.Error
     internalError,
     userError_,
   )
+import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..))
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
 import Hwfi.Project.Manifest (ProjectManifest (..), budgetMaxCostUsd)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint, oneShotLlmCtxProjection)
@@ -798,7 +799,7 @@ dispatchResolved ::
   IO (Either RuntimeError RValue)
 dispatchResolved rt stepRef bindings scope target argMap
   | isBuiltin target =
-      runBuiltin (builtinEnv rt stepRef bindings) target argMap
+      runBuiltin (builtinEnv rt stepRef bindings scope) target argMap
   | otherwise = case lookupTyped target (rtProject rt) of
       Just td
         | isExecutable (tdDeclaration td) -> runWorkflow rt scope target argMap
@@ -913,8 +914,8 @@ calleeInputTypes rt q
       Just td -> Right (rsigInputs (tdSignature td))
       Nothing -> Left (internalError ("advertised tool not found: " <> renderQName q))
 
-builtinEnv :: Runtime -> StepRef -> Map Ident RValue -> BuiltinEnv
-builtinEnv rt stepRef bindings =
+builtinEnv :: Runtime -> StepRef -> Map Ident RValue -> Text -> BuiltinEnv
+builtinEnv rt stepRef bindings scope =
   BuiltinEnv
     { beWorkspace = rtWorkspace rt,
       beModels = rtModels rt,
@@ -922,7 +923,16 @@ builtinEnv rt stepRef bindings =
       beStep = stepRef,
       beExecPolicy = (tpManifest (rtProject rt)).execPolicy,
       beUsage = rtUsage rt,
-      beIntrospect = introspectDump rt stepRef bindings
+      beIntrospect = introspectDump rt stepRef bindings,
+      beEvalWorkflow = Just (evalWorkflowSeam rt scope)
+    }
+
+evalWorkflowSeam :: Runtime -> Text -> EvalWorkflowSeam
+evalWorkflowSeam rt scope =
+  EvalWorkflowSeam
+    { ewsProject = rtProject rt,
+      ewsScope = scope,
+      ewsExecute = \tp sc q inputs -> runWorkflow (rt {rtProject = tp}) sc q inputs
     }
 
 -- | Assemble the @builtin/introspect@ dump (spec §6): a JSON view of everything
