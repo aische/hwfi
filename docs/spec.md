@@ -21,8 +21,8 @@ A command-line workflow engine, written in Haskell (GHC2021), that:
    happened before them.
 6. Is designed so that agent steps can synthesize new workflows at runtime,
    type-check them against the same checker used at load time, and execute
-   them via `builtin/eval-workflow` (§6.4). Reading prior traces to learn
-   or extract skills remains deferred (§13).
+   them via `builtin/eval-workflow` (§6.4). Reading prior runs' traces and
+   extracting reusable skills are specified in §6.5–§6.6 (not yet implemented).
 
 Non-goals for v1: GUI, remote/distributed execution, multi-tenant isolation,
 a package registry for workflows.
@@ -42,6 +42,8 @@ tools/
   <name>.md                 # tool definitions (prompt-backed or built-in ref)
 types/
   <name>.md                 # shared type declarations (see §2.1)
+skills/                     # optional: trace-derived reusable tools/workflows (§6.6)
+  <name>.md
 ```
 
 - Every `.md` file is a single top-level declaration (one workflow, one tool,
@@ -1202,6 +1204,232 @@ and `Json` only. Projects typically expose it to agents via a thin tool
 wrapper or by including a `ToolRef` to such a wrapper in the agent's
 `tools` list.
 
+### 6.5 Cross-run trace reading
+
+**Status: specified (task 9.3), not implemented.**
+
+Today `ctx.trace` and `builtin/introspect` expose only the **current**
+logical run, up to the executing step (§5.2, §8.3.5). Cross-run reading
+lets workflows and agents inspect **prior** runs persisted under
+`<workspace>/.hwfi/runs/` (§8.2).
+
+#### 6.5.1 Builtins
+
+```
+builtin/list-runs :
+  { limit: Int }
+  -> { runs: List<Record<{
+       id: String,
+       started_at: String,
+       entrypoint: String,
+       status: String
+     }>> }
+
+builtin/read-run-trace :
+  { run_id: String }
+  -> { ok: Bool, events: List<TraceEvent>, error: String }
+```
+
+- `limit` — maximum number of runs to return, most recent first. Must be
+  `>= 1`; values above `100` are clamped to `100`.
+- `run_id` — the id of a run directory under `<workspace>/.hwfi/runs/`.
+  The special value `"current"` is equivalent to `ctx.run.id`.
+- `events` — parsed `trace.jsonl` lines in file order, same ADT as
+  `ctx.trace` (§8.3). Secrets remain redacted as persisted.
+- `ok = false` when the run directory is missing or `trace.jsonl` cannot be
+  read; `events` is `[]` and `error` is human-readable. Does **not** abort
+  the enclosing run (same recoverable posture as §6.4.3).
+- Malformed lines in `trace.jsonl` are skipped (same rules as resume,
+  §8.3.5).
+
+Neither builtin reads outside the current workspace's `.hwfi/runs/` tree.
+There is no cross-workspace or cross-project trace access in v1.1.
+
+#### 6.5.2 Caching and agent eligibility
+
+- Both steps are **non-cacheable** (§8.1): the set of runs grows over time
+  and authors expect fresh listings.
+- Both are **agent-eligible** (§6.1.1): plain scalars and structured outputs
+  only; they do not call `builtin/introspect`.
+- Referencing `${ctx.trace}` and calling these builtins in the same step is
+  allowed; the step remains non-cacheable.
+
+#### 6.5.3 Trace events
+
+Each builtin emits a `file-io` trace event with op `"list"` (for
+`list-runs`, path `.hwfi/runs`) or op `"read"` (for `read-run-trace`, path
+`.hwfi/runs/<run_id>/trace.jsonl`). No new `TraceEvent` variants in v1.1.
+
+### 6.6 Skills (trace-derived reusable declarations)
+
+**Status: specified (task 9.4), not implemented.**
+
+A **skill** is a normal project declaration (tool or workflow markdown
+file) plus optional **provenance metadata** recording which run and step
+it was distilled from. Skills are not a separate AST node or type: they
+use the same parser, checker, and executor as `tools/` and `workflows/`.
+The `skills/` directory is a convention for declarations an agent (or
+author) created by learning from traces; the engine treats
+`skills/fix-import` like `tools/fix-import` once the file exists and
+`hwfi check` passes.
+
+Rationale: reuse static typing, Merkle fingerprints, agent eligibility,
+and `ToolRef`/`WorkflowRef` dispatch instead of inventing a parallel
+"skill runtime."
+
+#### 6.6.1 Skill file layout
+
+Skills live under `skills/<name>.md` with the same single-declaration
+markdown format as §2. Optional frontmatter fields (ignored by the checker
+except as comments / future lint):
+
+```yaml
+---
+name: skills/fix-import
+skill:
+  source_run: "<run-id>"
+  source_qname: "workflows/fix"
+  source_step_id: "agent"
+  extracted_at: "2026-07-09T12:00:00.000Z"
+  summary: "Repair a missing import after a cabal build failure"
+---
+```
+
+Authors or agents add `imports:` entries elsewhere to call the skill like
+any other tool or workflow. There is no automatic registration:
+**promotion is explicit** (import the skill or pass a `ToolRef` to an
+agent's `tools` list).
+
+#### 6.6.2 Trace slice (deterministic extraction input)
+
+Before synthesizing markdown, extraction needs a **bounded trace slice** —
+the events belonging to one logical step in a prior run:
+
+```
+builtin/trace-slice :
+  { run_id: String,
+    qname: String,
+    step_id: String,
+    include_nested: Bool
+  }
+  -> { ok: Bool, events: List<TraceEvent>, error: String }
+```
+
+- Resolves `run_id` like §6.5.1 (`"current"` allowed).
+- Returns events whose `(qname, step_id)` match the filter, in trace order.
+- When `include_nested = true`, also includes events from sub-workflow and
+  agent-internal calls **scoped under** that step (same nesting rules as
+  `hwfi show` indentation: agent `agent-*` events share the agent step's
+  `qname`/`step_id`; nested sub-workflow calls carry their own pair but
+  occur between the enclosing step's `step-start` and `step-end`).
+- When `include_nested = false`, only events with exactly the given pair.
+- Missing run → `ok = false` (recoverable). Empty slice → `ok = true`,
+  `events = []`.
+
+`trace-slice` is **non-cacheable** and **agent-eligible**.
+
+Typical slices for skill extraction:
+
+| Goal | `include_nested` | Tags of interest |
+|------|------------------|------------------|
+| Agent procedure replay | `true` | `agent-tool-call`, `agent-tool-result`, `file-io`, `exec` |
+| Scripted sub-workflow | `false` | `step-start`, `step-end`, `file-io` |
+| Predicate decision pattern | `false` | `while-pred`, `llm-call` |
+
+#### 6.6.3 Extraction modes
+
+**Mode A — agent-driven (recommended first implementation).**
+
+No dedicated "write skill file" builtin is required. A workflow:
+
+1. Calls `builtin/trace-slice` (and optionally `builtin/read-run-trace`) on
+   a successful prior run.
+2. Passes the slice (as JSON via `${events}` interpolation or a follow-up
+   `llm-gen-object` step) to a model with a fixed schema for tool/workflow
+   markdown.
+3. Writes the result with `builtin/write-file` to `skills/<name>.md`.
+4. Optionally calls `builtin/eval-workflow` to smoke-test the synthesized
+   source before committing (§6.4).
+
+The author runs `hwfi check` on the project (or a CI step) before the skill
+is callable on the next run. This matches the existing eval-workflow +
+workspace mutation pattern from `examples/coding`.
+
+**Mode B — `builtin/extract-skill` (optional convenience).**
+
+```
+builtin/extract-skill :
+  { run_id: String,
+    qname: String,
+    step_id: String,
+    target: String,
+    kind: String,
+    include_nested: Bool
+  }
+  -> { ok: Bool, path: String, source: String, errors: List<String> }
+```
+
+- `target` — workspace-relative path, must start with `skills/` and end
+  with `.md` (e.g. `skills/fix-import.md`). Rejects overwrite unless
+  `project.json` sets `"skills": { "allow_overwrite": true }` (default
+  `false`).
+- `kind` — `"tool"` or `"workflow"`; selects which declaration shape the
+  engine emits in v1.1.
+- On success, writes `source` to `path` under the workspace (same sandbox
+  as other mutation builtins), sets `ok = true`, and returns the written
+  text in `source`.
+- v1.1 **deterministic** body: serialize the trace slice to a comment block
+  and emit a **stub** declaration whose steps are `builtin/introspect`-free
+  placeholders (e.g. a tool whose prompt embeds the slice summary and
+  instructs the model to follow the recorded tool-call sequence). **LLM
+  summarization inside this builtin is deferred** — Mode A covers that.
+
+`extract-skill` is non-cacheable. It is agent-eligible if the checker is
+extended to treat `kind` as an enum literal (v1.1: accept only the two
+strings above at runtime with a recoverable `ok = false` on unknown
+`kind`).
+
+#### 6.6.4 Project manifest
+
+Optional `project.json` stanza:
+
+```json
+{
+  "skills": {
+    "allow_overwrite": false,
+    "directory": "skills"
+  }
+}
+```
+
+- `directory` — where Mode B writes files (default `"skills"`). Mode A
+  authors may write anywhere; only the convention path is validated by
+  `extract-skill`.
+- `allow_overwrite` — safety gate for Mode B (§6.6.3).
+
+The project loader **does not** auto-scan `skills/` separately: files there
+are loaded with the same directory walk as `tools/` and `workflows/` once
+implementation adds `skills/` to the project parser roots (task 9.4.1).
+
+#### 6.6.5 Security and secrets
+
+- Cross-run traces are already redacted at write time (§5.5, §8.3.4).
+- Skills must not embed raw secret values from traces; the checker already
+  forbids promoting `Secret<T>` into plain strings (§5.5).
+- Agent-eligible skills must satisfy §6.1.1 (no `introspect`, no secret
+  inputs). An extracted stub that calls `builtin/introspect` fails
+  `hwfi check` when promoted to an agent tool — by design.
+
+#### 6.6.6 Implementation order
+
+1. **9.3** — `list-runs`, `read-run-trace`, RunStore helpers, tests A36–A37.
+2. **9.4.1** — load `skills/` declarations in the project parser/checker.
+3. **9.4.2** — `trace-slice`, tests A38–A39.
+4. **9.4.3** — example `examples/skills` agent-driven extraction workflow
+   (Mode A); optional `extract-skill` (Mode B) and A40.
+
+Extended rationale and example flows: [skills-design.md](skills-design.md).
+
 ## 7. Workspace, project, and sandboxing
 
 ### 7.1 Filesystem layout at runtime
@@ -2103,6 +2331,21 @@ A28. An agent model round served from intra-step cache on resume emits no
 A29. With `project.json` `budget.max_cost_usd` set, a provider call that
     would exceed the ceiling aborts before the request is sent.
 
+The following are specified for optional v1.1 (§6.5, §6.6) and are not
+yet implemented:
+
+A36. `builtin/list-runs` returns prior runs for the current workspace,
+    most recent first, without reading outside `.hwfi/runs/`.
+A37. `builtin/read-run-trace` with a missing `run_id` returns
+    `{ ok = false, error = ... }` and does not abort the enclosing run;
+    `"current"` resolves to `ctx.run.id`.
+A38. `builtin/trace-slice` with `include_nested = true` on an agent step
+    includes `agent-tool-call` / `agent-tool-result` events for that step.
+A39. A declaration under `skills/` type-checks and is callable like an
+    equivalent `tools/` declaration once loaded (§6.6.1).
+A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
+    refuses overwrite when `allow_overwrite` is false.
+
 ## 12. Edge cases and known tricky bits
 
 - Non-UTF-8 files in the workspace: v1 treats `read-file` as text and
@@ -2129,8 +2372,8 @@ A29. With `project.json` `budget.max_cost_usd` set, a provider call that
   **no longer deferred**: it is specified in §6.2/§6.3/§7.5. What remains
   deferred is only stronger per-process containment beyond the allowlist +
   empty-environment model.)
-- Cross-run trace reading (reading prior runs' `trace.jsonl`).
-- Skill extraction from traces.
+- Cross-run trace reading — specified §6.5 (task 9.3); not implemented.
+- Skill extraction from traces — specified §6.6 (task 9.4); not implemented.
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).

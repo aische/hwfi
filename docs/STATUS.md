@@ -4,26 +4,20 @@ Last updated: 2026-07-09
 
 ## Current focus
 
-**9.2 `builtin/eval-workflow` complete (A34/A35).** Optional items next: 9.1,
-9.3–9.6; author backlog 9.9–9.14 (spec §13.1).
+**§6.5–§6.6 specified (9.3 / 9.4 design).** Cross-run trace builtins and
+skill extraction are designed but not implemented. Next implementation: 9.3
+→ 9.4.1 → 9.4.2 → 9.4.3.
 
 ## Done recently
 
+- **§6.5–§6.6 skills + traces spec (2026-07-09):** Cross-run
+  `list-runs` / `read-run-trace`; skill model (`skills/` declarations +
+  provenance metadata); `trace-slice`; Mode A (agent-driven) and optional
+  Mode B (`extract-skill`). Acceptance A36–A40. See [skills-design.md](skills-design.md).
 - **9.2 eval-workflow (2026-07-09):** `builtin/eval-workflow` (§6.4) — parse,
   type-check, and run dynamic workflow source; `{ ok, outputs, errors }` on
   recoverable failure; non-cacheable; agent-eligible. Tests A34/A35 in
   `EvalWorkflowSpec`. 249 tests green.
-- **A32 while + llm-agent resume (2026-07-09):** Integration test in
-  `ControlFlowSpec` — predicate sub-workflow uses `builtin/llm-agent`;
-  resume replays pinned decisions without new `LlmCall`/`while-pred` events.
-  245 tests green.
-- **§6.4 eval-workflow spec (2026-07-09):** Dynamic workflow evaluation
-  specified — `{ ok, outputs, errors }` result; parse/check failures
-  non-fatal; recoverable in agent loop (A34/A35).
-- **8.g agent checkpoint (2026-07-09):** Persist agent-loop `messages` +
-  `next_round` under the agent step-key on each completed round; reload on
-  resume to skip re-walking earlier rounds (§8.2.1 perf optimization).
-  Cleared on successful termination. Test in `AgentSpec`.
 
 ## Blockers
 
@@ -31,4 +25,5 @@ Last updated: 2026-07-09
 
 ## Next up
 
-[TASKS.md](TASKS.md) → optional 9.1, 9.3–9.6, 9.9–9.14.
+[TASKS.md](TASKS.md) → implement 9.3, then 9.4.1–9.4.3; optional 9.1, 9.4.4,
+9.5–9.6, 9.9–9.14.

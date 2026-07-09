@@ -11,8 +11,13 @@ M1–M9 complete. Near-term work is optional / perf:
 
 - [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
       allowlist + empty-env model (§7.5)
-- [ ] 9.3 Cross-run trace reading built-in tool
-- [ ] 9.4 Skill extraction from traces
+- [ ] 9.3 Cross-run trace reading (§6.5): `builtin/list-runs`,
+      `builtin/read-run-trace`; RunStore helpers; A36–A37
+- [ ] 9.4 Skill extraction from traces (§6.6):
+      - [ ] 9.4.1 Load `skills/` in project parser/checker (A39)
+      - [ ] 9.4.2 `builtin/trace-slice` (A38–A39)
+      - [ ] 9.4.3 Mode A example in `examples/skills/` (agent → write-file)
+      - [ ] 9.4.4 (Optional) `builtin/extract-skill` stub writer (A40)
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
 - [ ] 9.9 Control-flow error handling — `try`/recover; continue-on-failure
