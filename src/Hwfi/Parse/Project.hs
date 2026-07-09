@@ -3,7 +3,8 @@
 -- and assembles a 'Project' keyed by qualified name.
 --
 -- Classification is by explicit frontmatter @kind@ when present, else by the
--- top-level directory (@workflows/@, @tools/@, @types/@). Each file holds
+-- top-level directory (@workflows/@, @tools/@, @skills/@, @types/@). Each file
+-- holds
 -- exactly one declaration (§2); type-alias and prompt files must not contain
 -- @step@ blocks.
 module Hwfi.Parse.Project
@@ -139,6 +140,7 @@ classify topDir mkind = case mkind of
   Nothing -> case topDir of
     "workflows" -> CWorkflow
     "tools" -> CTool
+    "skills" -> CTool
     "types" -> CTypeAlias
     _ -> CUnknown
 
@@ -228,11 +230,11 @@ qnameFromRelPath relpath =
     (s : ss) -> QName (s :| ss)
     [] -> QName (T.empty :| [])
 
--- | Recursively find @.md@ files under @workflows/@, @tools/@, and @types/@,
--- returning paths relative to the project root.
+-- | Recursively find @.md@ files under @workflows/@, @tools/@, @skills/@, and
+-- @types/@, returning paths relative to the project root.
 findMarkdownFiles :: FilePath -> IO [FilePath]
 findMarkdownFiles projectDir =
-  concat <$> mapM walkTop ["workflows", "tools", "types"]
+  concat <$> mapM walkTop ["workflows", "tools", "skills", "types"]
   where
     walkTop d = do
       let abs' = projectDir </> d

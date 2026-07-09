@@ -17,7 +17,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hwfi.Ast.Name (Ident, QName, renderQName)
+import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Compat
   ( ChatResponse (..),
     GenRequest (..),
@@ -36,7 +36,7 @@ import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
-import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, snapshotEvents)
+import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, sliceTrace, snapshotEvents)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
 import Hwfi.Runtime.Workspace
@@ -99,6 +99,7 @@ runBuiltin env q args = case renderQName q of
   "builtin/eval-workflow" -> evalWorkflowTool env args
   "builtin/list-runs" -> listRunsTool env args
   "builtin/read-run-trace" -> readRunTraceTool env args
+  "builtin/trace-slice" -> traceSliceTool env args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------
@@ -447,6 +448,9 @@ argStrList args name = argList args name >>= traverse (asText name)
 argInt :: Map Ident RValue -> Ident -> Either RuntimeError Int
 argInt args name = lookupArg args name >>= asInt name
 
+argBool :: Map Ident RValue -> Ident -> Either RuntimeError Bool
+argBool args name = lookupArg args name >>= asBool name
+
 argJson :: Map Ident RValue -> Ident -> Either RuntimeError Value
 argJson args name = valueToJson <$> lookupArg args name
 
@@ -467,6 +471,10 @@ asList name v = Left (evalError ("argument '" <> name <> "' is not a list: " <> 
 asInt :: Ident -> RValue -> Either RuntimeError Int
 asInt _ (VInt n) = Right (fromInteger n)
 asInt name v = Left (evalError ("argument '" <> name <> "' is not an integer: " <> T.pack (show v)))
+
+asBool :: Ident -> RValue -> Either RuntimeError Bool
+asBool _ (VBool b) = Right b
+asBool name v = Left (evalError ("argument '" <> name <> "' is not a boolean: " <> T.pack (show v)))
 
 fieldText :: RValue -> Ident -> Either RuntimeError Text
 fieldText (VRecord m) name = case Map.lookup name m of
@@ -557,3 +565,51 @@ readRunTraceTool env args = orFail (argText args "run_id") $ \runId -> do
                     ]
                 )
             )
+
+-- Trace slice (§6.6) ---------------------------------------------------------
+
+traceSliceTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+traceSliceTool env args =
+  orFail
+    ( (,,,)
+        <$> argText args "run_id"
+        <*> argText args "qname"
+        <*> argText args "step_id"
+        <*> argBool args "include_nested"
+    )
+    $ \(runId, qnameText, stepId, includeNested) -> do
+      let targetQ = qnameFromText qnameText
+          resolved =
+            if runId == "current"
+              then beRunId env
+              else runId
+      loadTrace runId >>= \case
+        Left err ->
+          pure
+            ( Right
+                ( record
+                    [ ("ok", VBool False),
+                      ("events", VList []),
+                      ("error", VString err)
+                    ]
+                )
+            )
+        Right events -> do
+          let tracePath = ".hwfi/runs/" <> resolved <> "/trace.jsonl"
+          emitFileIo env OpRead tracePath 0
+          let sliced = sliceTrace events targetQ stepId includeNested
+          pure
+            ( Right
+                ( record
+                    [ ("ok", VBool True),
+                      ("events", VList (map (VJson . eventToJson) sliced)),
+                      ("error", VString "")
+                    ]
+                )
+            )
+  where
+    loadTrace rid
+      | rid == "current" || rid == beRunId env =
+          snapshotEvents (beTracer env) >>= pure . Right
+      | otherwise =
+          readRunTrace (workspaceRoot (beWorkspace env)) (beRunId env) rid

@@ -1,0 +1,14 @@
+[
+  {
+    "modelConfigName": "smart",
+    "providerName": "ollama",
+    "modelName": "mistral:latest",
+    "pricing": { "pricePerMillionInput": 0.0, "pricePerMillionOutput": 0.0 },
+    "maxTokens": 4096,
+    "temperature": 0.2,
+    "requestTimeout": 120000,
+    "throttleDelay": 0,
+    "retryCount": 2,
+    "jitterBackoff": 1000
+  }
+]

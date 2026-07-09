@@ -17,6 +17,7 @@ module Hwfi.Check.Builtins
     evalWorkflowQName,
     listRunsQName,
     readRunTraceQName,
+    traceSliceQName,
     isAgentBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
@@ -69,6 +70,10 @@ listRunsQName = qnameFromText "builtin/list-runs"
 -- | The @builtin/read-run-trace@ qname (§6.5): read a prior run's trace.
 readRunTraceQName :: QName
 readRunTraceQName = qnameFromText "builtin/read-run-trace"
+
+-- | The @builtin/trace-slice@ qname (§6.6): extract events for one logical step.
+traceSliceQName :: QName
+traceSliceQName = qnameFromText "builtin/trace-slice"
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
 -- bespoke argument checking (the @tools@ argument is a heterogeneous list of
@@ -197,6 +202,14 @@ builtinCallees =
       builtin
         "builtin/read-run-trace"
         [("run_id", TyString)]
+        [("ok", TyBool), ("events", TyList TyTraceEvent), ("error", TyString)],
+      builtin
+        "builtin/trace-slice"
+        [ ("run_id", TyString),
+          ("qname", TyString),
+          ("step_id", TyString),
+          ("include_nested", TyBool)
+        ]
         [("ok", TyBool), ("events", TyList TyTraceEvent), ("error", TyString)]
     ]
   where

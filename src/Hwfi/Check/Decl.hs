@@ -26,7 +26,7 @@ import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, llmAgentObjectQName, readRunTraceQName)
+import Hwfi.Check.Builtins (Callee (..), evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, llmAgentObjectQName, readRunTraceQName, traceSliceQName)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
@@ -794,6 +794,7 @@ classifyCacheable target args =
         || target == evalWorkflowQName
         || target == listRunsQName
         || target == readRunTraceQName
+        || target == traceSliceQName
         || any (any refPathVolatile . refPaths . argValue) args
     )
 

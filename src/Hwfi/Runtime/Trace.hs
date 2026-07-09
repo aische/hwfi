@@ -1,14 +1,14 @@
--- | The trace event schema (spec §8.3) and an in-memory tracer.
+-- | The trace event schema (spec ?8.3) and an in-memory tracer.
 --
 -- The 'TraceEvent' ADT is the load-bearing, stable API surface described in
--- §8.3: the same shape is both appended to @trace.jsonl@ (persistence lands in
--- M5) and exposed to workflows via @ctx.trace : List<TraceEvent>@ (§5.2), so
+-- ?8.3: the same shape is both appended to @trace.jsonl@ (persistence lands in
+-- M5) and exposed to workflows via @ctx.trace : List<TraceEvent>@ (?5.2), so
 -- agents can pattern-match on it. This module owns the shape and its JSON
 -- encoding; M5 layers the append-only file writer and resume reconstruction on
 -- top of the same 'Tracer' seam.
 --
--- Common fields (§8.3.1) — @tag@, @seq@, @at@, and for in-step events @qname@
--- and @step_id@ — are attached by 'emit', which assigns the monotonic,
+-- Common fields (?8.3.1) ��� @tag@, @seq@, @at@, and for in-step events @qname@
+-- and @step_id@ ��� are attached by 'emit', which assigns the monotonic,
 -- gap-free @seq@ and the ISO-8601 millisecond timestamp.
 module Hwfi.Runtime.Trace
   ( FileOp (..),
@@ -28,6 +28,8 @@ module Hwfi.Runtime.Trace
     emit,
     snapshotEvents,
     snapshotJson,
+    sliceTrace,
+    eventStepRef,
     currentSeq,
   )
 where
@@ -46,8 +48,8 @@ import Hwfi.Runtime.Error (ErrorKind, errorKindFromText, errorKindText)
 import Hwfi.Runtime.RunUsage (formatCostUsd)
 import System.IO (Handle, hFlush)
 
--- | The @op@ discriminator of a 'FileIo' event (§8.3.2). Covers the M4 read
--- (@read@\/@write@\/@list@) and the M7 navigation\/mutation ops (§6.2).
+-- | The @op@ discriminator of a 'FileIo' event (?8.3.2). Covers the M4 read
+-- (@read@\/@write@\/@list@) and the M7 navigation\/mutation ops (?6.2).
 data FileOp
   = OpRead
   | OpWrite
@@ -95,7 +97,7 @@ fileOpFromText = \case
   "remove-dir" -> OpRemoveDir
   _ -> OpList
 
--- | The terminal @status@ of a logical run (§8.3.2, §8.3.3).
+-- | The terminal @status@ of a logical run (?8.3.2, ?8.3.3).
 data RunStatus = Completed | Aborted | Crashed
   deriving stock (Eq, Show)
 
@@ -112,7 +114,7 @@ runStatusFromText = \case
   "crashed" -> Crashed
   _ -> Aborted
 
--- | The variant-specific payload of a trace event (spec §8.3.2). The common
+-- | The variant-specific payload of a trace event (spec ?8.3.2). The common
 -- @seq@\/@at@ fields live on 'TraceEvent'; in-step variants carry their
 -- @qname@\/@step_id@ here.
 data EventBody
@@ -126,34 +128,34 @@ data EventBody
     LlmCall QName Ident Text Text Text Text Int Int Double
   | -- | @file-io@: qname, step id, op, workspace-relative path, byte count.
     FileIo QName Ident FileOp Text Int
-  | -- | @exec@ (§8.3.2): qname, step id, allowlisted program basename, argv
+  | -- | @exec@ (?8.3.2): qname, step id, allowlisted program basename, argv
     -- (redacted), exit code, timed-out flag, captured stdout\/stderr byte sizes.
     Exec QName Ident Text Value Int Bool Int Int
   | -- | @error@: qname, step id, message, kind.
     ErrorEvent QName Ident Text ErrorKind
-  | -- | @agent-round-start@ (§8.3.2): qname, step id, 0-based round index.
+  | -- | @agent-round-start@ (?8.3.2): qname, step id, 0-based round index.
     AgentRoundStart QName Ident Int
-  | -- | @agent-tool-call@ (§8.3.2): qname, step id, round, call index within
+  | -- | @agent-tool-call@ (?8.3.2): qname, step id, round, call index within
     -- the round, resolved tool qname (or @"submit"@), decoded args (redacted).
     AgentToolCall QName Ident Int Int Text Value
-  | -- | @agent-tool-result@ (§8.3.2): qname, step id, round, call index, tool,
+  | -- | @agent-tool-result@ (?8.3.2): qname, step id, round, call index, tool,
     -- serialised result (redacted), and whether it is a fed-back recoverable
-    -- error (§6.1.4).
+    -- error (?6.1.4).
     AgentToolResult QName Ident Int Int Text Value Bool
-  | -- | @agent-round-end@ (§8.3.2): qname, step id, round, whether the model
+  | -- | @agent-round-end@ (?8.3.2): qname, step id, round, whether the model
     -- terminated the loop this round.
     AgentRoundEnd QName Ident Int Bool
-  | -- | @if-branch@ (§13, M8): qname, if-id, the branch taken
+  | -- | @if-branch@ (?13, M8): qname, if-id, the branch taken
     -- (@"then"@\/@"else"@\/@"none"@).
     IfBranch QName Ident Text
-  | -- | @loop-start@ (§13, M8; §4.3, M9): qname, loop-id, kind
+  | -- | @loop-start@ (?13, M8; ?4.3, M9): qname, loop-id, kind
   -- (@"foreach"@\/@"par"@\/@"while"@), iteration count (@Nothing@ for @while@).
     LoopStart QName Ident Text (Maybe Int)
-  | -- | @loop-iter@ (§13, M8): qname, loop-id, 0-based iteration index.
+  | -- | @loop-iter@ (?13, M8): qname, loop-id, 0-based iteration index.
     LoopIter QName Ident Int
-  | -- | @loop-end@ (§13, M8): qname, loop-id, iteration count.
+  | -- | @loop-end@ (?13, M8): qname, loop-id, iteration count.
     LoopEnd QName Ident Int
-  | -- | @while-pred@ (§4.3, M9): qname, while-id, iteration, predicate decision.
+  | -- | @while-pred@ (?4.3, M9): qname, while-id, iteration, predicate decision.
     WhilePred QName Ident Int Bool Text
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int
@@ -169,7 +171,7 @@ data TraceEvent = TraceEvent
   }
   deriving stock (Eq, Show)
 
--- | Encode a trace event as a single JSON object (spec §8.3). Field names and
+-- | Encode a trace event as a single JSON object (spec ?8.3). Field names and
 -- @tag@ spellings match the schema verbatim.
 eventToJson :: TraceEvent -> Value
 eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
@@ -311,9 +313,9 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "status" .= runStatusText status
         ]
 
--- | Decode a single @trace.jsonl@ line back into a 'TraceEvent' (spec §8.3),
+-- | Decode a single @trace.jsonl@ line back into a 'TraceEvent' (spec ?8.3),
 -- the inverse of 'eventToJson'. Used to reconstruct @ctx.trace@ and continue
--- @seq@ numbering on resume (§8.3.5, §8.2), and by @hwfi show@. Returns
+-- @seq@ numbering on resume (?8.3.5, ?8.2), and by @hwfi show@. Returns
 -- 'Nothing' on a malformed line so a corrupt trailing write (e.g. from a crash
 -- mid-append) is skipped rather than aborting the reader.
 eventFromJson :: Value -> Maybe TraceEvent
@@ -398,7 +400,7 @@ parseEvent = withObject "TraceEvent" $ \o -> do
     qn o = qnameFromText <$> o .: "qname"
 
 -- | A one-line human-readable rendering of a trace event for @hwfi show@
--- (spec §9). Not a wire format; 'eventToJson' remains the persisted form.
+-- (spec ?9). Not a wire format; 'eventToJson' remains the persisted form.
 renderEvent :: TraceEvent -> Text
 renderEvent (TraceEvent s at body) =
   pad6 s <> "  " <> at <> "  " <> renderBody body
@@ -483,15 +485,15 @@ renderEvent (TraceEvent s at body) =
 -- | An event accumulator with an optional append-only file sink. Holds the
 -- next @seq@ and the events so far in reverse chronological order. When a sink
 -- is present, 'emit' also appends the event's JSON line to @trace.jsonl@ and
--- flushes, so a crash mid-run leaves a durable prefix to resume from (§8.2).
+-- flushes, so a crash mid-run leaves a durable prefix to resume from (?8.2).
 --
 -- The 'MVar' serialises the whole of 'emit' so that concurrent @par@
--- iterations (§13, M8) cannot interleave @seq@ assignment with the file write:
+-- iterations (?13, M8) cannot interleave @seq@ assignment with the file write:
 -- the persisted line order always matches @seq@ order, which resume relies on
--- to reconstruct @ctx.trace@ identically (§8.3.5).
+-- to reconstruct @ctx.trace@ identically (?8.3.5).
 data Tracer = Tracer (MVar ()) (IORef (Int, [TraceEvent])) (Maybe Handle)
 
--- | Create a fresh in-memory tracer starting at @seq = 0@ (spec §8.3.1). Used
+-- | Create a fresh in-memory tracer starting at @seq = 0@ (spec ?8.3.1). Used
 -- by tests and callers that do not persist.
 newTracer :: IO Tracer
 newTracer = do
@@ -502,7 +504,7 @@ newTracer = do
 -- | Create a tracer that appends every emitted event to @h@, seeded with the
 -- events already persisted (in chronological order) and the next @seq@ to
 -- assign. On a fresh run this is @(h, [], 0)@; on resume it is the parsed
--- @trace.jsonl@ and @last-seq + 1@ (spec §8.2, §8.3.5).
+-- @trace.jsonl@ and @last-seq + 1@ (spec ?8.2, ?8.3.5).
 newPersistentTracer :: Handle -> [TraceEvent] -> Int -> IO Tracer
 newPersistentTracer h preload nextSeq = do
   lock <- newMVar ()
@@ -512,7 +514,7 @@ newPersistentTracer h preload nextSeq = do
 -- | Append an event, assigning it the next @seq@ and the current timestamp,
 -- and persisting it to the sink (if any) before returning. The critical
 -- section is held under the tracer mutex so concurrent emitters produce a
--- consistent, in-order trace (§13, M8).
+-- consistent, in-order trace (?13, M8).
 emit :: Tracer -> EventBody -> IO TraceEvent
 emit (Tracer lock ref sink) body = withMVar lock $ \_ -> do
   now <- getCurrentTime
@@ -528,7 +530,7 @@ emit (Tracer lock ref sink) body = withMVar lock $ \_ -> do
       hFlush h
   pure ev
 
--- | All events so far, in chronological order (spec §8.3.5: @ctx.trace@ is the
+-- | All events so far, in chronological order (spec ?8.3.5: @ctx.trace@ is the
 -- ordered parse of the trace as persisted so far).
 snapshotEvents :: Tracer -> IO [TraceEvent]
 snapshotEvents (Tracer _ ref _) = reverse . snd <$> readIORef ref
@@ -540,3 +542,60 @@ snapshotJson t = Array . V.fromList . map eventToJson <$> snapshotEvents t
 -- | The @seq@ that will be assigned to the next emitted event.
 currentSeq :: Tracer -> IO Int
 currentSeq (Tracer _ ref _) = fst <$> readIORef ref
+
+-- Trace slice (?6.6.2) -------------------------------------------------------
+
+-- | Extract the @(qname, step_id)@ pair carried by an in-step event body, if
+-- any.
+eventStepRef :: EventBody -> Maybe (QName, Ident)
+eventStepRef = \case
+  StepStart q sid _ _ -> Just (q, sid)
+  StepEnd q sid _ _ -> Just (q, sid)
+  LlmCall q sid _ _ _ _ _ _ _ -> Just (q, sid)
+  FileIo q sid _ _ _ -> Just (q, sid)
+  Exec q sid _ _ _ _ _ _ -> Just (q, sid)
+  ErrorEvent q sid _ _ -> Just (q, sid)
+  AgentRoundStart q sid _ -> Just (q, sid)
+  AgentToolCall q sid _ _ _ _ -> Just (q, sid)
+  AgentToolResult q sid _ _ _ _ _ -> Just (q, sid)
+  AgentRoundEnd q sid _ _ -> Just (q, sid)
+  IfBranch q sid _ -> Just (q, sid)
+  LoopStart q sid _ _ -> Just (q, sid)
+  LoopIter q sid _ -> Just (q, sid)
+  LoopEnd q sid _ -> Just (q, sid)
+  WhilePred q sid _ _ _ -> Just (q, sid)
+  _ -> Nothing
+
+-- | Return events belonging to one logical step in trace order (?6.6.2).
+-- When @includeNested@ is false, only events whose @(qname, step_id)@ exactly
+-- match are kept. When true, also includes nested sub-workflow events that fall
+-- between the target step's @step-start@ and terminal (@step-end@ or @error@).
+sliceTrace :: [TraceEvent] -> QName -> Ident -> Bool -> [TraceEvent]
+sliceTrace events targetQ targetSid includeNested
+  | includeNested = sliceNested events targetQ targetSid
+  | otherwise = filter (eventMatches targetQ targetSid) events
+  where
+    eventMatches q sid (TraceEvent _ _ body) = case eventStepRef body of
+      Just (q', sid') -> q' == q && sid' == sid
+      Nothing -> False
+
+sliceNested :: [TraceEvent] -> QName -> Ident -> [TraceEvent]
+sliceNested events targetQ targetSid = go False events
+  where
+    go _ [] = []
+    go inside (ev@(TraceEvent _ _ body) : es)
+      | isTargetStart body =
+          ev : go True es
+      | inside && isTargetEnd body =
+          ev : go False es
+      | inside =
+          ev : go True es
+      | otherwise =
+          go False es
+    isTargetStart body = case body of
+      StepStart q sid _ _ -> q == targetQ && sid == targetSid
+      _ -> False
+    isTargetEnd body = case body of
+      StepEnd q sid _ _ -> q == targetQ && sid == targetSid
+      ErrorEvent q sid _ _ -> q == targetQ && sid == targetSid
+      _ -> False

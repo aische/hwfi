@@ -1,0 +1,8 @@
+{
+  "source_run": "run-example",
+  "source_qname": "workflows/fix",
+  "source_step_id": "fix",
+  "target_path": "skills/fix-shell.md",
+  "skill_name": "skills/fix-shell",
+  "kind": "tool"
+}
