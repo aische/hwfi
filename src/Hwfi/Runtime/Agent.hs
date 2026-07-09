@@ -193,7 +193,7 @@ runAgent env spec = do
 -- | On resume, reload a persisted checkpoint when present; otherwise replay
 -- from round 0 (�8.2.1 backward compatibility).
 resolveStart :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> IO ([Turn], Int)
-resolveStart env spec skillState
+resolveStart env spec _skillState
   | not (aeResume env) = pure (initialMessages spec, 0)
   | otherwise = do
       mCkpt <- loadAgentCheckpoint (aeStore env) (aeStepKey env)
@@ -375,7 +375,7 @@ runOneCall env spec skillState roundIx callIx ensureStart tc
 -- | Run an advertised (non-@submit@) tool call as a nested executor step,
 -- honouring the tool-call sub-cache (?8.2.1, ?6.1.2).
 runAdvertisedCall :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> Int -> Int -> IO () -> ToolCall -> AdvertisedTool -> IO CallOutcome
-runAdvertisedCall env spec skillState roundIx callIx ensureStart tc tool
+runAdvertisedCall env _spec skillState roundIx callIx ensureStart tc tool
   | atQName tool == loadSkillQName =
       runLoadSkillCall env skillState roundIx callIx ensureStart tc
   | otherwise =
@@ -683,15 +683,6 @@ toolSubKey env roundIx callIx calleeFp argsJson =
       "callee:" <> calleeFp,
       "args:" <> canonicalJson argsJson
     ]
-
--- | A stable fingerprint of the advertised tool set plus the submit schema, so
--- the model-call sub-key changes if the offered tools change (?8.2.1).
-toolsFingerprint :: AgentSpec -> Text
-toolsFingerprint spec =
-  sha256Hex (T.intercalate ";" entries <> "|submit:" <> submitPart)
-  where
-    entries = sort [renderQName (atQName t) <> "=" <> atFingerprint t | t <- asTools spec]
-    submitPart = maybe "" (canonicalJson . ssSchema) (asSubmit spec)
 
 toolStepId :: AgentEnv -> Int -> Int -> Ident
 toolStepId env roundIx callIx =

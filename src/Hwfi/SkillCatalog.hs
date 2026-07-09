@@ -175,7 +175,7 @@ textHits q t =
 tagHits :: Text -> Text -> Bool
 tagHits q tag =
   let tl = T.toLower tag
-   in textHits q tl || any (`textHits` tl) (map T.toLower (T.words q))
+   in textHits q tl || any ((`textHits` tl) . T.toLower) (T.words q)
 
 -- | Markdown body after frontmatter (instruction skills).
 instructionBodyFromMarkdown :: MarkdownFile -> Text
@@ -185,7 +185,7 @@ instructionBodyFromMarkdown md =
       Nothing -> T.unlines (mdSourceLines md)
       Just _ -> bodyAfterFence (mdSourceLines md)
   where
-    bodyAfterFence lines = case lines of
+    bodyAfterFence lns = case lns of
       (_ : rest) ->
         case break (\l -> T.strip l == "---") rest of
           (_, _ : bodyLines) -> T.unlines bodyLines
