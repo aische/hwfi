@@ -30,7 +30,7 @@ Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
 - [x] R1.10 Minimal cache UX: `hwfi cache clear` subcommand
 - [ ] R1.11 Tutorials (user-authored): hello → check → agent → show/resume
       (author reference: [workflow-reference.md](workflow-reference.md) — expanded 2026-07-10)
-- [ ] R1.12 `CHANGELOG.md` + tag 0.1.0.0
+- [ ] R1.12 tag 0.1.0.0 (`CHANGELOG.md` done)
 
 ## Next — v1.1 (post-release)
 

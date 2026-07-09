@@ -4,9 +4,9 @@ Last updated: 2026-07-10
 
 ## Current focus
 
-**R1.11 tutorials** and **R1.12 release tag** (`0.1.0.0`). Author reference
-manual at [workflow-reference.md](workflow-reference.md) — now covers agents
-(`submit`), skills runtime, secrets, eval/trace builtins, and error posture.
+**R1.11 tutorials** and **R1.12 tag** (`0.1.0.0`). Root
+[CHANGELOG.md](../CHANGELOG.md) added for the release; author reference at
+[workflow-reference.md](workflow-reference.md).
 
 ## Done recently
 
