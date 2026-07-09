@@ -2,7 +2,9 @@
 
 Demonstrates the M7 capabilities: filesystem **mutation** builtins (spec §6.2)
 and allowlisted command **execution** (`builtin/exec`, spec §6.3, §7.5), in both
-a fixed *scripted* workflow and an *agentic* coding loop.
+a fixed *scripted* workflow and an *agentic* coding loop. Used in
+[docs/tutorials/03-agent.md](../../docs/tutorials/03-agent.md) and
+[04-show-resume.md](../../docs/tutorials/04-show-resume.md).
 
 Two entrypoints:
 

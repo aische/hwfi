@@ -35,6 +35,9 @@ import Test.Hspec
 summariseDir :: FilePath
 summariseDir = "examples/summarise"
 
+helloDir :: FilePath
+helloDir = "examples/hello"
+
 codingDir :: FilePath
 codingDir = "examples/coding"
 
@@ -47,6 +50,9 @@ brokenShFixture = codingDir </> "sample-workspace/broken.sh"
 spec :: Spec
 spec = do
   describe "tutorial examples (static)" $ do
+    it "hello passes hwfi check" $
+      expectCheckOk helloDir
+
     it "summarise passes hwfi check" $
       expectCheckOk summariseDir
 
@@ -64,6 +70,29 @@ spec = do
       doesFileExist (shipDir </> "sample-workspace") `shouldReturn` False
 
   describe "tutorial examples (live E2E)" $ do
+    it "hello reads, merges banner, and writes on a clean workspace" $
+      withSystemTempDirectory "hwfi-e2e-hello" $ \wsDir -> do
+        let input = wsDir </> "input.txt"
+        TIO.writeFile input "World."
+        outputs <-
+          runExample
+            helloDir
+            (qnameFromText "workflows/main")
+            ( Map.fromList
+                [ ("path", VFileRef "input.txt"),
+                  ("out", VFileRef "greeting.txt")
+                ]
+            )
+            wsDir
+        case outputs of
+          VRecord m -> do
+            Map.lookup "greeting" m `shouldSatisfy` \case
+              Just (VString s) -> "Hello from hwfi." `T.isInfixOf` s && "World." `T.isInfixOf` s
+              _ -> False
+          _ -> expectationFailure "expected output record"
+        exists <- doesFileExist (wsDir </> "greeting.txt")
+        exists `shouldBe` True
+
     it "summarise reads, summarises, and writes on a clean workspace" $
       withDeepSeekKey summariseDir $ \projectDir -> do
         withSystemTempDirectory "hwfi-e2e-summarise" $ \wsDir -> do

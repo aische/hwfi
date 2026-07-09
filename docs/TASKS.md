@@ -28,8 +28,8 @@ Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
 - [x] R1.9 Harden tutorial examples: E2E `summarise` + `coding/fix` on clean
       workspace; DeepSeek via API (`deepseek-v4-flash` in READMEs/catalog)
 - [x] R1.10 Minimal cache UX: `hwfi cache clear` subcommand
-- [ ] R1.11 Tutorials (user-authored): hello → check → agent → show/resume
-      (author reference: [workflow-reference.md](workflow-reference.md) — expanded 2026-07-10)
+- [x] R1.11 Tutorials: [docs/tutorials/README.md](tutorials/README.md)
+      (hello → check → agent → show/resume); `examples/hello`
 - [ ] R1.12 tag 0.1.0.0 (`CHANGELOG.md` done)
 
 ## Next — v1.1 (post-release)

@@ -4,12 +4,12 @@ Last updated: 2026-07-10
 
 ## Current focus
 
-**R1.11 tutorials** and **R1.12 tag** (`0.1.0.0`). Root
-[CHANGELOG.md](../CHANGELOG.md) added for the release; author reference at
-[workflow-reference.md](workflow-reference.md).
+**R1.12 tag** (`0.1.0.0`). Tutorial hub and four tutorials done (R1.11).
 
 ## Done recently
 
+- **Tutorials (2026-07-10):** `docs/tutorials/` hub + hello/check/agent/show-resume;
+  new `examples/hello` (no LLM); README and workflow-reference links; E2E tests.
 - **Workflow reference expansion (2026-07-10):** `llm-agent-object` / `submit`,
   recoverable vs fatal agent errors, tool schema translation, skill discover/load
   limits, `eval-workflow`, cross-run trace, secrets/`ctx.env`, caching fixes,
@@ -17,8 +17,6 @@ Last updated: 2026-07-10
 - **`builtin/json-values` (2026-07-10):** object/array → `List<Json>` for
   `foreach`; numeric key sort; null filtering. `examples/ship` `plan-tasks`
   bridge simplified.
-- **ship hang fixes (2026-07-09):** planner forbids dev-server verify; build agent
-  prefers build + `tools/vite-dev-smoke`; bidirectional `discover-skills` tag matching.
 
 ## Blockers
 
@@ -26,4 +24,4 @@ Last updated: 2026-07-10
 
 ## Next up
 
-[TASKS.md](TASKS.md) → R1.11 tutorials; R1.12 tag `0.1.0.0`.
+[TASKS.md](TASKS.md) → R1.12 tag `0.1.0.0`.

@@ -1,7 +1,10 @@
 # `summarise` — minimal two-step pipeline
 
-The smallest useful workflow: read a text file, summarise it with an LLM, write
-the result. Use this as **tutorial 1** before `examples/coding`.
+The smallest useful **LLM** workflow: read a text file, summarise it with an
+LLM, write the result. For the core learning path start with
+[docs/tutorials/README.md](../../docs/tutorials/README.md) (`examples/hello`, no
+API key); use this example when you want a linear LLM pipeline before
+`examples/coding`.
 
 ## What it does
 
@@ -44,5 +47,6 @@ cabal run hwfi -- show /tmp/summarise-ws <run-id>
 
 ## Next steps
 
+- [Tutorials](../../docs/tutorials/README.md) — hello → check → agent → show/resume
 - [`../coding`](../coding) — agent loop with `exec` and resume
 - [Caching and resume](../../docs/caching-and-resume.md) — how step cache works

@@ -8,6 +8,7 @@ see [spec.md](spec.md).
 
 **Related guides**
 
+- [tutorials/README.md](tutorials/README.md) — hands-on learning path
 - [caching-and-resume.md](caching-and-resume.md) — step cache, resume, agent replay
 - [tool-use.md](tool-use.md) — design rationale for agent tool loops
 - Example projects under `examples/` — runnable patterns from minimal to full
@@ -1044,10 +1045,12 @@ Not available in v1 (see spec §13):
 
 | Resource | Content |
 |----------|---------|
+| [tutorials/README.md](tutorials/README.md) | Hands-on learning path |
 | [spec.md](spec.md) | Full normative specification |
 | [caching-and-resume.md](caching-and-resume.md) | Cache and resume semantics |
 | [tool-use.md](tool-use.md) | Agent tool-loop design rationale (incl. `submit`) |
-| [examples/summarise/README.md](../examples/summarise/README.md) | Tutorial 1 |
+| [examples/hello/README.md](../examples/hello/README.md) | Minimal file pipeline (no LLM) |
+| [examples/summarise/README.md](../examples/summarise/README.md) | LLM pipeline |
 | [examples/coding/README.md](../examples/coding/README.md) | Agent + resume |
 | [examples/research/README.md](../examples/research/README.md) | Full feature tour + typed agent |
 | [examples/ship/README.md](../examples/ship/README.md) | Full orchestration |

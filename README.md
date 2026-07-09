@@ -34,18 +34,22 @@ cabal test
 
 ## Quick start
 
-```bash
-mkdir -p /tmp/hwfi-ws
-echo "Hello from hwfi." > /tmp/hwfi-ws/input.txt
+New to hwfi? Start with the [tutorials](docs/tutorials/README.md) — tutorial 1
+runs with **no API key**.
 
-cabal run hwfi -- check examples/summarise
-cabal run hwfi -- run examples/summarise \
-  --workspace /tmp/hwfi-ws \
+```bash
+mkdir -p /tmp/hello-ws
+echo "World." > /tmp/hello-ws/input.txt
+
+cabal run hwfi -- check examples/hello
+cabal run hwfi -- run examples/hello \
+  --workspace /tmp/hello-ws \
   --input path=input.txt \
-  --input out=summary.txt
+  --input out=greeting.txt
 ```
 
-Requires `DEEPSEEK_API_KEY` (see `examples/summarise/.env.example`).
+For an LLM pipeline, see [`examples/summarise`](examples/summarise) (requires
+`DEEPSEEK_API_KEY`; see `.env.example`).
 
 ## CLI
 
@@ -61,7 +65,8 @@ hwfi cache clear <workspace-dir> <run-id>
 
 | Example | Purpose |
 |---------|---------|
-| [`examples/summarise`](examples/summarise) | Tutorial 1: read → LLM → write |
+| [`examples/hello`](examples/hello) | Tutorial 1: read → concat → write (no LLM) |
+| [`examples/summarise`](examples/summarise) | LLM pipeline: read → generate → write |
 | [`examples/coding`](examples/coding) | Agent coding loop + `exec` |
 | [`examples/control-flow`](examples/control-flow) | `if` / `foreach` / `par` / `while` |
 | [`examples/research`](examples/research) | Full feature matrix (advanced) |
@@ -71,6 +76,7 @@ hwfi cache clear <workspace-dir> <run-id>
 
 ## Documentation
 
+- [docs/tutorials/README.md](docs/tutorials/README.md) — learning path (hello → check → agent → show/resume)
 - [docs/workflow-reference.md](docs/workflow-reference.md) — author reference (write and run workflows)
 - [docs/spec.md](docs/spec.md) — normative specification
 - [docs/caching-and-resume.md](docs/caching-and-resume.md) — cache semantics for authors
