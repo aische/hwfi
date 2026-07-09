@@ -31,6 +31,7 @@ module Hwfi.Runtime.Executor
 where
 
 import Control.Monad (join)
+import Data.IORef (IORef, newIORef)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -68,12 +69,15 @@ import Hwfi.Check.Graph (builtinFingerprint)
 import Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     AgentEnv (..),
+    AgentSkillState (..),
     AgentSpec (..),
     SubmitSpec (..),
     advertisedToolDef,
+    emptyAgentSkillState,
     runAgent,
     submitToolDef,
   )
+import Hwfi.SkillCatalog (skillPolicyFromManifest)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord, contextValue)
 import Hwfi.Runtime.Error
@@ -824,10 +828,12 @@ runAgentStep ::
 runAgentStep rt bindings stepRef scope target argMap agentKey =
   case buildAgentSpec rt target argMap of
     Left e -> pure (Left e)
-    Right spec -> runAgent (mkAgentEnv rt bindings stepRef scope agentKey) spec
+    Right spec -> do
+      skillState <- newIORef emptyAgentSkillState
+      runAgent (mkAgentEnv rt bindings stepRef scope agentKey skillState) spec
 
-mkAgentEnv :: Runtime -> Map Ident RValue -> StepRef -> Text -> Text -> AgentEnv
-mkAgentEnv rt bindings stepRef scope agentKey =
+mkAgentEnv :: Runtime -> Map Ident RValue -> StepRef -> Text -> Text -> IORef AgentSkillState -> AgentEnv
+mkAgentEnv rt bindings stepRef scope agentKey skillState =
   AgentEnv
     { aeTracer = rtTracer rt,
       aeStore = rtStore rt,
@@ -836,10 +842,21 @@ mkAgentEnv rt bindings stepRef scope agentKey =
       aeQName = srQName stepRef,
       aeStepId = srStepId stepRef,
       aeStepKey = agentKey,
-      -- A model-chosen call runs through the normal resolved dispatch, tagged
-      -- with the tool's qname and the loop-supplied nested step id.
-      aeDispatch = \tq tsid targs -> dispatchResolved rt (StepRef tq tsid) bindings scope tq targs
+      aeDispatch = \tq tsid targs -> dispatchResolved rt (StepRef tq tsid) bindings scope tq targs,
+      aeSkillPolicy = skillPolicyFromManifest (tpManifest (rtProject rt)),
+      aeSkillCatalog = tpSkillCatalog (rtProject rt),
+      aeSkillState = skillState,
+      aeBuildTool = buildAdvertisedTool rt
     }
+
+buildAdvertisedTool :: Runtime -> QName -> Maybe AdvertisedTool
+buildAdvertisedTool rt q =
+  case refKind rt q of
+    Nothing -> Nothing
+    Just rk ->
+      case buildTool rt (VRef rk q) of
+        Right t -> Just t
+        Left _ -> Nothing
 
 -- | Assemble the 'AgentSpec' from the resolved step arguments (spec §6.1). The
 -- checker (§5.6.9) has already validated the shape, so a mismatch here is an
@@ -935,7 +952,8 @@ builtinEnv rt stepRef bindings scope =
       beUsage = rtUsage rt,
       beIntrospect = introspectDump rt stepRef bindings,
       beEvalWorkflow = Just (evalWorkflowSeam rt scope),
-      beRunId = riRunId (rtRunInfo rt)
+      beRunId = riRunId (rtRunInfo rt),
+      beSkillCatalog = tpSkillCatalog (rtProject rt)
     }
 
 evalWorkflowSeam :: Runtime -> Text -> EvalWorkflowSeam

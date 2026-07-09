@@ -1,0 +1,14 @@
+[
+  {
+    "modelConfigName": "fast",
+    "providerName": "fake",
+    "modelName": "fake",
+    "pricing": { "pricePerMillionInput": 0, "pricePerMillionOutput": 0 },
+    "maxTokens": 256,
+    "temperature": 0,
+    "requestTimeout": 30000,
+    "throttleDelay": 0,
+    "retryCount": 0,
+    "jitterBackoff": 0
+  }
+]

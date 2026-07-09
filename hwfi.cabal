@@ -31,7 +31,8 @@ library
         Hwfi.Ast.Name
         Hwfi.Ast.Project
         Hwfi.Ast.Step
-        Hwfi.Ast.Tool
+        Hwfi.Ast.Skill
+        Hwfi.Ast.InstructionSkill
         Hwfi.Ast.Type
         Hwfi.Ast.TypeAlias
         Hwfi.Ast.Workflow
@@ -69,6 +70,7 @@ library
         Hwfi.Runtime.Provider
         Hwfi.Runtime.RunStore
         Hwfi.Runtime.RunUsage
+        Hwfi.Runtime.Skills
         Hwfi.Runtime.Schema
         Hwfi.Runtime.Secret
         Hwfi.Runtime.StepKey
@@ -78,7 +80,9 @@ library
         Hwfi.Runtime.Workspace
         Hwfi.Source
         Hwfi.Type
+        Hwfi.Ast.Tool
         Hwfi.TypedProject
+        Hwfi.SkillCatalog
     build-depends:
         base                 ^>=4.18,
         aeson                >=2.0  && <2.3,

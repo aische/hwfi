@@ -37,6 +37,9 @@ import Hwfi.Compat
     noHooks,
   )
 import Hwfi.Project.Manifest (ExecPolicy)
+import Hwfi.Runtime.Skills (discoverSkillsResult, loadSkillScripted)
+import Hwfi.SkillCatalog (SkillCatalog)
+import Hwfi.SkillCatalog qualified as Cat
 import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sandboxError)
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
@@ -79,7 +82,9 @@ data BuiltinEnv = BuiltinEnv
     -- | Dynamic workflow evaluation seam (§6.4). 'Nothing' outside the executor.
     beEvalWorkflow :: Maybe EvalWorkflowSeam,
     -- | The current logical run id (§6.5).
-    beRunId :: Text
+    beRunId :: Text,
+    -- | Checked-project skill catalog (§6.7).
+    beSkillCatalog :: SkillCatalog
   }
 
 -- | Dispatch a builtin call. The caller guarantees @q@ is a builtin qname.
@@ -109,6 +114,8 @@ runBuiltin env q args = case renderQName q of
   "builtin/json-get" -> jsonGetTool args
   "builtin/concat" -> concatTool args
   "builtin/log" -> logTool env args
+  "builtin/discover-skills" -> discoverSkillsTool env args
+  "builtin/load-skill" -> loadSkillTool env args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------
@@ -693,3 +700,37 @@ logTool env args =
     redactJsonValue v@(Object _) = redactJsonFields v
     redactJsonValue (Array a) = Array (fmap redactJsonValue a)
     redactJsonValue v = v
+
+-- Skill catalog (§6.7) -------------------------------------------------------
+
+discoverSkillsTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+discoverSkillsTool env args =
+  orFail ((,,) <$> argText args "query" <*> argStrList args "kinds" <*> argInt args "limit") $
+    \(query, kinds, limit) -> do
+      let cat = beSkillCatalog env
+          entries = Cat.discoverSkills cat query kinds limit
+          q = srQName (beStep env)
+          sid = srStepId (beStep env)
+      emit_ env (SkillDiscover q sid query kinds limit (length entries))
+      pure (Right (discoverSkillsResult cat query kinds limit))
+
+loadSkillTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+loadSkillTool env args =
+  orFail (argText args "id") $ \skillId -> do
+    let cat = beSkillCatalog env
+        result = loadSkillScripted cat skillId
+        q = srQName (beStep env)
+        sid = srStepId (beStep env)
+    case result of
+      VRecord m
+        | Map.lookup "ok" m == Just (VBool True) ->
+            let kind = fieldText m "kind"
+                loaded = Map.lookup "loaded" m == Just (VBool True)
+             in do
+                  emit_ env (SkillLoad q sid skillId kind loaded)
+                  pure (Right result)
+      _ -> pure (Right result)
+  where
+    fieldText m name = case Map.lookup name m of
+      Just (VString t) -> t
+      _ -> ""

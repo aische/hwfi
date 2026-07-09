@@ -53,10 +53,10 @@ Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 Specified in spec §6.7, [skills-design.md](skills-design.md). Cursor-style
 discover/load for callable and instruction skills.
 
-- [ ] 9.15.1 Skill catalog + `kind` frontmatter + `builtin/discover-skills` (A45–A46)
-- [ ] 9.15.2 `builtin/load-skill` instruction path + trace events (A47)
-- [ ] 9.15.3 `load-skill` callable path + agent checkpoint / per-round tool fp (A48–A49)
-- [ ] 9.15.4 Runtime `tools` list on `llm-agent` + example (A50)
+- [x] 9.15.1 Skill catalog + `kind` frontmatter + `builtin/discover-skills` (A45–A46)
+- [x] 9.15.2 `builtin/load-skill` instruction path + trace events (A47)
+- [x] 9.15.3 `load-skill` callable path + agent checkpoint / per-round tool fp (A48–A49)
+- [x] 9.15.4 Runtime `tools` list on `llm-agent` + example (A50)
 
 ## Done
 

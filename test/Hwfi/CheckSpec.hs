@@ -118,6 +118,13 @@ spec = do
       res <- checkFixture "agent-coding-tools"
       res `shouldSatisfy` isRight
 
+    it "A50: accepts a runtime-built tools list with a check warning (§6.1.6)" $ do
+      res <- checkFixture "agent-runtime-tools"
+      res `shouldSatisfy` isRight
+      case res of
+        Right tp -> length (tpWarnings tp) `shouldBe` 1
+        Left errs -> expectationFailure (show errs)
+
   describe "checkProject — exec policy (§7.5, A24)" $ do
     it "accepts a builtin/exec call whose literal program is allowlisted" $ do
       res <- checkFixture "exec-ok"

@@ -11,6 +11,7 @@ module Hwfi.Ast.Project
 where
 
 import Data.Map.Strict (Map)
+import Hwfi.Ast.InstructionSkill (InstructionSkill (..))
 import Hwfi.Ast.Name (QName)
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.TypeAlias (TypeAlias (..))
@@ -30,12 +31,13 @@ data Prompt = Prompt
 data Declaration
   = DeclWorkflow Workflow
   | DeclTool Tool
+  | DeclInstruction InstructionSkill
   | DeclTypeAlias TypeAlias
   | DeclPrompt Prompt
   deriving stock (Eq, Show)
 
 -- | A coarse classification tag for a declaration.
-data DeclKind = KindWorkflow | KindTool | KindTypeAlias | KindPrompt
+data DeclKind = KindWorkflow | KindTool | KindInstruction | KindTypeAlias | KindPrompt
   deriving stock (Eq, Show)
 
 -- | The qualified name of a declaration.
@@ -43,6 +45,7 @@ declQName :: Declaration -> QName
 declQName = \case
   DeclWorkflow w -> wfName w
   DeclTool t -> toolName t
+  DeclInstruction i -> isName i
   DeclTypeAlias a -> taName a
   DeclPrompt p -> promptName p
 
@@ -51,6 +54,7 @@ declKind :: Declaration -> DeclKind
 declKind = \case
   DeclWorkflow _ -> KindWorkflow
   DeclTool _ -> KindTool
+  DeclInstruction _ -> KindInstruction
   DeclTypeAlias _ -> KindTypeAlias
   DeclPrompt _ -> KindPrompt
 

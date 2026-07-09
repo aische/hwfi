@@ -7,8 +7,8 @@
 -- encoding; M5 layers the append-only file writer and resume reconstruction on
 -- top of the same 'Tracer' seam.
 --
--- Common fields (?8.3.1) ˇˇˇ @tag@, @seq@, @at@, and for in-step events @qname@
--- and @step_id@ ˇˇˇ are attached by 'emit', which assigns the monotonic,
+-- Common fields (?8.3.1) ùùù @tag@, @seq@, @at@, and for in-step events @qname@
+-- and @step_id@ ùùù are attached by 'emit', which assigns the monotonic,
 -- gap-free @seq@ and the ISO-8601 millisecond timestamp.
 module Hwfi.Runtime.Trace
   ( FileOp (..),
@@ -160,6 +160,10 @@ data EventBody
     WhilePred QName Ident Int Bool Text
   | -- | @workflow-log@ (?13.1.5): qname, step id, message, optional fields (redacted).
     WorkflowLog QName Ident Text Value
+  | -- | @skill-discover@ (ù6.7.1): qname, step id, query, kinds, limit, result count.
+    SkillDiscover QName Ident Text [Text] Int Int
+  | -- | @skill-load@ (ù6.7.2): qname, step id, skill id, kind, loaded flag.
+    SkillLoad QName Ident Text Text Bool
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int
   | -- | @run-end@: run id, terminal status.
@@ -312,6 +316,23 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "message" .= message,
           "fields" .= fields
         ]
+      SkillDiscover q sid query kinds limit count ->
+        [ "tag" .= ("skill-discover" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "query" .= query,
+          "kinds" .= kinds,
+          "limit" .= limit,
+          "result_count" .= count
+        ]
+      SkillLoad q sid skillId kind loaded ->
+        [ "tag" .= ("skill-load" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "id" .= skillId,
+          "kind" .= kind,
+          "loaded" .= loaded
+        ]
       Resumed runId fromSeq ->
         [ "tag" .= ("resumed" :: Text),
           "run_id" .= runId,
@@ -404,6 +425,10 @@ parseEvent = withObject "TraceEvent" $ \o -> do
         WhilePred <$> qn o <*> o .: "step_id" <*> o .: "iteration" <*> o .: "continue" <*> o .: "reason"
       "workflow-log" ->
         WorkflowLog <$> qn o <*> o .: "step_id" <*> o .: "message" <*> o .: "fields"
+      "skill-discover" ->
+        SkillDiscover <$> qn o <*> o .: "step_id" <*> o .: "query" <*> o .: "kinds" <*> o .: "limit" <*> o .: "result_count"
+      "skill-load" ->
+        SkillLoad <$> qn o <*> o .: "step_id" <*> o .: "id" <*> o .: "kind" <*> o .: "loaded"
       "resumed" ->
         Resumed <$> o .: "run_id" <*> o .: "from_seq"
       "run-end" ->
@@ -490,6 +515,10 @@ renderEvent (TraceEvent s at body) =
           <> reason
       WorkflowLog q sid message fields ->
         "workflow-log " <> step q sid <> "  " <> message <> fieldsSuffix fields
+      SkillDiscover q sid query _ limit count ->
+        "skill-discover " <> step q sid <> "  query=" <> query <> "  limit=" <> T.pack (show limit) <> "  count=" <> T.pack (show count)
+      SkillLoad q sid skillId kind loaded ->
+        "skill-load    " <> step q sid <> "  id=" <> skillId <> "  kind=" <> kind <> "  loaded=" <> (if loaded then "true" else "false")
       Resumed runId fromSeq ->
         "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
       RunEnd runId status ->

@@ -17,23 +17,27 @@ module Hwfi.Parse.Project
 where
 
 import Control.Monad (forM)
+import Data.Maybe (fromMaybe)
 import Data.Aeson (Object)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
+import Hwfi.Ast.InstructionSkill (InstructionSkill (..))
 import Hwfi.Ast.Name (QName (..), qnameFromText, renderQName)
 import Hwfi.Ast.Project
+import Hwfi.Ast.Skill (SkillKind (..), SkillMeta (..))
 import Hwfi.Ast.Step (Statement)
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Signature, Workflow (..))
-import Hwfi.Parse.Frontmatter (frontmatterKind, frontmatterName, parseYamlObject, signatureFromYaml)
+import Hwfi.Parse.Frontmatter (frontmatterKind, frontmatterName, parseSkillBlock, parseYamlObject, signatureFromYaml)
 import Hwfi.Parse.Markdown (MarkdownFile (..), MdStepBlock (..), parseMarkdown)
 import Hwfi.Parse.Section (buildSections)
 import Hwfi.Parse.Step (parseStepBlock)
 import Hwfi.Parse.TypeAlias (parseTypeAlias)
 import Hwfi.Project.Manifest (ProjectManifest, loadManifest)
+import Hwfi.SkillCatalog (instructionBodyFromMarkdown, summaryFallback)
 import Hwfi.Source (Diagnostic (..), Pos (..))
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (dropExtension, splitDirectories, takeExtension, (</>))
@@ -118,13 +122,17 @@ parseDeclaration relpath content = do
         (d : _) -> d
         [] -> ""
       kindTag = classify topDir (snd <$> mObj >>= frontmatterKind)
-  case kindTag of
-    CTypeAlias -> buildTypeAliasDecl relpath qname md
-    CPrompt -> buildPromptDecl relpath qname md
-    CWorkflow -> buildWorkflowDecl relpath qname md mObj
-    CTool -> buildToolDecl relpath qname md mObj
-    CUnknown ->
-      Left [diag relpath ("cannot classify declaration '" <> renderQName qname <> "': unknown kind or location")]
+      skillKind = skillKindFromObj relpath mObj
+  case (topDir, skillKind) of
+    ("skills", Just SkillInstruction) -> buildInstructionSkillDecl relpath qname md mObj
+    _ ->
+      case kindTag of
+        CTypeAlias -> buildTypeAliasDecl relpath qname md
+        CPrompt -> buildPromptDecl relpath qname md
+        CWorkflow -> buildWorkflowDecl relpath qname md mObj
+        CTool -> buildToolDecl relpath qname md mObj skillKind
+        CUnknown ->
+          Left [diag relpath ("cannot classify declaration '" <> renderQName qname <> "': unknown kind or location")]
 
 -- Classification ------------------------------------------------------------
 
@@ -164,10 +172,61 @@ buildWorkflowDecl relpath qname md mObj = do
   Right (DeclWorkflow (Workflow qname sig stmts sections))
 
 buildToolDecl ::
-  FilePath -> QName -> MarkdownFile -> Maybe (Text, Object) -> Either [Diagnostic] Declaration
-buildToolDecl relpath qname md mObj = do
+  FilePath ->
+  QName ->
+  MarkdownFile ->
+  Maybe (Text, Object) ->
+  Maybe SkillKind ->
+  Either [Diagnostic] Declaration
+buildToolDecl relpath qname md mObj mSkillKind = do
   (sig, stmts, sections) <- buildSignatureBody relpath qname md mObj
-  Right (DeclTool (Tool qname sig stmts sections))
+  skillMeta <- parseSkillMeta relpath mObj
+  let bodyPreview =
+        if mSkillKind == Just SkillInstruction
+          then Nothing
+          else Just (instructionBodyFromMarkdown md)
+  Right (DeclTool (Tool qname sig stmts sections skillMeta bodyPreview))
+
+buildInstructionSkillDecl ::
+  FilePath ->
+  QName ->
+  MarkdownFile ->
+  Maybe (Text, Object) ->
+  Either [Diagnostic] Declaration
+buildInstructionSkillDecl relpath qname md mObj = do
+  ensureNoSteps relpath "instruction skill" md
+  (yamlText, o) <- case mObj of
+    Just pair -> Right pair
+    Nothing -> Left [diag relpath "instruction skill file must have YAML frontmatter"]
+  validateName relpath qname o
+  meta <- parseSkillBlock relpath yamlText o
+  let body = instructionBodyFromMarkdown md
+      summary = fromMaybe (summaryFallback body) (smSummary meta)
+      sections = buildSections (mdSourceLines md) (mdHeadings md)
+  pure
+    ( DeclInstruction
+        ( InstructionSkill
+            { isName = qname,
+              isSummary = summary,
+              isTags = smTags meta,
+              isBody = body,
+              isSections = sections
+            }
+        )
+    )
+
+skillKindFromObj :: FilePath -> Maybe (Text, Object) -> Maybe SkillKind
+skillKindFromObj relpath = \case
+  Just (yamlText, o) ->
+    case parseSkillBlock relpath yamlText o of
+      Right meta -> Just (smKind meta)
+      Left _ -> Nothing
+  Nothing -> Nothing
+
+parseSkillMeta :: FilePath -> Maybe (Text, Object) -> Either [Diagnostic] (Maybe SkillMeta)
+parseSkillMeta relpath = \case
+  Just (yamlText, o) -> Just <$> parseSkillBlock relpath yamlText o
+  Nothing -> Right Nothing
 
 -- | Shared workflow/tool assembly: validate the declared name, build the
 -- typed signature, parse all step blocks, and collect addressable sections.

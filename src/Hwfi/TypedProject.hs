@@ -18,7 +18,9 @@ import Data.Text (Text)
 import Hwfi.Ast.Name (Ident, QName)
 import Hwfi.Ast.Project (Declaration)
 import Hwfi.Ast.Step (StepStmt)
+import Hwfi.Check.Error (CheckWarning)
 import Hwfi.Project.Manifest (ProjectManifest)
+import Hwfi.SkillCatalog (SkillCatalog)
 import Hwfi.Type (Type)
 
 -- | A declaration fingerprint: the hex-encoded SHA-256 Merkle hash over the
@@ -71,7 +73,11 @@ data TypedProject = TypedProject
   { tpManifest :: ProjectManifest,
     tpDecls :: Map QName TypedDecl,
     -- | Resolved type aliases (§2.1), retained for the runtime.
-    tpAliases :: Map QName Type
+    tpAliases :: Map QName Type,
+    -- | Skill catalog built at check time (§6.7).
+    tpSkillCatalog :: SkillCatalog,
+    -- | Non-fatal warnings (e.g. dynamic agent tool lists, §6.1.6).
+    tpWarnings :: [CheckWarning]
   }
   deriving stock (Show)
 

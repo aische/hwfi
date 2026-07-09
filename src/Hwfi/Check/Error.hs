@@ -11,6 +11,10 @@ module Hwfi.Check.Error
     typeError,
     renderTypeError,
     renderTypeErrors,
+    CheckWarning (..),
+    checkWarning,
+    renderCheckWarning,
+    renderCheckWarnings,
   )
 where
 
@@ -86,6 +90,23 @@ typeError path pos kind msg = TypeError path pos 1 kind msg
 -- | Render a 'TypeError' as a 'Diagnostic' (spec §9.1).
 renderTypeError :: TypeError -> Diagnostic
 renderTypeError TypeError {..} = Diagnostic errPath errPos errWidth errMessage
+
+-- | A non-fatal check warning (spec §6.1.6 phase 2).
+data CheckWarning = CheckWarning
+  { warnPath :: FilePath,
+    warnPos :: !Pos,
+    warnMessage :: Text
+  }
+  deriving stock (Eq, Show)
+
+checkWarning :: FilePath -> Pos -> Text -> CheckWarning
+checkWarning path pos msg = CheckWarning path pos msg
+
+renderCheckWarning :: CheckWarning -> Diagnostic
+renderCheckWarning CheckWarning {..} = Diagnostic warnPath warnPos 1 warnMessage
+
+renderCheckWarnings :: [CheckWarning] -> [Diagnostic]
+renderCheckWarnings = map renderCheckWarning
 
 -- | Render a list of type errors as diagnostics, preserving order.
 renderTypeErrors :: [TypeError] -> [Diagnostic]

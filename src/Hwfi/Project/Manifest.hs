@@ -3,6 +3,8 @@ module Hwfi.Project.Manifest
   ( ProjectManifest (..),
     ExecPolicy (..),
     BudgetPolicy (..),
+    SkillPolicy (..),
+    defaultSkillPolicy,
     budgetMaxCostUsd,
     defaultExecTimeoutMs,
     defaultExecMaxOutputBytes,
@@ -64,6 +66,35 @@ instance FromJSON BudgetPolicy where
   parseJSON = withObject "BudgetPolicy" $ \o ->
     BudgetPolicy <$> o .: "max_cost_usd"
 
+-- | Optional @project.json@ @skills@ stanza limits (§6.7.3).
+data SkillPolicy = SkillPolicy
+  { spDirectory :: Text,
+    spAllowOverwrite :: Bool,
+    spMaxCallableLoads :: Int,
+    spMaxInstructionLoads :: Int,
+    spMaxInstructionChars :: Int
+  }
+  deriving stock (Eq, Show)
+
+defaultSkillPolicy :: SkillPolicy
+defaultSkillPolicy =
+  SkillPolicy
+    { spDirectory = "skills",
+      spAllowOverwrite = False,
+      spMaxCallableLoads = 8,
+      spMaxInstructionLoads = 5,
+      spMaxInstructionChars = 12000
+    }
+
+instance FromJSON SkillPolicy where
+  parseJSON = withObject "SkillPolicy" $ \o ->
+    SkillPolicy
+      <$> o .:? "directory" .!= spDirectory defaultSkillPolicy
+      <*> o .:? "allow_overwrite" .!= spAllowOverwrite defaultSkillPolicy
+      <*> o .:? "max_callable_loads" .!= spMaxCallableLoads defaultSkillPolicy
+      <*> o .:? "max_instruction_loads" .!= spMaxInstructionLoads defaultSkillPolicy
+      <*> o .:? "max_instruction_chars" .!= spMaxInstructionChars defaultSkillPolicy
+
 -- | The parsed @project.json@ (v1 shape).
 data ProjectManifest = ProjectManifest
   { -- | Project name.
@@ -78,7 +109,9 @@ data ProjectManifest = ProjectManifest
     -- | The opt-in @exec@ policy (spec §7.5). 'Nothing' disables @builtin/exec@.
     execPolicy :: Maybe ExecPolicy,
     -- | Optional LLM spend ceiling (spec §8.4.6).
-    budgetPolicy :: Maybe BudgetPolicy
+    budgetPolicy :: Maybe BudgetPolicy,
+    -- | Optional skill-loading policy (§6.7.3).
+    pmSkills :: Maybe SkillPolicy
   }
   deriving stock (Eq, Show)
 
@@ -91,6 +124,7 @@ instance FromJSON ProjectManifest where
       <*> o .:? "env" .!= []
       <*> o .:? "exec"
       <*> o .:? "budget"
+      <*> o .:? "skills"
 
 -- | Resolve the optional budget ceiling from a manifest.
 budgetMaxCostUsd :: ProjectManifest -> Maybe Double

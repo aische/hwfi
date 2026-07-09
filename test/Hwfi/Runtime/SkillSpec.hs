@@ -13,8 +13,11 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
 import Hwfi.Check (checkProject)
+import Hwfi.Check.Builtins (discoverSkillsQName)
 import Hwfi.Parse.Project (loadProject)
+import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
+import Hwfi.SkillCatalog (SkillCatalog, emptySkillCatalog)
 import Hwfi.Runtime.Error (StepRef (..))
 import Hwfi.Runtime.Executor (RunResult (..), performRun)
 import Hwfi.Runtime.RunStore
@@ -35,11 +38,12 @@ import Hwfi.Runtime.Trace
     newPersistentTracer,
     newTracer,
     sliceTrace,
+    snapshotEvents,
   )
 import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace)
-import Hwfi.TypedProject (TypedProject)
+import Hwfi.TypedProject (TypedProject (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO (Handle, hClose)
@@ -89,7 +93,8 @@ spec = describe "skills and trace-slice (§6.6)" $ do
                 beUsage = usageSeam,
                 beIntrospect = pure Null,
                 beEvalWorkflow = Nothing,
-                beRunId = "run-slice"
+                beRunId = "run-slice",
+                beSkillCatalog = emptySkillCatalog defaultSkillPolicy
               }
           args =
             Map.fromList
@@ -128,6 +133,75 @@ spec = describe "skills and trace-slice (§6.6)" $ do
         Right (RunResult (Right (VRecord outs)) _) ->
           Map.lookup "greeting" outs `shouldBe` Just (VString "Hi Ada")
         _ -> expectationFailure "expected successful run"
+
+  describe "skill catalog builtins (§6.7)" $ do
+    it "A45: discover-skills returns ok with an empty catalog" $
+      withSystemTempDirectory "hwfi-a45-empty" $ \dir -> do
+        ws <- newWorkspace dir
+        tracer <- newTracer
+        store <- createRunStore dir "run-skills"
+        usageSeam <- newUsageSeam store Nothing emptyRunUsage
+        let emptyBenv =
+              (discoverBuiltinEnv ws tracer (emptySkillCatalog defaultSkillPolicy))
+                {beUsage = usageSeam}
+        empty <-
+          runBuiltin
+            emptyBenv
+            discoverSkillsQName
+            (Map.fromList [("query", VString ""), ("kinds", VList []), ("limit", VInt 0)])
+        case empty of
+          Right (VRecord m) -> do
+            Map.lookup "ok" m `shouldBe` Just (VBool True)
+            Map.lookup "skills" m `shouldBe` Just (VList [])
+          _ -> expectationFailure "discover failed on empty catalog"
+
+    it "A45: discover-skills filters by query, kinds, and limit" $
+      withSkillCatalogProject $ \tp ws dir -> do
+        tracer <- newTracer
+        store <- createRunStore dir "run-skills"
+        usageSeam <- newUsageSeam store Nothing emptyRunUsage
+        let benv =
+              (discoverBuiltinEnv ws tracer (tpSkillCatalog tp)) {beUsage = usageSeam}
+            run args = runBuiltin benv discoverSkillsQName args
+        filtered <-
+          run
+            ( Map.fromList
+                [ ("query", VString "repair"),
+                  ("kinds", VList [VString "callable"]),
+                  ("limit", VInt 1)
+                ]
+            )
+        case filtered of
+          Right (VRecord m) -> do
+            Map.lookup "ok" m `shouldBe` Just (VBool True)
+            case Map.lookup "skills" m of
+              Just (VList [one]) -> skillId one `shouldBe` Just "skills/fix-shell"
+              _ -> expectationFailure "expected one callable match"
+          _ -> expectationFailure "discover failed"
+
+    it "A46: discover-skills never includes instruction bodies" $
+      withSkillCatalogProject $ \tp ws dir -> do
+        tracer <- newTracer
+        store <- createRunStore dir "run-skills"
+        usageSeam <- newUsageSeam store Nothing emptyRunUsage
+        let benv =
+              (discoverBuiltinEnv ws tracer (tpSkillCatalog tp)) {beUsage = usageSeam}
+        result <-
+          runBuiltin
+            benv
+            discoverSkillsQName
+            (Map.fromList [("query", VString ""), ("kinds", VList []), ("limit", VInt 20)])
+        case result of
+          Right (VRecord m) -> do
+            case Map.lookup "skills" m of
+              Just (VList skills) -> do
+                let bodies = mapMaybe skillContent skills
+                bodies `shouldBe` []
+                any (== Just "instruction") (map skillKind skills) `shouldBe` True
+                any (== Just "skills/shell-guide") (map skillId skills) `shouldBe` True
+                mapMaybe skillSummary skills `shouldNotSatisfy` any (instructionBodyText `T.isInfixOf`)
+              _ -> expectationFailure "expected skills list"
+          _ -> expectationFailure "discover failed"
 
 -- Fixtures -------------------------------------------------------------------
 
@@ -190,6 +264,56 @@ jsonQname _ = Nothing
 mainQ :: QName
 mainQ = qnameFromText "workflows/main"
 
+instructionBodyText :: Text
+instructionBodyText = "Always check PATH before running shell commands."
+
+discoverBuiltinEnv :: Workspace -> Tracer -> SkillCatalog -> BuiltinEnv
+discoverBuiltinEnv ws tracer cat =
+  BuiltinEnv
+    { beWorkspace = ws,
+      beModels = Map.empty,
+      beTracer = tracer,
+      beStep = StepRef mainQ "discover",
+      beExecPolicy = Nothing,
+      beUsage = error "discoverBuiltinEnv: usage unused",
+      beIntrospect = pure Null,
+      beEvalWorkflow = Nothing,
+      beRunId = "run-skills",
+      beSkillCatalog = cat
+    }
+
+skillId :: RValue -> Maybe Text
+skillId (VRecord m) = case Map.lookup "id" m of
+  Just (VString t) -> Just t
+  _ -> Nothing
+skillId _ = Nothing
+
+skillKind :: RValue -> Maybe Text
+skillKind (VRecord m) = case Map.lookup "kind" m of
+  Just (VString t) -> Just t
+  _ -> Nothing
+skillKind _ = Nothing
+
+skillSummary :: RValue -> Maybe Text
+skillSummary (VRecord m) = case Map.lookup "summary" m of
+  Just (VString t) -> Just t
+  _ -> Nothing
+skillSummary _ = Nothing
+
+skillContent :: RValue -> Maybe Text
+skillContent (VRecord m) = case Map.lookup "content" m of
+  Just (VString t) -> Just t
+  _ -> Nothing
+skillContent _ = Nothing
+
+withSkillCatalogProject :: (TypedProject -> Workspace -> FilePath -> IO a) -> IO a
+withSkillCatalogProject k =
+  withSystemTempDirectory "hwfi-skill-catalog" $ \dir -> do
+    writeSkillCatalogProject dir
+    tp <- loadChecked dir
+    ws <- newWorkspace dir
+    k tp ws dir
+
 seedAgentTrace :: FilePath -> Text -> IO ()
 seedAgentTrace root runId = do
   store <- createRunStore root runId
@@ -240,6 +364,17 @@ writeSkillsProject dir = do
   TIO.writeFile (dir </> "skills" </> "greet.md") skillsGreetMd
   TIO.writeFile (dir </> "workflows" </> "main.md") skillsMainMd
 
+writeSkillCatalogProject :: FilePath -> IO ()
+writeSkillCatalogProject dir = do
+  createDirectoryIfMissing True (dir </> "workflows")
+  createDirectoryIfMissing True (dir </> "skills")
+  TIO.writeFile (dir </> "project.json") skillsProjectJson
+  TIO.writeFile (dir </> "model-catalog.json") "[]\n"
+  TIO.writeFile (dir </> "skills" </> "greet.md") skillsGreetMd
+  TIO.writeFile (dir </> "skills" </> "fix-shell.md") skillsFixShellMd
+  TIO.writeFile (dir </> "skills" </> "shell-guide.md") skillsShellGuideMd
+  TIO.writeFile (dir </> "workflows" </> "main.md") skillsMainMd
+
 skillsProjectJson :: Text
 skillsProjectJson =
   "{\n  \"name\": \"skills-ok\",\n  \"version\": \"0.1.0\",\n  \"entrypoint\": \"workflows/main\",\n  \"env\": []\n}\n"
@@ -258,6 +393,40 @@ skillsGreetMd =
       "```step",
       "return { greeting = \"Hi ${inputs.name}\" }",
       "```"
+    ]
+
+skillsFixShellMd :: Text
+skillsFixShellMd =
+  T.unlines
+    [ "---",
+      "name: skills/fix-shell",
+      "skill:",
+      "  kind: callable",
+      "  summary: Repair shell scripts",
+      "  tags: [shell, repair]",
+      "inputs:",
+      "  path: String",
+      "outputs:",
+      "  ok: Bool",
+      "---",
+      "",
+      "```step",
+      "return { ok = true }",
+      "```"
+    ]
+
+skillsShellGuideMd :: Text
+skillsShellGuideMd =
+  T.unlines
+    [ "---",
+      "name: skills/shell-guide",
+      "skill:",
+      "  kind: instruction",
+      "  summary: Shell repair playbook",
+      "  tags: [shell, guide]",
+      "---",
+      "",
+      instructionBodyText
     ]
 
 skillsMainMd :: Text

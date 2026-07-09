@@ -25,6 +25,8 @@ module Hwfi.Runtime.Agent
     AgentSpec (..),
     AgentEnv (..),
     AgentCheckpoint (..),
+    AgentSkillState (..),
+    emptyAgentSkillState,
     toolModelJson,
     runAgent,
     agentCheckpointKey,
@@ -41,16 +43,16 @@ import Data.Aeson (Value (..), fromJSON, object, toJSON, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Functor ((<&>))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Hwfi.Ast.Name (Ident, QName, renderQName)
+import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Compat
   ( ChatResponse (..),
     ContentBlock (..),
@@ -65,6 +67,7 @@ import Hwfi.Compat
     llmHooks,
     noHooks,
   )
+import Hwfi.Check.Builtins (loadSkillQName)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), llmError)
 import Hwfi.Runtime.Gateways (primaryModel)
 import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, deleteCachedResult, lookupCachedResult)
@@ -72,6 +75,15 @@ import Hwfi.Runtime.Schema (recordSchema)
 import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (EventBody (..), Tracer, emit)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
+import Hwfi.Ast.Skill (SkillKind (..))
+import Hwfi.Project.Manifest (SkillPolicy (..))
+import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
+import Hwfi.SkillCatalog
+  ( SkillCatalog,
+    SkillEntry (..),
+    lookupSkillEntry,
+    skillKindText,
+  )
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
 import Hwfi.Type (Type (..))
 import LLM (defaultDebugHooks)
@@ -97,6 +109,24 @@ data SubmitSpec = SubmitSpec
     ssToolDef :: ToolDef
   }
 
+-- | Mutable skill-loading state for one agent step (§6.7).
+data AgentSkillState = AgentSkillState
+  { assLoadedCallable :: [QName],
+    assLoadedInstruction :: [QName],
+    assInstructionChars :: Int,
+    assPendingInjections :: [Text]
+  }
+  deriving stock (Eq, Show)
+
+emptyAgentSkillState :: AgentSkillState
+emptyAgentSkillState =
+  AgentSkillState
+    { assLoadedCallable = [],
+      assLoadedInstruction = [],
+      assInstructionChars = 0,
+      assPendingInjections = []
+    }
+
 -- | Everything the loop needs about the requested agent step.
 data AgentSpec = AgentSpec
   { asSystem :: Text,
@@ -116,20 +146,16 @@ data AgentSpec = AgentSpec
 data AgentEnv = AgentEnv
   { aeTracer :: Tracer,
     aeStore :: RunStore,
-    -- | Consult the intra-step cache only on resume (?8.2). Always written.
     aeResume :: Bool,
-    -- | Run-scoped usage accounting and optional budget (?8.4).
     aeUsage :: UsageSeam,
-    -- | Enclosing workflow qname (for the agent step's own events, ?8.3.1).
     aeQName :: QName,
-    -- | The agent step id.
     aeStepId :: Ident,
-    -- | The enclosing agent step-key that namespaces every sub-key (?8.2.1).
     aeStepKey :: Text,
-    -- | Run a resolved ref (builtin or workflow) as a nested step, tagged with
-    -- the given @(qname, step_id)@. Emits no step-start\/end wrapper itself; the
-    -- loop brackets it (?8.3.3.7).
-    aeDispatch :: QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue)
+    aeDispatch :: QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue),
+    aeSkillPolicy :: SkillPolicy,
+    aeSkillCatalog :: SkillCatalog,
+    aeSkillState :: IORef AgentSkillState,
+    aeBuildTool :: QName -> Maybe AdvertisedTool
   }
 
 -- | The model's assistant response, distilled to what the loop and its cache
@@ -145,7 +171,9 @@ data AgentResponse = AgentResponse
 -- completed rounds whose intra-step sub-caches may be absent.
 data AgentCheckpoint = AgentCheckpoint
   { acMessages :: [Turn],
-    acNextRound :: Int
+    acNextRound :: Int,
+    acActiveToolIds :: [Text],
+    acLoadedInstructionIds :: [Text]
   }
   deriving stock (Eq, Show)
 
@@ -154,8 +182,9 @@ data AgentCheckpoint = AgentCheckpoint
 -- @builtin/llm-agent-object@. A 'Left' is a fatal error (?6.1.4).
 runAgent :: AgentEnv -> AgentSpec -> IO (Either RuntimeError RValue)
 runAgent env spec = do
-  (messages, roundIx) <- resolveStart env spec
-  result <- driveRounds env spec messages roundIx
+  restoreSkillState env (aeSkillState env)
+  (messages, roundIx) <- resolveStart env spec (aeSkillState env)
+  result <- driveRounds env spec (aeSkillState env) messages roundIx
   case result of
     Right _ -> clearAgentCheckpoint env
     Left _ -> pure ()
@@ -163,8 +192,8 @@ runAgent env spec = do
 
 -- | On resume, reload a persisted checkpoint when present; otherwise replay
 -- from round 0 (�8.2.1 backward compatibility).
-resolveStart :: AgentEnv -> AgentSpec -> IO ([Turn], Int)
-resolveStart env spec
+resolveStart :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> IO ([Turn], Int)
+resolveStart env spec skillState
   | not (aeResume env) = pure (initialMessages spec, 0)
   | otherwise = do
       mCkpt <- loadAgentCheckpoint (aeStore env) (aeStepKey env)
@@ -172,13 +201,29 @@ resolveStart env spec
         Just ckpt -> (acMessages ckpt, acNextRound ckpt)
         Nothing -> (initialMessages spec, 0)
 
+restoreSkillState :: AgentEnv -> IORef AgentSkillState -> IO ()
+restoreSkillState env skillState
+  | not (aeResume env) = pure ()
+  | otherwise = do
+      mCkpt <- loadAgentCheckpoint (aeStore env) (aeStepKey env)
+      case mCkpt of
+        Nothing -> pure ()
+        Just ckpt ->
+          writeIORef skillState $
+            AgentSkillState
+              { assLoadedCallable = map qnameFromText (acActiveToolIds ckpt),
+                assLoadedInstruction = map qnameFromText (acLoadedInstructionIds ckpt),
+                assInstructionChars = 0,
+                assPendingInjections = []
+              }
+
 initialMessages :: AgentSpec -> [Turn]
 initialMessages spec = [UserTurn (asPrompt spec)]
 
 -- Round loop -----------------------------------------------------------------
 
-driveRounds :: AgentEnv -> AgentSpec -> [Turn] -> Int -> IO (Either RuntimeError RValue)
-driveRounds env spec messages roundIx
+driveRounds :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> [Turn] -> Int -> IO (Either RuntimeError RValue)
+driveRounds env spec skillState messages roundIx
   | roundIx >= asMaxRounds spec =
       pure . Left . llmError $
         "agent reached max_rounds ("
@@ -199,7 +244,7 @@ driveRounds env spec messages roundIx
             when started $
               void $
                 emit (aeTracer env) (AgentRoundEnd (aeQName env) (aeStepId env) roundIx finished)
-      modelResult <- runModelCall env spec messages roundIx ensureStart
+      modelResult <- runModelCall env spec skillState messages roundIx ensureStart
       case modelResult of
         Left err -> pure (Left err)
         Right assistant
@@ -209,7 +254,7 @@ driveRounds env spec messages roundIx
               pure result
           | otherwise -> do
               let messages' = messages <> [AssistantTurn (arText assistant) (arReasoning assistant) (arToolCalls assistant)]
-              outcome <- runToolCalls env spec (arToolCalls assistant) roundIx ensureStart
+              outcome <- runToolCalls env spec skillState (arToolCalls assistant) roundIx ensureStart
               case outcome of
                 Terminated val -> endRound True >> pure (Right val)
                 FatalTool err -> endRound False >> pure (Left err)
@@ -217,8 +262,8 @@ driveRounds env spec messages roundIx
                   endRound False
                   let messages'' = messages' <> [ToolTurn results]
                       nextRound = roundIx + 1
-                  saveAgentCheckpoint env messages'' nextRound
-                  driveRounds env spec messages'' nextRound
+                  saveAgentCheckpoint env skillState messages'' nextRound
+                  driveRounds env spec skillState messages'' nextRound
 
 -- | Terminate a round in which the model produced no tool calls: for
 -- @builtin/llm-agent@ this is the final free-text answer; for
@@ -235,9 +280,11 @@ finishTextRound _ spec assistant roundIx = case asSubmit spec of
 
 -- Model call (cached per round, ?8.2.1) --------------------------------------
 
-runModelCall :: AgentEnv -> AgentSpec -> [Turn] -> Int -> IO () -> IO (Either RuntimeError AgentResponse)
-runModelCall env spec messages roundIx ensureStart = do
-  let key = modelSubKey env spec messages roundIx
+runModelCall :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> [Turn] -> Int -> IO () -> IO (Either RuntimeError AgentResponse)
+runModelCall env spec skillState messages roundIx ensureStart = do
+  messages' <- applyPendingInjections skillState messages
+  active <- activeTools env spec skillState
+  let key = modelSubKey env spec active messages' roundIx
   mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
   case mCached >>= decodeResponse of
     Just cached -> pure (Right cached) -- cache hit: no new events (?8.3.3.7)
@@ -247,23 +294,23 @@ runModelCall env spec messages roundIx ensureStart = do
       case budget of
         Left err -> pure (Left err)
         Right _ -> do
-          result <- generateTextWithFallbacks (genReq spec messages) (asModel spec)
+          result <- generateTextWithFallbacks (genReq spec active messages') (asModel spec)
           case result of
             Left gerr -> pure (Left (llmError ("agent model call failed: " <> tshow gerr)))
             Right resp -> do
               let assistant = responseOf resp
                   usage = fromMaybe (Usage 0 0 0) resp.respUsage
               cost <- recordBilledCall (aeUsage env) (primaryModel (asModel spec)) usage
-              emitLlmCall env spec messages resp cost
+              emitLlmCall env spec messages' resp cost
               cacheStepResult (aeStore env) key (encodeResponse assistant)
               pure (Right assistant)
 
-genReq :: AgentSpec -> [Turn] -> GenRequest
-genReq spec messages =
+genReq :: AgentSpec -> [AdvertisedTool] -> [Turn] -> GenRequest
+genReq spec tools messages =
   GenRequest
     { grSystemPrompt = if T.null (asSystem spec) then Nothing else Just (asSystem spec),
       grMessages = messages,
-      grTools = map atToolDef (asTools spec) <> maybe [] (pure . ssToolDef) (asSubmit spec),
+      grTools = map atToolDef tools <> maybe [] (pure . ssToolDef) (asSubmit spec),
       grAbortSignal = Nothing,
       grLLMHooks = llmHooks defaultDebugHooks,
       grHooks = noHooks
@@ -288,8 +335,8 @@ data ToolOutcome
   | -- | A fatal (non-recoverable) failure aborts the run (?6.1.4).
     FatalTool RuntimeError
 
-runToolCalls :: AgentEnv -> AgentSpec -> [ToolCall] -> Int -> IO () -> IO ToolOutcome
-runToolCalls env spec toolCalls roundIx ensureStart
+runToolCalls :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> [ToolCall] -> Int -> IO () -> IO ToolOutcome
+runToolCalls env spec skillState toolCalls roundIx ensureStart
   -- ?6.1.3: a round mixing 'submit' with other calls is rejected wholesale ��� no
   -- call runs, and the model is told to call submit alone.
   | mixesSubmit = rejectMixedSubmit env roundIx ensureStart toolCalls
@@ -301,7 +348,7 @@ runToolCalls env spec toolCalls roundIx ensureStart
 
     go _ acc [] = pure (Continue (reverse acc))
     go ix acc (tc : rest) = do
-      r <- runOneCall env spec roundIx ix ensureStart tc
+      r <- runOneCall env spec skillState roundIx ix ensureStart tc
       case r of
         CallTerminated val -> pure (Terminated val)
         CallFatal err -> pure (FatalTool err)
@@ -312,22 +359,27 @@ data CallOutcome
   | CallResult ToolResult
   | CallFatal RuntimeError
 
-runOneCall :: AgentEnv -> AgentSpec -> Int -> Int -> IO () -> ToolCall -> IO CallOutcome
-runOneCall env spec roundIx callIx ensureStart tc
+runOneCall :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> Int -> Int -> IO () -> ToolCall -> IO CallOutcome
+runOneCall env spec skillState roundIx callIx ensureStart tc
   | isSubmit tc = runSubmitCall env spec roundIx callIx ensureStart tc
-  | otherwise = case lookupTool spec tc.tcName of
-      Nothing -> do
-        ensureStart
-        emitToolCall env roundIx callIx tc.tcName tc.tcArguments
-        let msg = "unknown tool '" <> tc.tcName <> "'; it is not one of the advertised tools"
-        recoverable env roundIx callIx tc.tcName tc msg
-      Just tool -> runAdvertisedCall env roundIx callIx ensureStart tc tool
+  | otherwise = do
+      tools <- activeTools env spec skillState
+      case lookupTool tools tc.tcName of
+        Nothing -> do
+          ensureStart
+          emitToolCall env roundIx callIx tc.tcName tc.tcArguments
+          let msg = "unknown tool '" <> tc.tcName <> "'; it is not one of the advertised tools"
+          recoverable env roundIx callIx tc.tcName tc msg
+        Just tool -> runAdvertisedCall env spec skillState roundIx callIx ensureStart tc tool
 
 -- | Run an advertised (non-@submit@) tool call as a nested executor step,
 -- honouring the tool-call sub-cache (?8.2.1, ?6.1.2).
-runAdvertisedCall :: AgentEnv -> Int -> Int -> IO () -> ToolCall -> AdvertisedTool -> IO CallOutcome
-runAdvertisedCall env roundIx callIx ensureStart tc tool =
-  case coerceArgs (atInputs tool) tc.tcArguments of
+runAdvertisedCall :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> Int -> Int -> IO () -> ToolCall -> AdvertisedTool -> IO CallOutcome
+runAdvertisedCall env spec skillState roundIx callIx ensureStart tc tool
+  | atQName tool == loadSkillQName =
+      runLoadSkillCall env skillState roundIx callIx ensureStart tc
+  | otherwise =
+      case coerceArgs (atInputs tool) tc.tcArguments of
     Left reason -> do
       -- ?6.1.4: malformed/ill-typed arguments are recoverable.
       ensureStart
@@ -365,6 +417,115 @@ runAdvertisedCall env roundIx callIx ensureStart tc tool =
               void $
                 emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
               pure (CallResult (toolResult tc (canonicalJson redacted)))
+
+runLoadSkillCall :: AgentEnv -> IORef AgentSkillState -> Int -> Int -> IO () -> ToolCall -> IO CallOutcome
+runLoadSkillCall env skillState roundIx callIx ensureStart tc = do
+  ensureStart
+  emitToolCall env roundIx callIx (renderQName loadSkillQName) tc.tcArguments
+  case coerceArgs [("id", TyString)] tc.tcArguments of
+    Left reason ->
+      recoverable env roundIx callIx (renderQName loadSkillQName) tc ("invalid arguments: " <> reason)
+    Right resolved ->
+      case Map.lookup "id" resolved of
+        Just (VString skillId) -> do
+          st <- readIORef skillState
+          let (st', rv) = agentLoadSkill env st skillId
+          writeIORef skillState st'
+          case rv of
+            VRecord m
+              | Map.lookup "ok" m == Just (VBool True) ->
+                  let kind = fieldText m "kind"
+                      loaded = Map.lookup "loaded" m == Just (VBool True)
+                   in do
+                        void $
+                          emit
+                            (aeTracer env)
+                            (SkillLoad (aeQName env) (aeStepId env) skillId kind loaded)
+                        recoverableJson env roundIx callIx (renderQName loadSkillQName) tc rv
+            _ -> recoverableJson env roundIx callIx (renderQName loadSkillQName) tc rv
+        _ ->
+          recoverable env roundIx callIx (renderQName loadSkillQName) tc "missing argument 'id'"
+  where
+    fieldText m name = case Map.lookup name m of
+      Just (VString t) -> t
+      _ -> ""
+
+recoverableJson :: AgentEnv -> Int -> Int -> Text -> ToolCall -> RValue -> IO CallOutcome
+recoverableJson env roundIx callIx toolLabel tc rv = do
+  void $
+    emit
+      (aeTracer env)
+      (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx toolLabel (valueToJson rv) True)
+  pure (CallResult (toolResult tc (canonicalJson (valueToJson rv))))
+
+agentLoadSkill :: AgentEnv -> AgentSkillState -> Text -> (AgentSkillState, RValue)
+agentLoadSkill env st skillId =
+  case lookupSkillEntry (qnameFromText skillId) (aeSkillCatalog env) of
+    Nothing ->
+      (st, loadSkillResultRecord False "" False False "" ("unknown skill id '" <> skillId <> "'"))
+    Just e ->
+      case seKind e of
+        SkillInstruction -> loadInstruction env st e skillId
+        SkillCallable -> loadCallable env st e skillId
+
+loadInstruction :: AgentEnv -> AgentSkillState -> SkillEntry -> Text -> (AgentSkillState, RValue)
+loadInstruction env st e skillId =
+  let policy = aeSkillPolicy env
+   in if seId e `elem` assLoadedInstruction st
+        then
+          ( st,
+            loadSkillResultRecord True (skillKindText SkillInstruction) False False (fromMaybe "" (seBody e)) ""
+          )
+        else if length (assLoadedInstruction st) >= spMaxInstructionLoads policy
+          then (st, loadSkillResultRecord False (skillKindText SkillInstruction) False False "" "instruction load cap exceeded")
+          else
+            let body = fromMaybe "" (seBody e)
+                newChars = assInstructionChars st + T.length body
+             in if newChars > spMaxInstructionChars policy
+                  then (st, loadSkillResultRecord False (skillKindText SkillInstruction) False False "" "instruction body exceeds max_instruction_chars")
+                  else
+                    let q = seId e
+                        injection = instructionInjectionText skillId body
+                     in ( st
+                            { assLoadedInstruction = q : assLoadedInstruction st,
+                              assInstructionChars = newChars,
+                              assPendingInjections = assPendingInjections st <> [injection]
+                            },
+                          loadSkillResultRecord True (skillKindText SkillInstruction) True True body ""
+                        )
+
+loadCallable :: AgentEnv -> AgentSkillState -> SkillEntry -> Text -> (AgentSkillState, RValue)
+loadCallable env st e _skillId =
+  let q = seId e
+   in if q `elem` assLoadedCallable st
+        then (st, loadSkillResultRecord True (skillKindText SkillCallable) False False "" "")
+        else if not (seChecked e)
+          then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill failed hwfi check")
+          else if not (seAgentEligible e)
+            then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill is not agent-eligible")
+            else if length (assLoadedCallable st) >= spMaxCallableLoads (aeSkillPolicy env)
+              then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable load cap exceeded")
+              else if isNothing (aeBuildTool env q)
+                then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill could not be resolved")
+                else
+                  ( st {assLoadedCallable = q : assLoadedCallable st},
+                    loadSkillResultRecord True (skillKindText SkillCallable) True False "" ""
+                  )
+
+applyPendingInjections :: IORef AgentSkillState -> [Turn] -> IO [Turn]
+applyPendingInjections ref msgs = do
+  st <- readIORef ref
+  case assPendingInjections st of
+    [] -> pure msgs
+    pending -> do
+      writeIORef ref st {assPendingInjections = []}
+      pure (msgs <> [UserTurn t | t <- pending])
+
+activeTools :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> IO [AdvertisedTool]
+activeTools env spec skillState = do
+  st <- readIORef skillState
+  let dynamic = mapMaybe (aeBuildTool env) (assLoadedCallable st)
+  pure (asTools spec ++ dynamic)
 
 -- | Run the terminating @submit@ call (?6.1.3). Because a mixed submit round is
 -- rejected earlier, submit is guaranteed to be the sole call here.
@@ -446,9 +607,18 @@ renderConversation = T.intercalate "\n" . map render
 agentCheckpointKey :: Text -> Text
 agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
 
-saveAgentCheckpoint :: AgentEnv -> [Turn] -> Int -> IO ()
-saveAgentCheckpoint env messages nextRound =
-  cacheStepResult (aeStore env) (agentCheckpointKey (aeStepKey env)) (encodeCheckpoint messages nextRound)
+saveAgentCheckpoint :: AgentEnv -> IORef AgentSkillState -> [Turn] -> Int -> IO ()
+saveAgentCheckpoint env skillState messages nextRound = do
+  st <- readIORef skillState
+  cacheStepResult
+    (aeStore env)
+    (agentCheckpointKey (aeStepKey env))
+    ( encodeCheckpoint
+        messages
+        nextRound
+        (map renderQName (assLoadedCallable st))
+        (map renderQName (assLoadedInstruction st))
+    )
 
 loadAgentCheckpoint :: RunStore -> Text -> IO (Maybe AgentCheckpoint)
 loadAgentCheckpoint store stepKey =
@@ -458,11 +628,13 @@ clearAgentCheckpoint :: AgentEnv -> IO ()
 clearAgentCheckpoint env =
   deleteCachedResult (aeStore env) (agentCheckpointKey (aeStepKey env))
 
-encodeCheckpoint :: [Turn] -> Int -> Value
-encodeCheckpoint messages nextRound =
+encodeCheckpoint :: [Turn] -> Int -> [Text] -> [Text] -> Value
+encodeCheckpoint messages nextRound activeIds instructionIds =
   object
     [ "messages" .= toJSON messages,
-      "next_round" .= nextRound
+      "next_round" .= nextRound,
+      "active_tool_ids" .= activeIds,
+      "loaded_instruction_ids" .= instructionIds
     ]
 
 decodeCheckpoint :: Value -> Maybe AgentCheckpoint
@@ -476,19 +648,30 @@ decodeCheckpoint = \case
     roundIx <- case KM.lookup "next_round" o of
       Just (Aeson.Number n) -> Just (floor n)
       _ -> Nothing
-    Just (AgentCheckpoint msgs roundIx)
+    activeIds <- textList (KM.lookup "active_tool_ids" o)
+    instrIds <- textList (KM.lookup "loaded_instruction_ids" o)
+    Just (AgentCheckpoint msgs roundIx activeIds instrIds)
   _ -> Nothing
+  where
+    textList (Just (Array a)) = Just [t | String t <- V.toList a]
+    textList _ = Just []
 
-modelSubKey :: AgentEnv -> AgentSpec -> [Turn] -> Int -> Text
-modelSubKey env spec messages roundIx =
+modelSubKey :: AgentEnv -> AgentSpec -> [AdvertisedTool] -> [Turn] -> Int -> Text
+modelSubKey env spec tools messages roundIx =
   sha256Hex . T.intercalate "\n" $
     [ "agent:" <> aeStepKey env,
       "kind:model",
       "round:" <> tshow roundIx,
       "model-fp:" <> asModelFingerprint spec,
-      "tools-fp:" <> toolsFingerprint spec,
+      "tools-fp:" <> toolsFingerprintAt tools,
       "messages:" <> canonicalJson (toJSON messages)
     ]
+
+toolsFingerprintAt :: [AdvertisedTool] -> Text
+toolsFingerprintAt tools =
+  sha256Hex (T.intercalate ";" entries)
+  where
+    entries = sort [renderQName (atQName t) <> "=" <> atFingerprint t | t <- tools]
 
 toolSubKey :: AgentEnv -> Int -> Int -> Text -> Value -> Text
 toolSubKey env roundIx callIx calleeFp argsJson =
@@ -586,8 +769,8 @@ isSubmit :: ToolCall -> Bool
 isSubmit tc = tc.tcName == submitToolName
 
 -- | Map an advertised tool to the model by its provider name.
-lookupTool :: AgentSpec -> Text -> Maybe AdvertisedTool
-lookupTool spec name = lookup name [(td.toolName, t) | t <- asTools spec, let td = atToolDef t]
+lookupTool :: [AdvertisedTool] -> Text -> Maybe AdvertisedTool
+lookupTool tools name = lookup name [((atToolDef t).toolName, t) | t <- tools]
 
 -- | A provider-safe tool name for a qname (some providers reject @/@\/@-@ in
 -- function names). @tools/search@ becomes @tools_search@.

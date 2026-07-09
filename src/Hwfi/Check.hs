@@ -15,6 +15,7 @@
 module Hwfi.Check
   ( checkProject,
     renderCheckErrors,
+    renderCheckWarnings,
   )
 where
 
@@ -23,6 +24,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Expr (..), StringPart (..))
 import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
@@ -35,10 +37,11 @@ import Hwfi.Ast.Workflow (Signature (..), Workflow (..), emptySignature)
 import Hwfi.Check.Alias (resolveAliasDefs, resolveSigTypeExpr)
 import Hwfi.Check.Builtins (Callee (..), execQName, introspectQName, isBuiltin, lookupBuiltin)
 import Hwfi.Check.Decl (CheckCtx (..), checkDeclBody)
-import Hwfi.Check.Error (TypeError, TypeErrorKind (..), renderTypeErrors, typeError)
+import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError, renderTypeErrors, renderCheckWarnings)
 import Hwfi.Check.Graph (computeFingerprints, detectImportCycles, directCallees, lookupCalleeFingerprint, projectCallees)
 import Data.Set qualified as Set
 import Hwfi.Project.Manifest (ExecPolicy (..), ProjectManifest (..))
+import Hwfi.SkillCatalog (buildSkillCatalog, skillPolicyFromManifest)
 import Hwfi.Source (Diagnostic, Pos (..), spanStart)
 import Hwfi.TypedProject
 import Hwfi.Type (Type (..), isSecretEnvName)
@@ -77,8 +80,9 @@ checkProject proj
       [ (q, checkDeclBody ctx q d (sigLookup q))
       | (q, d) <- Map.toList decls
       ]
-    bodyErrs = concat [e | (_, (e, _)) <- bodyResults]
-    stepMap = Map.fromList [(q, steps) | (q, (_, steps)) <- bodyResults]
+    bodyErrs = concat [e | (_, (e, _, _)) <- bodyResults]
+    bodyWarnings = concat [w | (_, (_, w, _)) <- bodyResults]
+    stepMap = Map.fromList [(q, steps) | (q, (_, _, steps)) <- bodyResults]
 
     -- §6.3/§7.5/A24: fail-closed rejection of un-permitted builtin/exec calls.
     execErrs = concatMap (execErrors manifest) (Map.toList decls)
@@ -87,11 +91,20 @@ checkProject proj
 
     -- Phase 4 (success only): fingerprints and assembly.
     fps = computeFingerprints decls sigMap
+    declMap = Map.mapWithKey mkTypedDecl decls
+    skillCatalog =
+      buildSkillCatalog
+        proj
+        (Map.keysSet declMap)
+        (Map.map (rsigInputs . tdSignature) declMap)
+        (reachesIntrospect decls)
     typed =
       TypedProject
         { tpManifest = manifest,
-          tpDecls = Map.mapWithKey mkTypedDecl decls,
-          tpAliases = aliasMap
+          tpDecls = declMap,
+          tpAliases = aliasMap,
+          tpSkillCatalog = skillCatalog,
+          tpWarnings = bodyWarnings
         }
 
     sigLookup q = Map.findWithDefault (ResolvedSignature [] [] []) q sigMap
@@ -213,6 +226,7 @@ declStatements :: Declaration -> [Statement]
 declStatements = \case
   DeclWorkflow w -> wfStatements w
   DeclTool t -> toolStatements t
+  DeclInstruction _ -> []
   _ -> []
 
 -- Context assembly -----------------------------------------------------------

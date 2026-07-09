@@ -27,7 +27,7 @@ lit s = EString [SLit (T.pack s)]
 -- | A tool that returns a single field with a literal value.
 mkTool :: String -> String -> Declaration
 mkTool name value =
-  DeclTool (Tool (qn name) (Signature [] [] []) [SReturn [Arg "res" (lit value) sp] sp] [])
+  DeclTool (Tool (qn name) (Signature [] [] []) [SReturn [Arg "res" (lit value) sp] sp] [] Nothing Nothing)
 
 -- | A workflow that calls the given tool once.
 mkCaller :: String -> String -> Declaration

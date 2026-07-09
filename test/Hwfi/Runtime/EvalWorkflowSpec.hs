@@ -4,7 +4,7 @@
 module Hwfi.Runtime.EvalWorkflowSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -13,14 +13,18 @@ import Hwfi.Ast.Name (Ident, QName, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Compat (ModelConfig (..))
 import Hwfi.Parse.Project (loadProject)
+import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     AgentEnv (..),
+    AgentSkillState (..),
     AgentSpec (..),
+    emptyAgentSkillState,
     advertisedToolDef,
     runAgent,
     sanitizeToolName,
   )
+import Hwfi.SkillCatalog (emptySkillCatalog)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (RuntimeError (..), StepRef (..))
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
@@ -105,7 +109,7 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
         _ -> expectationFailure "expected successful run"
 
   it "A35: agent loop continues after eval-workflow returns ok=false" $
-    withAgentHarness $ \store tracer usageSeam ws tp -> do
+    withAgentHarness $ \store tracer usageSeam ws tp skillState -> do
       calls <- newIORef (0 :: Int)
       let seam =
             EvalWorkflowSeam
@@ -123,7 +127,8 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
                 beUsage = usageSeam,
                 beIntrospect = pure Null,
                 beEvalWorkflow = Just seam,
-                beRunId = "run-agent"
+                beRunId = "run-agent",
+                beSkillCatalog = emptySkillCatalog defaultSkillPolicy
               }
           dispatch q _sid args = do
             modifyIORef' calls (+ 1)
@@ -160,7 +165,7 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
                 asMaxRounds = 3,
                 asSubmit = Nothing
               }
-      res <- runAgent (agentEnv store tracer usageSeam False dispatch) agentSpec
+      res <- runAgent (agentEnv store tracer usageSeam False dispatch skillState) agentSpec
       res `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 2)])
       nCalls <- readIORef calls
       nCalls `shouldBe` 1
@@ -229,7 +234,7 @@ withRunProjectGood k =
     ws <- newWorkspace dir
     k tp ws dir
 
-withAgentHarness :: (RunStore -> Tracer -> UsageSeam -> Workspace -> TypedProject -> IO a) -> IO a
+withAgentHarness :: (RunStore -> Tracer -> UsageSeam -> Workspace -> TypedProject -> IORef AgentSkillState -> IO a) -> IO a
 withAgentHarness k =
   withSystemTempDirectory "hwfi-eval-agent" $ \dir -> do
     writeEvalProject dir evalMainMd
@@ -238,7 +243,8 @@ withAgentHarness k =
     store <- createRunStore dir "run-agent"
     tracer <- newTracer
     usageSeam <- newUsageSeam store Nothing emptyRunUsage
-    k store tracer usageSeam ws tp
+    skillState <- newIORef emptyAgentSkillState
+    k store tracer usageSeam ws tp skillState
 
 writeEvalProject :: FilePath -> Text -> IO ()
 writeEvalProject dir mainMd = do
@@ -306,8 +312,9 @@ agentEnv ::
   UsageSeam ->
   Bool ->
   (QName -> Ident -> Map.Map Ident RValue -> IO (Either RuntimeError RValue)) ->
+  IORef AgentSkillState ->
   AgentEnv
-agentEnv store tracer usageSeam resume dispatch =
+agentEnv store tracer usageSeam resume dispatch skillState =
   AgentEnv
     { aeTracer = tracer,
       aeStore = store,
@@ -316,7 +323,11 @@ agentEnv store tracer usageSeam resume dispatch =
       aeQName = mainQ,
       aeStepId = "agent",
       aeStepKey = "agent-key",
-      aeDispatch = dispatch
+      aeDispatch = dispatch,
+      aeSkillPolicy = defaultSkillPolicy,
+      aeSkillCatalog = emptySkillCatalog defaultSkillPolicy,
+      aeSkillState = skillState,
+      aeBuildTool = const Nothing
     }
 
 scriptedGateway :: [ChatResponse] -> LLMGateway

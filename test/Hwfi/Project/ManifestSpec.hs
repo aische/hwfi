@@ -27,7 +27,8 @@ spec = do
                 entrypoint = "workflows/main",
                 envWhitelist = ["HOME", "USER"],
                 execPolicy = Nothing,
-                budgetPolicy = Nothing
+                budgetPolicy = Nothing,
+                pmSkills = Nothing
               }
           )
 

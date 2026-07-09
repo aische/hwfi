@@ -21,6 +21,8 @@ module Hwfi.Check.Builtins
     logQName,
     jsonGetQName,
     concatQName,
+    discoverSkillsQName,
+    loadSkillQName,
     isAgentBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
@@ -89,6 +91,14 @@ jsonGetQName = qnameFromText "builtin/json-get"
 -- | The @builtin/concat@ qname (§13.1.2): string concatenation.
 concatQName :: QName
 concatQName = qnameFromText "builtin/concat"
+
+-- | Skill catalog discovery (§6.7.1).
+discoverSkillsQName :: QName
+discoverSkillsQName = qnameFromText "builtin/discover-skills"
+
+-- | Skill loading (§6.7.2).
+loadSkillQName :: QName
+loadSkillQName = qnameFromText "builtin/load-skill"
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
 -- bespoke argument checking (the @tools@ argument is a heterogeneous list of
@@ -234,7 +244,34 @@ builtinCallees =
       builtin
         "builtin/log"
         [("message", TyString), ("fields", TyJson)]
-        [("logged", TyBool)]
+        [("logged", TyBool)],
+      builtin
+        "builtin/discover-skills"
+        [("query", TyString), ("kinds", TyList TyString), ("limit", TyInt)]
+        [ ("ok", TyBool),
+          ( "skills",
+            TyList
+              ( TyRecord
+                  [ ("id", TyString),
+                    ("kind", TyString),
+                    ("summary", TyString),
+                    ("tags", TyList TyString),
+                    ("checked", TyBool),
+                    ("agent_eligible", TyBool)
+                  ]
+              )
+          ),
+          ("error", TyString)
+        ],
+      builtin
+        "builtin/load-skill"
+        [("id", TyString)]
+        [ ("ok", TyBool),
+          ("kind", TyString),
+          ("loaded", TyBool),
+          ("content", TyString),
+          ("error", TyString)
+        ]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

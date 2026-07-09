@@ -22,12 +22,13 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
 import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameFromText, qnameSegments, renderQName)
+import Hwfi.Ast.InstructionSkill (InstructionSkill (..))
 import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, llmAgentObjectQName, logQName, readRunTraceQName, traceSliceQName)
-import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
+import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, loadSkillQName, llmAgentObjectQName, logQName, readRunTraceQName, traceSliceQName)
+import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError, CheckWarning (..), checkWarning)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
 import Hwfi.Source (Pos (..), Span (..))
@@ -55,12 +56,28 @@ checkDeclBody ::
   QName ->
   Declaration ->
   ResolvedSignature ->
-  ([TypeError], [(StepStmt, Bool, Type)])
+  ([TypeError], [CheckWarning], [(StepStmt, Bool, Type)])
 checkDeclBody ctx qname decl sig =
   case decl of
     DeclWorkflow w -> checkBody ctx qname sig (wfStatements w) (wfSections w)
     DeclTool t -> checkBody ctx qname sig (toolStatements t) (toolSections t)
-    _ -> ([], [])
+    DeclInstruction is -> checkInstructionSkill qname is
+    _ -> ([], [], [])
+
+checkInstructionSkill :: QName -> InstructionSkill -> ([TypeError], [CheckWarning], [(StepStmt, Bool, Type)])
+checkInstructionSkill qname is =
+  if T.null (T.strip (isBody is))
+    then
+      ( [ typeError
+            (declPath qname)
+            (Pos 1 1)
+            TypeMismatch
+            "instruction skill body must not be empty (§6.6.1)"
+        ],
+        [],
+        []
+      )
+    else ([], [], [])
 
 -- Body checking --------------------------------------------------------------
 
@@ -69,6 +86,7 @@ data BodyState = BodyState
   { bsRoots :: Map Ident Type,
     bsBound :: [Ident],
     bsErrors :: [TypeError],
+    bsWarnings :: [CheckWarning],
     bsSteps :: [(StepStmt, Bool, Type)],
     -- | Result type of the most recent step, for the implicit-return rule.
     bsLastResult :: Maybe Type
@@ -80,9 +98,9 @@ checkBody ::
   ResolvedSignature ->
   [Statement] ->
   [Section] ->
-  ([TypeError], [(StepStmt, Bool, Type)])
+  ([TypeError], [CheckWarning], [(StepStmt, Bool, Type)])
 checkBody ctx qname sig statements sections =
-  (dupErrs <> bsErrors final <> returnErrs, reverse (bsSteps final))
+  (dupErrs <> bsErrors final <> returnErrs, bsWarnings final, reverse (bsSteps final))
   where
     path = declPath qname
     initialRoots =
@@ -90,7 +108,7 @@ checkBody ctx qname sig statements sections =
         [ ("inputs", TyRecord (rsigInputs sig)),
           ("ctx", TyContext)
         ]
-    initial = BodyState initialRoots [] [] [] Nothing
+    initial = BodyState initialRoots [] [] [] [] Nothing
 
     -- @return@ is a top-level construct (§5.6.5); the sequence that builds the
     -- binding environment and the implicit-return result excludes it. A
@@ -466,6 +484,7 @@ checkStep :: CheckCtx -> FilePath -> [Section] -> BodyState -> StepStmt -> BodyS
 checkStep ctx path sections st s =
   st
     { bsErrors = bsErrors st <> targetErrs <> argErrs <> bindErrs,
+      bsWarnings = bsWarnings st <> argWarnings,
       bsSteps = (s, cacheable, fromMaybe TyJson resultType) : bsSteps st,
       bsRoots = roots',
       bsBound = bound',
@@ -479,14 +498,15 @@ checkStep ctx path sections st s =
     -- Resolve the call target to a callee signature.
     (mCallee, targetErrs) = resolveTarget ctx env path pos target
 
-    (argErrs, resultType)
+    (argErrs, argWarnings, resultType)
       -- Agent builtins take a heterogeneous @tools@ list and need bespoke
       -- checking (§5.6.9); the generic 'checkArgs' path cannot express it.
       | isAgentBuiltin target = checkAgentCall ctx env path pos target (stepArgs s)
       | otherwise = case mCallee of
-          Nothing -> ([], Nothing)
+          Nothing -> ([], [], Nothing)
           Just callee ->
             ( checkArgs env callee (stepArgs s),
+              [],
               Just (TyRecord (calleeOutputs callee))
             )
 
@@ -559,9 +579,9 @@ resolveTarget ctx env path pos target
 -- that is **agent-eligible**: none of its declared inputs may be @Secret<_>@,
 -- @ToolRef@\/@WorkflowRef@, or @Bytes@ (§6.1.1), and it must not (transitively)
 -- reach @builtin/introspect@ (§6.1.5). Ineligible callees are rejected here.
-checkAgentCall :: CheckCtx -> Env -> FilePath -> Pos -> QName -> [Arg] -> ([TypeError], Maybe Type)
+checkAgentCall :: CheckCtx -> Env -> FilePath -> Pos -> QName -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
 checkAgentCall ctx env path pos target args =
-  (missingExtra <> scalarErrs <> toolsErrs, Just resultTy)
+  (missingExtra <> scalarErrs <> toolsErrs, toolsWarnings, Just resultTy)
   where
     isObject = target == llmAgentObjectQName
     resultTy = TyRecord (maybe [] calleeOutputs (ccCallee ctx target))
@@ -600,23 +620,59 @@ checkAgentCall ctx env path pos target args =
 
     toolsErrs = case lookup "tools" argMap of
       Nothing -> []
-      Just a -> case argValue a of
-        EList elems -> concatMap (checkToolElem ctx path (spanStart (argSpan a))) elems
-        _ ->
-          [ typeError
-              path
-              (spanStart (argSpan a))
-              ArgMismatch
-              "the 'tools' argument must be a list literal of tool/workflow references (§6.1.1)"
-          ]
+      Just a -> fst (checkToolsExpr ctx env path (spanStart (argSpan a)) (argValue a))
+
+    toolsWarnings = case lookup "tools" argMap of
+      Nothing -> []
+      Just a -> snd (checkToolsExpr ctx env path (spanStart (argSpan a)) (argValue a))
 
     argMap = [(argName a, a) | a <- args]
+
+-- | Validate the agent @tools@ argument (§6.1.1, §6.1.6 phase 2).
+checkToolsExpr :: CheckCtx -> Env -> FilePath -> Pos -> Expr -> ([TypeError], [CheckWarning])
+checkToolsExpr ctx env path pos expr =
+  case staticQNameList expr of
+    Just qnames ->
+      (concatMap (\q -> checkToolElem ctx path pos (EQName q)) qnames, [])
+    Nothing ->
+      case inferExpr env pos expr of
+        Left errs -> (errs, [])
+        Right (TyList _) ->
+          ( [],
+            [ checkWarning
+                path
+                pos
+                "agent tools list is not statically known; tool eligibility is enforced at runtime only (§6.1.6)"
+            ]
+          )
+        Right other ->
+          ( [ typeError
+                path
+                pos
+                TypeMismatch
+                ( "the 'tools' argument must have type List<...>, got "
+                    <> renderType other
+                    <> " (§6.1.6)"
+                )
+            ],
+            []
+          )
+
+-- | When @tools@ is a list literal of bare qnames, return them for static
+-- eligibility checking.
+staticQNameList :: Expr -> Maybe [QName]
+staticQNameList (EList es) = traverse extractQName es
+  where
+    extractQName (EQName q) = Just q
+    extractQName _ = Nothing
+staticQNameList _ = Nothing
 
 -- | Check one element of the @tools@ list: it must be a bare tool\/workflow
 -- name resolving to an agent-eligible callee.
 checkToolElem :: CheckCtx -> FilePath -> Pos -> Expr -> [TypeError]
 checkToolElem ctx path pos = \case
   EQName q
+    | q == discoverSkillsQName || q == loadSkillQName -> []
     | isAgentBuiltin q ->
         [err ("'" <> renderQName q <> "' is an agent builtin and cannot be advertised as a tool")]
     | q == introspectQName || ccReachesIntrospect ctx q ->
@@ -795,6 +851,7 @@ classifyCacheable target args =
         || target == listRunsQName
         || target == readRunTraceQName
         || target == traceSliceQName
+        || target == loadSkillQName
         || target == logQName
         || any (any refPathVolatile . refPaths . argValue) args
     )

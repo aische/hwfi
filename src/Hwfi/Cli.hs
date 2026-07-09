@@ -41,7 +41,8 @@ import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
-import Hwfi.Check (checkProject, renderCheckErrors)
+import Hwfi.Check (checkProject, renderCheckErrors, renderCheckWarnings)
+import Hwfi.Check.Error (CheckWarning)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (ProjectManifest (..), validateEnvPresence)
 import Hwfi.Runtime.Error (renderRuntimeError)
@@ -236,9 +237,17 @@ runCheck opts = do
       let catMsgs = either (\e -> [renderCatalogError e]) (const []) ecat
       case checkProject proj of
         Left errs -> reportAndFail dir (renderCheckErrors errs) catMsgs
-        Right _
-          | null catMsgs -> pure ()
+        Right tp
+          | null catMsgs && null (tpWarnings tp) -> pure ()
+          | null catMsgs ->
+              printCheckWarnings dir (tpWarnings tp)
           | otherwise -> reportAndFail dir [] catMsgs
+
+-- | Print check warnings to stderr (spec §6.1.6 phase 2).
+printCheckWarnings :: FilePath -> [CheckWarning] -> IO ()
+printCheckWarnings projectDir warns = do
+  rendered <- mapM (renderOne projectDir) (renderCheckWarnings warns)
+  TIO.hPutStr stderr (T.intercalate "\n\n" rendered <> "\n")
 
 -- | Render diagnostics against their source files and any plain messages to
 -- stderr, then exit with a failure code.

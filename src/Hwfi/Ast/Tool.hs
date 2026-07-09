@@ -11,15 +11,21 @@ module Hwfi.Ast.Tool
   )
 where
 
+import Data.Text (Text)
 import Hwfi.Ast.Name (QName)
 import Hwfi.Ast.Step (Statement)
 import Hwfi.Ast.Workflow (Section, Signature)
+import Hwfi.Ast.Skill (SkillMeta)
 
 -- | A parsed tool declaration.
 data Tool = Tool
   { toolName :: QName,
     toolSignature :: Signature,
     toolStatements :: [Statement],
-    toolSections :: [Section]
+    toolSections :: [Section],
+    -- | Optional @skill:@ metadata for files under @skills/@ (§6.6.1).
+    toolSkillMeta :: Maybe SkillMeta,
+    -- | Markdown body after frontmatter (for summary fallback).
+    toolBodyPreview :: Maybe Text
   }
   deriving stock (Eq, Show)

@@ -6,19 +6,25 @@ import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Hwfi.SkillCatalog (emptySkillCatalog)
+import Hwfi.TypedProject (TypedProject (..))
 import Data.Maybe (isJust)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Hwfi.Ast.Name (Ident, QName, qnameFromText)
-import Hwfi.Project.Manifest (ExecPolicy (..))
+import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
+import Hwfi.Check.Builtins (discoverSkillsQName, loadSkillQName)
+import Hwfi.Parse.Project (loadProject)
+import Hwfi.Project.Manifest (ExecPolicy (..), defaultSkillPolicy)
 import Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     AgentEnv (..),
+    AgentSkillState (..),
     AgentSpec (..),
     SubmitSpec (..),
+    emptyAgentSkillState,
     advertisedToolDef,
     agentCheckpointKey,
     modelSubKey,
@@ -43,14 +49,17 @@ import LLM.Core.Types
     ContentBlock (..),
     LLMError (..),
     LLMGateway (..),
+    ToolDef (..),
     ToolResult (..),
     Turn (..),
     mkToolCall,
   )
 import LLM.Core.Usage (PricingInfo (..), Usage (..))
 import LLM.Generate.ModelConfig (ModelConfig (..), ModelWithFallbacks (..))
+import Data.Text.IO qualified as TIO
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
+import Hwfi.Check (checkProject)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -58,68 +67,68 @@ spec :: Spec
 spec = describe "Agent loop (§6.1)" $ do
   describe "builtin/llm-agent — free-text termination" $ do
     it "drives a tool round then returns the model's final text (A17)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [searchCall "c1", textResp "The answer is 42."]
-        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (textSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (textSpec gw)
         res `shouldBe` Right (record [("text", VString "The answer is 42."), ("rounds", VInt 2)])
         readIORef calls `shouldReturn` 1
 
     it "feeds an unknown tool name back as a recoverable result (§6.1.4)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [toolResp "c1" "does_not_exist" (object []), textResp "done"]
-        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (textSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (textSpec gw)
         res `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 2)])
         -- The unknown tool never reaches dispatch.
         readIORef calls `shouldReturn` 0
 
     it "fails fatally when max_rounds is exhausted without terminating (§6.1.4)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [searchCall "c1", searchCall "c2", searchCall "c3"]
             spec' = (textSpec gw) {asMaxRounds = 1}
-        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) spec'
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) spec'
         reKind (fromLeft res) `shouldBe` KLlm
 
   describe "builtin/llm-agent-object — submit termination" $ do
     it "returns the validated submit payload as the typed value (A19)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let gw = scriptedGateway [searchCall "c1", submitCall "c2" (object ["answer" .= ("42" :: Text)])]
-        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (objectSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("42" :: Text)])), ("rounds", VInt 2)])
 
     it "rejects a round mixing submit with another call, then accepts submit alone (§6.1.3)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let gw =
               scriptedGateway
                 [ mixedResp,
                   submitCall "c9" (object ["answer" .= ("late" :: Text)])
                 ]
-        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (objectSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("late" :: Text)])), ("rounds", VInt 2)])
         evs <- snapshotEvents tracer
         any recoverableToolResult evs `shouldBe` True
 
     it "feeds a schema-invalid submit back as recoverable, then accepts a valid one (§6.1.3)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let gw =
               scriptedGateway
                 [ submitCall "c1" (object ["wrong" .= ("x" :: Text)]),
                   submitCall "c2" (object ["answer" .= ("ok" :: Text)])
                 ]
-        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (objectSpec gw)
+        res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("ok" :: Text)])), ("rounds", VInt 2)])
 
   describe "intra-step caching and resume (§8.2.1, A21)" $ do
     it "replays cached model and tool calls without re-invoking either on resume" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let liveGw = scriptedGateway [searchCall "c1", textResp "cached answer"]
-        primed <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult)) (textSpec liveGw)
+        primed <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (textSpec liveGw)
         primed `shouldBe` Right (record [("text", VString "cached answer"), ("rounds", VInt 2)])
         readIORef calls `shouldReturn` 1
         -- Resume against a gateway/dispatch that fail if touched: the cache must
@@ -128,7 +137,7 @@ spec = describe "Agent loop (§6.1)" $ do
         usageBefore <- readIORef (usRef usageSeam)
         resumed <-
           runAgent
-            (env store tracer2 usageSeam True explodingDispatch)
+            (env store tracer2 usageSeam True explodingDispatch skillState)
             (textSpec explodingGateway)
         resumed `shouldBe` primed
         usageAfter <- readIORef (usRef usageSeam)
@@ -145,12 +154,12 @@ spec = describe "Agent loop (§6.1)" $ do
       T.unpack (toolModelJson secretTool cached) `shouldNotContain` "sekrit"
 
     it "resumes from a persisted checkpoint without re-walking earlier rounds (8.g)" $
-      withEnv $ \store tracer usageSeam -> do
+      withEnv $ \store tracer usageSeam skillState -> do
         calls <- newIORef (0 :: Int)
         let primingSpec = (textSpec crashAfterTwoToolRounds) {asMaxRounds = 4}
             resumeSpec = (textSpec finishAfterTwoToolRounds) {asMaxRounds = 4}
             dispatch = countingDispatch calls searchResult
-            agentEnv resume = env store tracer usageSeam resume dispatch
+            agentEnv resume = env store tracer usageSeam resume dispatch skillState
         first <- runAgent (agentEnv False) primingSpec
         reKind (fromLeft first) `shouldBe` KLlm
         ckptVal <- lookupCachedResult store (agentCheckpointKey "step-key-fixed")
@@ -158,18 +167,86 @@ spec = describe "Agent loop (§6.1)" $ do
         let resumeEnv = agentEnv True
         -- Drop intra-step model caches for completed rounds; resume must still
         -- succeed by jumping to the checkpoint rather than replaying round 0.
-        deleteCachedResult store (modelSubKey resumeEnv primingSpec [UserTurn (asPrompt primingSpec)] 0)
+        deleteCachedResult store (modelSubKey resumeEnv primingSpec (asTools primingSpec) [UserTurn (asPrompt primingSpec)] 0)
         case ckptVal >>= decodeCheckpointForTest of
           Just msgsAtRound2 ->
-            deleteCachedResult store (modelSubKey resumeEnv primingSpec (init (init msgsAtRound2)) 1)
+            deleteCachedResult store (modelSubKey resumeEnv primingSpec (asTools primingSpec) (init (init msgsAtRound2)) 1)
           Nothing -> expectationFailure "checkpoint missing after partial agent run"
         resumed <- runAgent resumeEnv resumeSpec
         resumed `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 3)])
         lookupCachedResult store (agentCheckpointKey "step-key-fixed") `shouldReturn` Nothing
 
+  describe "skill loading in agent loop (§6.7)" $ do
+    it "A47: load-skill injects instruction content and is idempotent" $
+      withSkillAgent $ \tp store tracer usageSeam skillState -> do
+        reqs <- newIORef ([] :: [ChatRequest])
+        let gw =
+              capturingGateway reqs
+                [ loadSkillCall "c1" "skills/shell-guide",
+                  loadSkillCall "c2" "skills/shell-guide",
+                  textResp "done"
+                ]
+            spec' = skillToolboxSpec gw
+            agent = skillAgentEnv store tracer usageSeam False (\_ _ _ -> pure (Right (record []))) skillState tp
+        res <- runAgent agent spec'
+        res `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 3)])
+        requests <- readIORef reqs
+        length requests `shouldSatisfy` (>= 2)
+        let round1Msgs = (requests !! 1).reqConversation
+        any (hasUserText "Loaded skill: skills/shell-guide") round1Msgs `shouldBe` True
+        any (hasUserText instructionBodyText) round1Msgs `shouldBe` True
+
+    it "A48: load-skill adds a callable skill to the next model round" $
+      withSkillAgent $ \tp store tracer usageSeam skillState -> do
+        reqs <- newIORef ([] :: [ChatRequest])
+        let gw =
+              capturingGateway reqs
+                [ loadSkillCall "c1" "skills/fix-shell",
+                  textResp "done"
+                ]
+            spec' = skillToolboxSpec gw
+            agent = skillAgentEnv store tracer usageSeam False (\_ _ _ -> pure (Right (record []))) skillState tp
+        res <- runAgent agent spec'
+        res `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 2)])
+        requests <- readIORef reqs
+        length requests `shouldSatisfy` (>= 2)
+        let toolNames = map toolDefName (requests !! 0).reqTools
+        sanitizeToolName fixShellQ `elem` toolNames `shouldBe` True
+
+    it "A49: resume restores loaded skills without re-dispatching load-skill" $
+      withSkillAgent $ \tp store tracer usageSeam skillState -> do
+        let primingSpec = (skillToolboxSpec crashAfterSkillLoads) {asMaxRounds = 4}
+            agent resume = skillAgentEnv store tracer usageSeam resume (\_ _ _ -> pure (Right (record []))) skillState tp
+        first <- runAgent (agent False) primingSpec
+        reKind (fromLeft first) `shouldBe` KLlm
+        ckptVal <- lookupCachedResult store (agentCheckpointKey "step-key-fixed")
+        ckptVal `shouldSatisfy` isJust
+        case ckptVal >>= decodeCheckpointSkillIds of
+          Just (active, loaded) -> do
+            "skills/fix-shell" `elem` active `shouldBe` True
+            "skills/shell-guide" `elem` loaded `shouldBe` True
+          Nothing -> expectationFailure "checkpoint missing skill ids"
+        resumedReqs <- newIORef ([] :: [ChatRequest])
+        let resumeGw =
+              gatewayOf $ \req -> do
+                modifyIORef' resumedReqs (req :)
+                let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
+                pure $
+                  if toolRounds >= 2
+                    then Right (textResp "done")
+                    else Left (NetworkError "resume expected skill loads in checkpoint")
+            resumeSpec = skillToolboxSpec resumeGw
+        resumed <- runAgent (agent True) resumeSpec
+        resumed `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 3)])
+        requests <- readIORef resumedReqs
+        case requests of
+          (req : _) ->
+            sanitizeToolName fixShellQ `elem` map toolDefName req.reqTools `shouldBe` True
+          [] -> expectationFailure "expected resumed model request with expanded tools"
+
   describe "coding loop end-to-end (§6.2, §6.3, A26)" $
     it "reacts to a failing exec by editing a file and re-running until it passes" $
-      withCodingEnv $ \store tracer usageSeam ws -> do
+      withCodingEnv $ \store tracer usageSeam ws skillState -> do
         -- The source lacks the token the build checks for, so the first build
         -- fails; the agent must edit it and re-run.
         _ <- writeTextFile ws "src.txt" "foo\n"
@@ -183,10 +260,11 @@ spec = describe "Agent loop (§6.1)" $ do
                   beUsage = usageSeam,
                 beIntrospect = pure Null,
                 beEvalWorkflow = Nothing,
-                beRunId = "run-agent"
+                beRunId = "run-agent",
+                beSkillCatalog = emptySkillCatalog defaultSkillPolicy
               }
             dispatch q _sid = runBuiltin benv q
-        res <- runAgent (env store tracer usageSeam False dispatch) codingSpec
+        res <- runAgent (env store tracer usageSeam False dispatch skillState) codingSpec
         res `shouldBe` Right (record [("text", VString "build passed"), ("rounds", VInt 4)])
         -- The edit was actually applied to the sandboxed workspace.
         edited <- readTextFile ws "src.txt"
@@ -336,28 +414,254 @@ submitSchema =
       "additionalProperties" .= False
     ]
 
+-- Skill-loading fixtures (§6.7, A47–A49) ---------------------------------------
+
+fixShellQ :: QName
+fixShellQ = qnameFromText "skills/fix-shell"
+
+instructionBodyText :: Text
+instructionBodyText = "Always check PATH before running shell commands."
+
+discoverSkillTool :: AdvertisedTool
+discoverSkillTool =
+  AdvertisedTool
+    { atQName = discoverSkillsQName,
+      atToolDef =
+        advertisedToolDef
+          discoverSkillsQName
+          [("query", TyString), ("kinds", TyList TyString), ("limit", TyInt)],
+      atInputs = [("query", TyString), ("kinds", TyList TyString), ("limit", TyInt)],
+      atOutputs =
+        [ ("ok", TyBool),
+          ("skills", TyList TyJson),
+          ("error", TyString)
+        ],
+      atFingerprint = "discover-skills-fp"
+    }
+
+loadSkillTool :: AdvertisedTool
+loadSkillTool =
+  AdvertisedTool
+    { atQName = loadSkillQName,
+      atToolDef = advertisedToolDef loadSkillQName [("id", TyString)],
+      atInputs = [("id", TyString)],
+      atOutputs =
+        [ ("ok", TyBool),
+          ("kind", TyString),
+          ("loaded", TyBool),
+          ("content", TyString),
+          ("error", TyString)
+        ],
+      atFingerprint = "load-skill-fp"
+    }
+
+fixShellTool :: AdvertisedTool
+fixShellTool =
+  AdvertisedTool
+    { atQName = fixShellQ,
+      atToolDef = advertisedToolDef fixShellQ [("path", TyString)],
+      atInputs = [("path", TyString)],
+      atOutputs = [("ok", TyBool)],
+      atFingerprint = "fix-shell-fp"
+    }
+
+skillToolboxSpec :: LLMGateway -> AgentSpec
+skillToolboxSpec gw =
+  (textSpec gw)
+    { asTools = [discoverSkillTool, loadSkillTool, searchTool]
+    }
+
+skillAgentEnv ::
+  RunStore ->
+  Tracer ->
+  UsageSeam ->
+  Bool ->
+  (QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue)) ->
+  IORef AgentSkillState ->
+  TypedProject ->
+  AgentEnv
+skillAgentEnv store tracer usageSeam resume dispatch skillState tp =
+  (env store tracer usageSeam resume dispatch skillState)
+    { aeSkillCatalog = tpSkillCatalog tp,
+      aeBuildTool = \q -> if q == fixShellQ then Just fixShellTool else Nothing
+    }
+
+withSkillAgent ::
+  (TypedProject -> RunStore -> Tracer -> UsageSeam -> IORef AgentSkillState -> IO a) -> IO a
+withSkillAgent k =
+  withSystemTempDirectory "hwfi-agent-skills" $ \dir -> do
+    writeSkillAgentProject dir
+    tp <- loadCheckedAgent dir
+    store <- createRunStore dir "run-agent"
+    usageSeam <- newUsageSeam store Nothing emptyRunUsage
+    tracer <- newTracer
+    skillState <- newIORef emptyAgentSkillState
+    k tp store tracer usageSeam skillState
+
+loadCheckedAgent :: FilePath -> IO TypedProject
+loadCheckedAgent dir = do
+  eproj <- loadProject dir
+  case eproj of
+    Left ds -> error ("fixture parse failed: " <> show ds)
+    Right proj -> case checkProject proj of
+      Left errs -> error ("fixture check failed: " <> show errs)
+      Right tp -> pure tp
+
+writeSkillAgentProject :: FilePath -> IO ()
+writeSkillAgentProject dir = do
+  createDirectoryIfMissing True (dir </> "workflows")
+  createDirectoryIfMissing True (dir </> "skills")
+  createDirectoryIfMissing True (dir </> "tools")
+  TIO.writeFile (dir </> "project.json") skillAgentProjectJson
+  TIO.writeFile (dir </> "model-catalog.json") "[]\n"
+  TIO.writeFile (dir </> "skills" </> "fix-shell.md") skillFixShellMd
+  TIO.writeFile (dir </> "skills" </> "shell-guide.md") skillShellGuideMd
+  TIO.writeFile (dir </> "tools" </> "search.md") skillSearchMd
+  TIO.writeFile (dir </> "workflows" </> "main.md") skillAgentMainMd
+
+skillSearchMd :: Text
+skillSearchMd =
+  T.unlines
+    [ "---",
+      "name: tools/search",
+      "inputs:",
+      "  query: String",
+      "outputs:",
+      "  hits: List<String>",
+      "---",
+      "",
+      "```step",
+      "return { hits = [] }",
+      "```"
+    ]
+
+skillAgentProjectJson :: Text
+skillAgentProjectJson =
+  "{\n  \"name\": \"agent-skills\",\n  \"version\": \"0.1.0\",\n  \"entrypoint\": \"workflows/main\",\n  \"env\": []\n}\n"
+
+skillFixShellMd :: Text
+skillFixShellMd =
+  T.unlines
+    [ "---",
+      "name: skills/fix-shell",
+      "skill:",
+      "  kind: callable",
+      "  summary: Repair shell scripts",
+      "  tags: [shell, repair]",
+      "inputs:",
+      "  path: String",
+      "outputs:",
+      "  ok: Bool",
+      "---",
+      "",
+      "```step",
+      "return { ok = true }",
+      "```"
+    ]
+
+skillShellGuideMd :: Text
+skillShellGuideMd =
+  T.unlines
+    [ "---",
+      "name: skills/shell-guide",
+      "skill:",
+      "  kind: instruction",
+      "  summary: Shell repair playbook",
+      "  tags: [shell, guide]",
+      "---",
+      "",
+      instructionBodyText
+    ]
+
+skillAgentMainMd :: Text
+skillAgentMainMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs:",
+      "  q: String",
+      "outputs:",
+      "  answer: String",
+      "---",
+      "",
+      "```step",
+      "return { answer = ${inputs.q} }",
+      "```"
+    ]
+
+toolDefName :: ToolDef -> Text
+toolDefName (ToolDef n _ _ _) = n
+capturingGateway ref responses = gatewayOf $ \req -> do
+  modifyIORef' ref (req :)
+  let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
+  pure $
+    if toolRounds < length responses
+      then Right (responses !! toolRounds)
+      else Left EmptyResponse
+
+crashAfterSkillLoads :: LLMGateway
+crashAfterSkillLoads =
+  gatewayOf $ \req ->
+    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
+     in pure $
+          case toolRounds of
+            0 -> Right (loadSkillCall "c1" "skills/shell-guide")
+            1 -> Right (loadSkillCall "c2" "skills/fix-shell")
+            _ -> Left (NetworkError "simulated crash after skill loads")
+
+finishAfterSkillLoads :: LLMGateway
+finishAfterSkillLoads =
+  gatewayOf $ \req ->
+    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
+     in pure $
+          if toolRounds >= 2
+            then Right (textResp "done")
+            else Left (NetworkError "resume expected skill loads in checkpoint")
+
+loadSkillCall :: Text -> Text -> ChatResponse
+loadSkillCall cid skillId =
+  toolResp cid (sanitizeToolName loadSkillQName) (object ["id" .= skillId])
+
+hasUserText :: Text -> Turn -> Bool
+hasUserText needle = \case
+  UserTurn t -> needle `T.isInfixOf` t
+  _ -> False
+
+decodeCheckpointSkillIds :: Value -> Maybe ([Text], [Text])
+decodeCheckpointSkillIds = \case
+  Object o -> do
+    active <- textList (KM.lookup "active_tool_ids" o)
+    loaded <- textList (KM.lookup "loaded_instruction_ids" o)
+    Just (active, loaded)
+  _ -> Nothing
+  where
+    textList (Just (Array a)) = Just [t | String t <- V.toList a]
+    textList _ = Just []
+
 -- Environment ----------------------------------------------------------------
 
-withEnv :: (RunStore -> Tracer -> UsageSeam -> IO a) -> IO a
+withEnv :: (RunStore -> Tracer -> UsageSeam -> IORef AgentSkillState -> IO a) -> IO a
 withEnv k =
   withSystemTempDirectory "hwfi-agent" $ \dir -> do
     store <- createRunStore dir "run-agent"
     usageSeam <- newUsageSeam store Nothing emptyRunUsage
     tracer <- newTracer
-    k store tracer usageSeam
+    skillState <- newIORef emptyAgentSkillState
+    k store tracer usageSeam skillState
 
 -- | Like 'withEnv' but also provides a real sandboxed workspace so tool calls
 -- can genuinely mutate files and run commands (A26).
-withCodingEnv :: (RunStore -> Tracer -> UsageSeam -> Workspace -> IO a) -> IO a
+withCodingEnv :: (RunStore -> Tracer -> UsageSeam -> Workspace -> IORef AgentSkillState -> IO a) -> IO a
 withCodingEnv k =
   withSystemTempDirectory "hwfi-coding" $ \dir -> do
     store <- createRunStore dir "run-agent"
     usageSeam <- newUsageSeam store Nothing emptyRunUsage
     tracer <- newTracer
+    skillState <- newIORef emptyAgentSkillState
     let wsDir = dir </> "ws"
     createDirectoryIfMissing True wsDir
     ws <- newWorkspace wsDir
-    k store tracer usageSeam ws
+    k store tracer usageSeam ws skillState
 
 env ::
   RunStore ->
@@ -365,8 +669,9 @@ env ::
   UsageSeam ->
   Bool ->
   (QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue)) ->
+  IORef AgentSkillState ->
   AgentEnv
-env store tracer usageSeam resume dispatch =
+env store tracer usageSeam resume dispatch skillState =
   AgentEnv
     { aeTracer = tracer,
       aeStore = store,
@@ -375,7 +680,11 @@ env store tracer usageSeam resume dispatch =
       aeQName = mainQ,
       aeStepId = "agent",
       aeStepKey = "step-key-fixed",
-      aeDispatch = dispatch
+      aeDispatch = dispatch,
+      aeSkillPolicy = defaultSkillPolicy,
+      aeSkillCatalog = emptySkillCatalog defaultSkillPolicy,
+      aeSkillState = skillState,
+      aeBuildTool = const Nothing
     }
 
 -- | A dispatch that returns a canned result and counts invocations.

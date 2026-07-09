@@ -10,12 +10,13 @@ module Hwfi.Parse.Frontmatter
     stringField,
     frontmatterKind,
     frontmatterName,
+    parseSkillBlock,
     signatureFromYaml,
     locateValue,
   )
 where
 
-import Data.Aeson (Object, Value (..))
+import Data.Aeson (Object, Value (..), withObject, (.:), (.:?))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Foldable (toList)
@@ -28,6 +29,7 @@ import Hwfi.Ast.Name (qnameFromText)
 import Hwfi.Ast.Type (TypeExpr)
 import Hwfi.Ast.Workflow (Signature (..))
 import Hwfi.Parse.Type (parseTypeExprText)
+import Hwfi.Ast.Skill (SkillKind (..), SkillMeta (..), parseSkillKind)
 import Hwfi.Source (Diagnostic (..), Pos (..))
 
 -- | Decode frontmatter YAML into a top-level mapping.
@@ -53,6 +55,40 @@ frontmatterKind = stringField "kind"
 -- | The @name@ field, if present.
 frontmatterName :: Object -> Maybe Text
 frontmatterName = stringField "name"
+
+-- | Parse the nested @skill:@ mapping. Missing @skill:@ defaults to callable.
+parseSkillBlock :: FilePath -> Text -> Object -> Either [Diagnostic] SkillMeta
+parseSkillBlock path yamlText o =
+  case KM.lookup (K.fromText "skill") o of
+    Nothing -> Right defaultMeta
+    Just Null -> Right defaultMeta
+    Just (Object skillObj) -> parseSkillObject skillObj
+    Just _ -> Left [diagAt path 1 "skill must be a mapping"]
+  where
+    defaultMeta = SkillMeta SkillCallable Nothing []
+    parseSkillObject skillObj = do
+      kind <- parseKind skillObj
+      let summary = stringField "summary" skillObj
+      tags <- parseTags skillObj
+      pure SkillMeta {smKind = kind, smSummary = summary, smTags = tags}
+    parseKind skillObj =
+      case stringField "kind" skillObj of
+        Nothing -> Right SkillCallable
+        Just k -> case parseSkillKind k of
+          Just sk -> Right sk
+          Nothing ->
+            Left
+              [ diagAt
+                  path
+                  (skillKeyLine "kind")
+                  ("unknown skill kind '" <> k <> "' (expected 'callable' or 'instruction')")
+              ]
+    parseTags skillObj = case KM.lookup (K.fromText "tags") skillObj of
+      Nothing -> Right []
+      Just Null -> Right []
+      Just (Array arr) -> Right [t | String t <- toList arr]
+      Just _ -> Left [diagAt path (skillKeyLine "tags") "skill.tags must be a list of strings"]
+    skillKeyLine k = posLine (locateNestedValue yamlText "skill" k)
 
 -- | Build a 'Signature' from a workflow/tool frontmatter mapping. @yamlText@
 -- is used to locate fields for diagnostics.
@@ -107,6 +143,28 @@ locateValue yamlText key =
     yamlLines = T.splitOn "\n" yamlText
     keyTok = key <> ":"
     matches l = keyTok `T.isPrefixOf` T.stripStart l
+
+-- | Like 'locateValue' but for a nested key under a parent mapping key.
+locateNestedValue :: Text -> Text -> Text -> Pos
+locateNestedValue yamlText parent child =
+  case findIndex ((parentTok `T.isPrefixOf`) . T.stripStart) yamlLines of
+    Nothing -> Pos 1 1
+    Just parentIx ->
+      case findIndex matches (drop (parentIx + 1) yamlLines) of
+        Nothing -> Pos (parentIx + 2) 1
+        Just rel ->
+          let i = parentIx + 1 + rel
+              line = yamlLines !! i
+              indent = T.length line - T.length (T.stripStart line)
+              afterKey = T.drop (T.length childTok) (T.stripStart line)
+              spaces = T.length afterKey - T.length (T.stripStart afterKey)
+              valCol = indent + T.length childTok + spaces + 1
+           in Pos (i + 2) valCol
+  where
+    yamlLines = T.splitOn "\n" yamlText
+    parentTok = parent <> ":"
+    childTok = child <> ":"
+    matches l = childTok `T.isPrefixOf` T.stripStart l
 
 diagAt :: FilePath -> Int -> Text -> Diagnostic
 diagAt path line msg = Diagnostic path (Pos line 1) 1 msg
