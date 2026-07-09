@@ -171,6 +171,7 @@ test-suite hwfi-test
         hwfi,
         llm-simple,
         megaparsec >=9.0 && <10,
+        process    >=1.6 && <1.7,
         temporary  >=1.3 && <1.4,
         text,
         vector     >=0.12 && <0.14

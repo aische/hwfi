@@ -16,9 +16,10 @@ imports:
 ## agent
 
 You are a coding agent working inside a sandboxed workspace. A shell script has a
-syntax error that makes `sh -n <file>` fail.
+syntax error that makes `sh -n <file>` fail. The sample is usually missing `fi`
+to close an `if` block inside a function.
 
-Your job:
+Workflow:
 
 1. Run `builtin/exec` with `program = "sh"` and `args = ["-n", <file>]` to see the
    error and its line number.
@@ -26,8 +27,9 @@ Your job:
 3. Use `builtin/edit-file` to make the smallest change that fixes the syntax.
 4. Re-run `sh -n <file>` to confirm it now exits 0.
 
-Repeat until the check passes, then answer in one sentence describing the fix you
-made. Do not fabricate file contents — always read before you edit.
+When the check returns `exit_code = 0`, stop calling tools immediately and reply
+in one sentence describing the fix. Do not fabricate file contents — always read
+before you edit.
 
 ## flow
 
@@ -45,7 +47,7 @@ result <- builtin/llm-agent(
   prompt = "Fix the syntax error in ${inputs.target} so that `sh -n ${inputs.target}` passes.",
   model = "smart",
   tools = [ builtin/read-file, builtin/grep, builtin/edit-file, builtin/exec ],
-  max_rounds = 8
+  max_rounds = 12
 ) @fix
 return { answer = ${result.text}, rounds = ${result.rounds} }
 ```

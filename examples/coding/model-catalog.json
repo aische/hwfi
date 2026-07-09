@@ -17,7 +17,7 @@
     "modelName": "deepseek-v4-flash",
     "pricing": { "pricePerMillionInput": 0.14, "pricePerMillionOutput": 0.28 },
     "maxTokens": 2048,
-    "temperature": 0.3,
+    "temperature": 0.1,
     "requestTimeout": 120000,
     "throttleDelay": 0,
     "retryCount": 2,

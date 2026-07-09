@@ -2,7 +2,7 @@
 
 module Hwfi.ExamplesE2ESpec (spec) where
 
-import Control.Exception (try)
+import Control.Exception (SomeException, catch, throwIO, try)
 import Control.Monad (unless)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -29,6 +29,7 @@ import System.Directory (copyFile, doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.Process (readProcessWithExitCode)
 import Test.Hspec
 
 summariseDir :: FilePath
@@ -77,26 +78,27 @@ spec = do
           exists `shouldBe` True
 
     it "coding/fix repairs broken.sh on a clean workspace" $
-      withDeepSeekKey codingDir $ \projectDir -> do
-        withSystemTempDirectory "hwfi-e2e-coding" $ \wsDir -> do
-          copyFile brokenShFixture (wsDir </> "broken.sh")
-          outputs <-
-            runExample
-              projectDir
-              (qnameFromText "workflows/fix")
-              (Map.singleton "target" (VFileRef "broken.sh"))
-              wsDir
-          case outputs of
-            VRecord m -> do
-              Map.lookup "answer" m `shouldSatisfy` \case
-                Just (VString s) -> not (T.null (T.strip s))
-                _ -> False
-              Map.lookup "rounds" m `shouldSatisfy` \case
-                Just (VInt n) -> n > 0 && n <= 8
-                _ -> False
-            _ -> expectationFailure "expected output record"
-          script <- TIO.readFile (wsDir </> "broken.sh")
-          T.isInfixOf "fi" script `shouldBe` True
+      withDeepSeekKey codingDir $ \projectDir ->
+        retryLive 2 $
+          withSystemTempDirectory "hwfi-e2e-coding" $ \wsDir -> do
+            copyFile brokenShFixture (wsDir </> "broken.sh")
+            outputs <-
+              runExample
+                projectDir
+                (qnameFromText "workflows/fix")
+                (Map.singleton "target" (VString "broken.sh"))
+                wsDir
+            case outputs of
+              VRecord m -> do
+                Map.lookup "answer" m `shouldSatisfy` \case
+                  Just (VString s) -> not (T.null (T.strip s))
+                  _ -> False
+                Map.lookup "rounds" m `shouldSatisfy` \case
+                  Just (VInt n) -> n > 0 && n <= 12
+                  _ -> False
+              _ -> expectationFailure "expected output record"
+            (code, _, _) <- readProcessWithExitCode "sh" ["-n", wsDir </> "broken.sh"] ""
+            code `shouldBe` ExitSuccess
 
 -- Helpers --------------------------------------------------------------------
 
@@ -120,6 +122,16 @@ withDeepSeekKey projectDir action = do
             "  3. $XDG_CONFIG_HOME/hwfi/.env"
           ]
     Just _ -> action projectDir
+
+-- | Retry a flaky live-API action once on failure.
+retryLive :: Int -> IO a -> IO a
+retryLive 1 action = action
+retryLive n action =
+  action
+    `catch` \(e :: SomeException) ->
+      if n <= 1
+        then throwIO e
+        else retryLive (n - 1) action
 
 loadChecked :: FilePath -> IO TypedProject
 loadChecked dir = do
