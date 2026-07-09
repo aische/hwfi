@@ -18,7 +18,7 @@ Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
 
 ### P1 — ergonomics for tutorials
 
-- [x] R1.5 `builtin/json-get` + `builtin/concat` (§13.1.2 subset)
+- [x] R1.5 `builtin/json-get` + `builtin/concat` + `builtin/json-values` (§13.1.2 subset)
 - [x] R1.6 `builtin/log` — `workflow-log` events + `hwfi show`
 - [x] R1.7 `examples/summarise/README.md`
 - [x] R1.8 `while` example (`workflows/tick-stop` in `control-flow`)
@@ -29,6 +29,7 @@ Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
       workspace; DeepSeek via API (`deepseek-v4-flash` in READMEs/catalog)
 - [x] R1.10 Minimal cache UX: `hwfi cache clear` subcommand
 - [ ] R1.11 Tutorials (user-authored): hello → check → agent → show/resume
+      (author reference: [workflow-reference.md](workflow-reference.md))
 - [ ] R1.12 `CHANGELOG.md` + tag 0.1.0.0
 
 ## Next — v1.1 (post-release)

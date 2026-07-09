@@ -147,6 +147,7 @@ test-suite hwfi-test
         Hwfi.Runtime.ControlFlowSpec
         Hwfi.Runtime.CrossRunTraceSpec
         Hwfi.Runtime.SkillSpec
+        Hwfi.Runtime.DataPlumbingSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec

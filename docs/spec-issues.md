@@ -25,7 +25,7 @@ Original review predates M1–M9 and H1. Updated 2026-07-09.
   failures use `{ ok, errors }` (§6.4).
 - **Author capability backlog** — record ops, loop sugar, finer cache
   invalidation, `WorkflowRef` patterns: spec §13.1, tasks 9.9–9.14.
-  **Partially addressed in R1:** `json-get`, `concat`, `builtin/log`,
+  **Partially addressed in R1:** `json-get`, `json-values`, `concat`, `builtin/log`,
   `hwfi cache clear`, usage/cost (§8.4), D3 agent cache semantics (§6.1.2).
 
 ## Implementation gaps (not spec gaps)

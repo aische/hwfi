@@ -43,22 +43,16 @@ _ <- builtin/log(
 task_list <- tools/plan-tasks(plan = ${plan.plan}) @tasks
 
 rows <- foreach task in ${task_list.tasks} {
-  present <- builtin/json-get(json = ${task}, path = "id") @present
-  row <- if ${present.ok} {
-    _ <- builtin/log(message = "task start: ${task}", fields = null) @tlog
-    head <- tools/task-line(task = ${task})
-    built <- workflows/build(
-      spec = ${inputs.spec},
-      stack = ${stack_text.text},
-      task = ${task}
-    ) @build
-    line <- builtin/concat(
-      parts = [${head.line}, " — ", ${built.answer}]
-    ) @row
-  } else {
-    _ <- builtin/log(message = "skip empty task slot", fields = null) @skip
-    line <- builtin/concat(parts = [""]) @empty
-  } @slot
+  _ <- builtin/log(message = "task start: ${task}", fields = null) @tlog
+  head <- tools/task-line(task = ${task})
+  built <- workflows/build(
+    spec = ${inputs.spec},
+    stack = ${stack_text.text},
+    task = ${task}
+  ) @build
+  line <- builtin/concat(
+    parts = [${head.line}, " — ", ${built.answer}]
+  ) @row
 } @buildloop
 
 notes <- builtin/concat(

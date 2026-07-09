@@ -1,24 +1,25 @@
 # Status
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 ## Current focus
 
-**`examples/ship` reshaped** into a universal prompt-only coding agent. Next:
-R1.11 tutorials and R1.12 release tag.
+**R1.11 tutorials** and **R1.12 release tag** (`0.1.0.0`). Author reference
+manual at [workflow-reference.md](workflow-reference.md).
 
 ## Done recently
 
+- **`builtin/json-values` (2026-07-10):** object/array → `List<Json>` for
+  `foreach`; numeric key sort; null filtering. `examples/ship` `plan-tasks`
+  bridge simplified; removed fixed eight-slot cap and null-skip in `main`.
+- **Workflow author reference (2026-07-10):** [workflow-reference.md](workflow-reference.md)
+  — project layout, step DSL, types, builtins, agents, control flow, skills,
+  CLI, caching essentials.
 - **ship hang fixes (2026-07-09):** planner forbids dev-server verify; build agent
-  prefers build + `tools/vite-dev-smoke`; skip null task slots in `main`; bidirectional
-  `discover-skills` tag matching (`SkillCatalog.textHits` / `tagHits`).
+  prefers build + `tools/vite-dev-smoke`; bidirectional `discover-skills` tag matching.
 - **examples/ship reshape (2026-07-09):** prompt-only `spec` input, empty
-  workspace, `plan` → `foreach build` → `review` → `audit`; skill library
-  (TypeScript/Vite, Haskell/Cabal, React, HTML guides + `run-verify`);
-  `discover-skills` / `load-skill` in builder; removed repair-demo artifacts.
-- **9.15 Skill runtime (2026-07-09):** catalog, discover/load, checkpoint/resume;
-  `examples/skills-runtime`; tests A45–A50.
-- **Spec sync (2026-07-09):** §6.7 / §6.1.6 marked implemented.
+  workspace, `plan` → `foreach build` → `review` → `audit`; skill library;
+  `discover-skills` / `load-skill` in builder.
 
 ## Blockers
 

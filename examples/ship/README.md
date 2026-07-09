@@ -113,7 +113,7 @@ Agent steps are non-cacheable black boxes, but inner tool calls replay from cach
 | `llm-gen-object` planning | `workflows/plan` |
 | `foreach` per-task build | `workflows/main` |
 | `llm-chat` review | `workflows/review` |
-| `json-get`, `concat`, `log` | `main`, `plan`, tools |
+| `json-get`, `json-values`, `concat`, `log` | `main`, `plan`, tools |
 | Full coding builtins + `exec` | `workflows/build` |
 | `introspect` / `ctx.trace` | `workflows/audit` |
 | Skill extraction entry | `workflows/distill` |
@@ -126,8 +126,8 @@ Agent steps are non-cacheable black boxes, but inner tool calls replay from cach
   builders prefer `npm run build` / `cabal build`. For HTTP smoke only,
   `tools/vite-dev-smoke` traps and kills the Vite child (never `kill %1`).
 - **Task list bridge** — the planner emits `tasks` as a JSON object keyed by
-  `"0"`, `"1"`, …; `tools/plan-tasks` converts to `List<Json>` for `foreach`.
-  Empty slots are JSON `null`; `workflows/main` skips them before calling build.
+  `"0"`, `"1"`, …; `tools/plan-tasks` calls `builtin/json-values` to convert
+  to `List<Json>` for `foreach` (no fixed slot cap; null slots omitted).
 - **Skill discovery** — use short query keywords (`vite`, `typescript`); tag
   matching is bidirectional and matches individual query words.
 - **Step cache** does not include workspace file contents — design idempotent

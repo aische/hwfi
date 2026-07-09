@@ -869,6 +869,15 @@ Provided by the engine, addressed as `builtin/<name>`:
    -> { ok: Bool, value: Json, error: String }` — dot-separated object-key
   lookup (e.g. `"user.name"`). Missing keys or non-object traversal return
   `ok = false` with an `error` message; does not abort the enclosing run.
+- `builtin/json-values` :
+  `{ json: Json, path: String }
+   -> { ok: Bool, values: List<Json>, error: String }` — collect the values
+  of a JSON object or array into a typed list for `foreach`. An empty `path`
+  uses `json` as the target; otherwise the path is resolved like `json-get`.
+  Object keys are sorted numerically when every key parses as an integer
+  (e.g. planner task slots `"0"`, `"1"`, …), otherwise lexicographically.
+  JSON `null` entries are omitted. Missing paths or non-object/array targets
+  return `ok = false` without aborting the run.
 - `builtin/concat` :
   `{ parts: List<String> } -> { text: String }` — concatenate strings in
   order.
@@ -1734,11 +1743,12 @@ Delivered (task 9.15, 2026-07-09):
 
 **Status: implemented (R1, tasks 9.5 subset).**
 
-The builtins `builtin/json-get`, `builtin/concat`, and `builtin/log` are
-listed in the §6 builtin table above. They reduce friction when shaping data
-between steps without giant string interpolations or ad-hoc LLM calls.
+The builtins `builtin/json-get`, `builtin/json-values`, `builtin/concat`, and
+`builtin/log` are listed in the §6 builtin table above. They reduce friction
+when shaping data between steps without giant string interpolations or ad-hoc
+LLM calls.
 
-- `json-get` and `concat` are **cacheable** (§8.1).
+- `json-get`, `json-values`, and `concat` are **cacheable** (§8.1).
 - `log` is **non-cacheable**: authors expect a fresh `workflow-log` line when
   the step re-executes on resume.
 
@@ -2688,6 +2698,11 @@ A39. A declaration under `skills/` type-checks and is callable like an
 A41. `builtin/json-get` returns `{ ok = true, value = ... }` for an
     existing dot-separated path and `{ ok = false, error = ... }` for a
     missing key without aborting the run.
+A41a. `builtin/json-values` returns `{ ok = true, values = [...] }` for a
+    JSON object or array (after optional path resolution), with object keys
+    sorted numerically when all keys are integers, JSON `null` entries omitted,
+    and `{ ok = false, error = ... }` for missing paths or non-collection
+    targets without aborting the run.
 A42. `builtin/concat` joins a list of strings into `text`.
 A43. `builtin/log` emits a `workflow-log` trace event with redacted `fields`
     and is re-executed on resume (non-cacheable).
@@ -2798,6 +2813,9 @@ giant string interpolations or ad-hoc LLM calls:
   **[deferred]**
 - **JSON path access** — `builtin/json-get` over `Json` values with dot-separated
   keys and recoverable `{ ok, error }` on missing paths. **[implemented, §6.8]**
+- **JSON object/array to list** — `builtin/json-values` collects values into
+  `List<Json>` for `foreach`, with numeric key ordering for planner-style slot
+  objects. **[implemented, §6.8]**
 - **String concatenation** — `builtin/concat` concatenates strings without
   JSON-encoding entire records via interpolation (§3.2.1). **[implemented, §6.8]**
 

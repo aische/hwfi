@@ -18,11 +18,14 @@ import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Functor ((<&>))
+import Data.List (sort, sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Read (decimal)
+import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Compat
   ( ChatResponse (..),
@@ -112,6 +115,7 @@ runBuiltin env q args = case renderQName q of
   "builtin/read-run-trace" -> readRunTraceTool env args
   "builtin/trace-slice" -> traceSliceTool env args
   "builtin/json-get" -> jsonGetTool args
+  "builtin/json-values" -> jsonValuesTool args
   "builtin/concat" -> concatTool args
   "builtin/log" -> logTool env args
   "builtin/discover-skills" -> discoverSkillsTool env args
@@ -666,6 +670,66 @@ jsonGetPath (Object o) (k : ks)
         Just v' -> jsonGetPath v' ks
         Nothing -> Left ("missing key '" <> k <> "'")
 jsonGetPath _ (k : _) = Left ("not an object at '" <> k <> "'")
+
+jsonValuesTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+jsonValuesTool args =
+  pure $
+    case (Map.lookup "json" args, argText args "path") of
+      (Just (VJson root), Right pathText) ->
+        case resolveJsonTarget root pathText of
+          Left err ->
+            Right
+              ( record
+                  [ ("ok", VBool False),
+                    ("values", VList []),
+                    ("error", VString err)
+                  ]
+              )
+          Right target ->
+            case jsonValues target of
+              Left err ->
+                Right
+                  ( record
+                      [ ("ok", VBool False),
+                        ("values", VList []),
+                        ("error", VString err)
+                      ]
+                  )
+              Right values ->
+                Right
+                  ( record
+                      [ ("ok", VBool True),
+                        ("values", VList (map VJson values)),
+                        ("error", VString "")
+                      ]
+                  )
+      _ ->
+        Left (evalError "builtin/json-values requires json: Json and path: String")
+
+resolveJsonTarget :: Value -> Text -> Either Text Value
+resolveJsonTarget root pathText
+  | T.null (T.strip pathText) = Right root
+  | otherwise = jsonGetPath root (T.splitOn "." pathText)
+
+jsonValues :: Value -> Either Text [Value]
+jsonValues (Object o) =
+  Right $
+    filter (/= Null) $
+      mapMaybe (\k -> KM.lookup k o) (sortObjectKeys o)
+jsonValues (Array a) = Right $ filter (/= Null) (V.toList a)
+jsonValues _ = Left "expected a JSON object or array"
+
+sortObjectKeys :: KM.KeyMap Value -> [K.Key]
+sortObjectKeys o =
+  let keys = KM.keys o
+   in if all (isJust . readIntegerKey . K.toText) keys
+        then sortOn (fromMaybe 0 . readIntegerKey . K.toText) keys
+        else sort keys
+  where
+    readIntegerKey t =
+      case decimal t of
+        Right (n, rest) | T.null rest -> Just n
+        _ -> Nothing
 
 concatTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
 concatTool args =

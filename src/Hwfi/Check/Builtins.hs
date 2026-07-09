@@ -20,6 +20,7 @@ module Hwfi.Check.Builtins
     traceSliceQName,
     logQName,
     jsonGetQName,
+    jsonValuesQName,
     concatQName,
     discoverSkillsQName,
     loadSkillQName,
@@ -87,6 +88,10 @@ logQName = qnameFromText "builtin/log"
 -- | The @builtin/json-get@ qname (§13.1.2): JSON path lookup.
 jsonGetQName :: QName
 jsonGetQName = qnameFromText "builtin/json-get"
+
+-- | The @builtin/json-values@ qname (§13.1.2): object/array to @List<Json>@.
+jsonValuesQName :: QName
+jsonValuesQName = qnameFromText "builtin/json-values"
 
 -- | The @builtin/concat@ qname (§13.1.2): string concatenation.
 concatQName :: QName
@@ -240,6 +245,10 @@ builtinCallees =
         "builtin/json-get"
         [("json", TyJson), ("path", TyString)]
         [("ok", TyBool), ("value", TyJson), ("error", TyString)],
+      builtin
+        "builtin/json-values"
+        [("json", TyJson), ("path", TyString)]
+        [("ok", TyBool), ("values", TyList TyJson), ("error", TyString)],
       builtin "builtin/concat" [("parts", TyList TyString)] [("text", TyString)],
       builtin
         "builtin/log"

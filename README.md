@@ -71,6 +71,7 @@ hwfi cache clear <workspace-dir> <run-id>
 
 ## Documentation
 
+- [docs/workflow-reference.md](docs/workflow-reference.md) — author reference (write and run workflows)
 - [docs/spec.md](docs/spec.md) — normative specification
 - [docs/caching-and-resume.md](docs/caching-and-resume.md) — cache semantics for authors
 - [docs/TASKS.md](docs/TASKS.md) — active backlog
