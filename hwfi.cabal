@@ -128,6 +128,7 @@ test-suite hwfi-test
         -rtsopts
         "-with-rtsopts=-N"
     other-modules:
+        Hwfi.ExamplesE2ESpec
         Hwfi.CheckSpec
         Hwfi.Check.GraphSpec
         Hwfi.CliSpec

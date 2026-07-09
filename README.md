@@ -18,10 +18,9 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 
 - GHC 9.x (GHC2021)
 - [llm-simple](../llm-simple) as a sibling package (see `cabal.project`)
-- For local models: [Ollama](https://ollama.com) with models from each example's
-  `model-catalog.json`
 - For hosted providers: API keys via project `.env`, `--env-file`, or
-  `$XDG_CONFIG_HOME/hwfi/.env`
+  `$XDG_CONFIG_HOME/hwfi/.env` (tutorial examples use **DeepSeek**;
+  see each example's `.env.example`)
 
 ## Build
 
@@ -44,7 +43,7 @@ cabal run hwfi -- run examples/summarise \
   --input out=summary.txt
 ```
 
-Requires Ollama with `llama3.2:latest` (see `examples/summarise/model-catalog.json`).
+Requires `DEEPSEEK_API_KEY` (see `examples/summarise/.env.example`).
 
 ## CLI
 

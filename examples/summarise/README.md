@@ -11,11 +11,13 @@ the result. Use this as **tutorial 1** before `examples/coding`.
 
 ## Prerequisites
 
-Local **Ollama** with the catalog model:
+**DeepSeek API** with catalog model `deepseek-v4-flash` (catalog entry `default`).
+Set `DEEPSEEK_API_KEY` via one of:
 
-```bash
-ollama pull llama3.2:latest   # catalog entry "default"
-```
+1. `examples/summarise/.env` — copy from [`.env.example`](.env.example)
+2. `--env-file` on the CLI
+3. `$XDG_CONFIG_HOME/hwfi/.env`
+4. Export in your shell: `export DEEPSEEK_API_KEY=...`
 
 ## Running
 

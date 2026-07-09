@@ -63,12 +63,13 @@ cabal run hwfi -- show /tmp/coding-ws <run-id>
 
 ## Running the agentic coding loop
 
-The default catalog uses local **Ollama** (no API key). Make sure it is running
-and the referenced models are pulled:
+The catalog uses **DeepSeek** (`deepseek-v4-flash`, catalog entry `smart`).
+Set `DEEPSEEK_API_KEY` via one of:
 
-```bash
-ollama pull mistral:latest   # catalog entry "smart"
-```
+1. `examples/coding/.env` — copy from [`.env.example`](.env.example)
+2. `--env-file` on the CLI
+3. `$XDG_CONFIG_HOME/hwfi/.env`
+4. Export in your shell: `export DEEPSEEK_API_KEY=...`
 
 Then repair the deliberately broken script (its `if` block is missing `fi`):
 

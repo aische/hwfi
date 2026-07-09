@@ -25,8 +25,8 @@ Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
 
 ### P2 — release surface
 
-- [ ] R1.9 Harden tutorial examples: E2E `summarise` + `coding/fix` on clean
-      workspace; pin Ollama model names in READMEs
+- [x] R1.9 Harden tutorial examples: E2E `summarise` + `coding/fix` on clean
+      workspace; DeepSeek via API (`deepseek-v4-flash` in READMEs/catalog)
 - [x] R1.10 Minimal cache UX: `hwfi cache clear` subcommand
 - [ ] R1.11 Tutorials (user-authored): hello → check → agent → show/resume
 - [ ] R1.12 `CHANGELOG.md` + tag 0.1.0.0

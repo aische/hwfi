@@ -13,9 +13,9 @@ import LLM.Core.Types (LLMError (..), LLMGateway (..))
 import LLM.Core.Usage (PricingInfo (..))
 import Test.Hspec
 
--- | Reuse the example project's ollama-only catalog (no API key needed).
+-- | Ollama-only fixture catalog (no API key needed).
 exampleDir :: FilePath
-exampleDir = "examples/summarise"
+exampleDir = "test/fixtures/check/ok"
 
 spec :: Spec
 spec = describe "Gateways and model store (§7.3, A11)" $ do
@@ -27,13 +27,13 @@ spec = describe "Gateways and model store (§7.3, A11)" $ do
       Right cat -> do
         let store = buildModelStore (buildGateways ks) cat
         isRight store `shouldBe` True
-        fmap availableModelNames store `shouldBe` Right ["default"]
+        fmap availableModelNames store `shouldBe` Right ["llama_3_2"]
 
   it "resolves a known model name" $ do
     ks <- loadKeyStore Nothing exampleDir
     Right cat <- loadCatalog exampleDir
     let Right store = buildModelStore (buildGateways ks) cat
-    isRight (lookupModel "default" store) `shouldBe` True
+    isRight (lookupModel "llama_3_2" store) `shouldBe` True
 
   it "fails on an unknown model, listing available names (A11)" $ do
     ks <- loadKeyStore Nothing exampleDir
@@ -41,7 +41,7 @@ spec = describe "Gateways and model store (§7.3, A11)" $ do
     let Right store = buildModelStore (buildGateways ks) cat
     case lookupModel "no-such-model" store of
       Right _ -> expectationFailure "expected an unknown-model error"
-      Left err -> reMessage err `shouldSatisfy` T.isInfixOf "default"
+      Left err -> reMessage err `shouldSatisfy` T.isInfixOf "llama_3_2"
 
   describe "model-catalog fingerprint (§8.1, H1.3)" $ do
     it "changes when a catalog entry's scalar fields change" $ do
