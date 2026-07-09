@@ -6,8 +6,16 @@ description:        A command-line workflow engine that loads a workflow
                     project of markdown and JSON files, type-checks it, and
                     executes it with a resumable, traced runtime.
 license:            BSD-3-Clause
+license-file:       LICENSE
 author:             Daniel van den Eijkel
+maintainer:         1515314+aische@users.noreply.github.com
+homepage:           https://github.com/aische/hwfi
+category:           Development
 build-type:         Simple
+
+source-repository head
+    type:     git
+    location: https://github.com/aische/hwfi
 
 common opts
     default-language: GHC2021
