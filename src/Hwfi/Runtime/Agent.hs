@@ -16,7 +16,7 @@
 -- black box, but every /model call/ and every /tool call/ inside it is
 -- individually content-addressed under the enclosing agent step-key and reused
 -- from 'RunStore' on resume. A resumed loop therefore replays deterministically
---  reusing the model's prior choices and tool results  without re-paying LLM
+-- ï¿½ï¿½ï¿½ reusing the model's prior choices and tool results ï¿½ï¿½ï¿½ without re-paying LLM
 -- calls or re-running tool side effects. Caching is consulted only on resume
 -- ('aeResume'); every attempt writes cache entries (mirroring the executor).
 module Hwfi.Runtime.Agent
@@ -73,6 +73,7 @@ import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
 import Hwfi.Type (Type (..))
 import LLM (defaultDebugHooks)
+import Data.Maybe (fromMaybe)
 
 -- | One tool advertised to the model: the resolved ref's qname, its provider
 -- 'ToolDef' (schema-translated inputs, ?6.1.1), the declared input\/output
@@ -137,7 +138,7 @@ data AgentResponse = AgentResponse
     arToolCalls :: [ToolCall]
   }
 
--- | Persisted agent-loop position (8.2.1 optional 8.g): the conversation
+-- | Persisted agent-loop position (ï¿½8.2.1 optional 8.g): the conversation
 -- history and the next round index to drive. Lets resume skip re-walking
 -- completed rounds whose intra-step sub-caches may be absent.
 data AgentCheckpoint = AgentCheckpoint
@@ -159,7 +160,7 @@ runAgent env spec = do
   pure result
 
 -- | On resume, reload a persisted checkpoint when present; otherwise replay
--- from round 0 (8.2.1 backward compatibility).
+-- from round 0 (ï¿½8.2.1 backward compatibility).
 resolveStart :: AgentEnv -> AgentSpec -> IO ([Turn], Int)
 resolveStart env spec
   | not (aeResume env) = pure (initialMessages spec, 0)
@@ -248,7 +249,7 @@ runModelCall env spec messages roundIx ensureStart = do
             Left gerr -> pure (Left (llmError ("agent model call failed: " <> tshow gerr)))
             Right resp -> do
               let assistant = responseOf resp
-                  usage = maybe (Usage 0 0 0) id resp.respUsage
+                  usage = fromMaybe (Usage 0 0 0) resp.respUsage
               cost <- recordBilledCall (aeUsage env) (primaryModel (asModel spec)) usage
               emitLlmCall env spec messages resp cost
               cacheStepResult (aeStore env) key (encodeResponse assistant)
@@ -286,7 +287,7 @@ data ToolOutcome
 
 runToolCalls :: AgentEnv -> AgentSpec -> [ToolCall] -> Int -> IO () -> IO ToolOutcome
 runToolCalls env spec toolCalls roundIx ensureStart
-  -- ?6.1.3: a round mixing 'submit' with other calls is rejected wholesale  no
+  -- ?6.1.3: a round mixing 'submit' with other calls is rejected wholesale ï¿½ï¿½ï¿½ no
   -- call runs, and the model is told to call submit alone.
   | mixesSubmit = rejectMixedSubmit env roundIx ensureStart toolCalls
   | otherwise = go 0 [] toolCalls
@@ -356,7 +357,7 @@ runAdvertisedCall env roundIx callIx ensureStart tc tool =
               let actual = valueToJson result
                   redacted = redactedJson result
               void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0)
-              -- Cache actual values (8.2.1); redact only in trace/events (D3).
+              -- Cache actual values (ï¿½8.2.1); redact only in trace/events (D3).
               cacheStepResult (aeStore env) key actual
               void $
                 emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
@@ -374,7 +375,7 @@ runSubmitCall env spec roundIx callIx ensureStart tc = do
       recoverable env roundIx callIx submitToolName tc "submit is not available for this agent step"
     Just submit -> case validateSubmit (ssSchema submit) tc.tcArguments of
       Left reason ->
-        -- ?6.1.3: a decode failure is recoverable  the model can retry.
+        -- ?6.1.3: a decode failure is recoverable ï¿½ï¿½ï¿½ the model can retry.
         recoverable env roundIx callIx submitToolName tc ("submit decode error: " <> reason)
       Right validated -> do
         void $
@@ -425,7 +426,7 @@ emitLlmCall env spec messages resp cost =
           cost
       )
   where
-    usage = maybe (Usage 0 0 0) id resp.respUsage
+    usage = fromMaybe (Usage 0 0 0) resp.respUsage
 
 renderConversation :: [Turn] -> Text
 renderConversation = T.intercalate "\n" . map render
@@ -438,7 +439,7 @@ renderConversation = T.intercalate "\n" . map render
 
 -- Sub-keys (?8.2.1) ----------------------------------------------------------
 
--- | Content-addressed key for the optional agent-loop checkpoint (8.2.1 8.g).
+-- | Content-addressed key for the optional agent-loop checkpoint (ï¿½8.2.1 8.g).
 agentCheckpointKey :: Text -> Text
 agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
 

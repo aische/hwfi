@@ -12,11 +12,13 @@ module Hwfi.Runtime.Builtins
   )
 where
 
+import Control.Monad (void)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
@@ -27,8 +29,8 @@ import Hwfi.Compat
     ModelWithFallbacks (..),
     Turn (..),
     Usage (..),
-    generateTextWithFallbacks,
     genObjectUntyped,
+    generateTextWithFallbacks,
     llmHooks,
     noHooks,
   )
@@ -58,7 +60,6 @@ import Hwfi.Runtime.Workspace
     writeTextFile,
   )
 import LLM (defaultDebugHooks)
-import Control.Monad (void)
 
 -- | Everything a builtin needs from the surrounding run.
 data BuiltinEnv = BuiltinEnv
@@ -383,7 +384,7 @@ runBilledText env model modelName system prompt turns k = do
       case result of
         Left gerr -> pure (Left (llmError (T.pack (show gerr))))
         Right resp -> do
-          let usage = maybe (Usage 0 0 0) id resp.respUsage
+          let usage = fromMaybe (Usage 0 0 0) resp.respUsage
           cost <- recordBilledCall (beUsage env) (primaryModel model) usage
           emitLlmUsage env modelName system prompt resp.respText usage cost
           k resp

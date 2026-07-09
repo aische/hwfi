@@ -48,22 +48,22 @@ module Hwfi.Runtime.RunStore
   )
 where
 
-import Control.Monad (when)
-import Data.List (isSuffixOf)
 import Control.Exception (IOException)
-import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.=), (.:?))
+import Control.Monad (when)
+import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.:?), (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (parseMaybe, withObject)
-import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
-import Data.List (sortOn)
-import Data.Ord (Down (..))
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
+import Data.List (isSuffixOf, sortOn)
+import Data.Maybe (catMaybes, fromMaybe)
+import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
 import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
+import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
 import System.Directory
   ( createDirectoryIfMissing,
     doesDirectoryExist,
@@ -141,7 +141,7 @@ data RunMeta = RunMeta
     -- | Actual (non-redacted) root inputs, as a JSON record, for resume.
     rmInputs :: Value,
     rmPhase :: RunPhase,
-  -- | Accumulated LLM spend for the logical run (§8.4.4).
+    -- | Accumulated LLM spend for the logical run (§8.4.4).
     rmUsage :: RunUsage
   }
   deriving stock (Eq, Show)
@@ -216,7 +216,7 @@ metaFromJson = parseMaybe (withObject "RunMeta" parseMeta)
       inputs <- o .: "inputs"
       phase <- phaseFromText <$> o .: "status"
       mUsage <- o .:? "usage"
-      let usage = maybe emptyRunUsage (maybe emptyRunUsage id . runUsageFromJson) mUsage
+      let usage = maybe emptyRunUsage (fromMaybe emptyRunUsage . runUsageFromJson) mUsage
       pure
         RunMeta
           { rmRunId = runId,
@@ -356,7 +356,7 @@ listRuns wsRoot limit = do
       pure $
         take cap $
           sortByStartedAtDesc $
-            [s | Just s <- summaries]
+            catMaybes summaries
   where
     metaSummary m =
       RunSummary

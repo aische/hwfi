@@ -185,7 +185,7 @@ spec = describe "Agent loop (§6.1)" $ do
                 beEvalWorkflow = Nothing,
                 beRunId = "run-agent"
               }
-            dispatch q _sid args = runBuiltin benv q args
+            dispatch q _sid = runBuiltin benv q
         res <- runAgent (env store tracer usageSeam False dispatch) codingSpec
         res `shouldBe` Right (record [("text", VString "build passed"), ("rounds", VInt 4)])
         -- The edit was actually applied to the sandboxed workspace.
@@ -484,7 +484,7 @@ searchCall :: Text -> ChatResponse
 searchCall cid = toolResp cid (sanitizeToolName searchQ) (object ["query" .= ("haskell" :: Text)])
 
 submitCall :: Text -> Value -> ChatResponse
-submitCall cid args = toolResp cid submitToolName args
+submitCall cid = toolResp cid submitToolName
 
 textResp :: Text -> ChatResponse
 textResp t = ChatResponse t [TextBlock t] (Just usage) Nothing
