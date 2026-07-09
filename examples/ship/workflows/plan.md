@@ -17,9 +17,19 @@ prompt. Be concrete about stack choice, task breakdown, and verification.
 
 **Tasks shape:** emit `tasks` as a JSON **object** keyed by string slots `"0"`,
 `"1"`, `"2"`, … (not an array). Each task has `id`, `description`, and optional
-`verify_command` (a single shell one-liner the builder can run, e.g.
-`npm run build` or `cabal build`). Use consecutive slots starting at `"0"`;
-omit unused higher slots.
+`verify_command` (a single shell one-liner the builder runs via `builtin/exec`).
+
+**verify_command rules (critical):**
+
+- Use **bounded, foreground** commands that exit on their own: `npm run build`,
+  `cabal build`, `test -f dist/index.html`, `grep` on built files.
+- **Never** use long-running servers: no `npm run dev`, no `vite` dev/preview,
+  no background `&`, no `kill %1`.
+- For Vite/TypeScript stacks prefer: `cd <app-dir> && npm run build`.
+- For Haskell prefer: `cabal build` or `cabal test`.
+- Omit `verify_command` when a build step in the previous task already covers it.
+
+Use consecutive slots starting at `"0"`; omit unused higher slots.
 
 ## flow
 

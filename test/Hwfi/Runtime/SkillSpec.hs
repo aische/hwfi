@@ -12,12 +12,13 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
+import Hwfi.Ast.Skill (SkillKind (..))
 import Hwfi.Check (checkProject)
 import Hwfi.Check.Builtins (discoverSkillsQName)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
-import Hwfi.SkillCatalog (SkillCatalog, emptySkillCatalog)
+import Hwfi.SkillCatalog (SkillCatalog (..), SkillEntry (..), discoverSkills, emptySkillCatalog)
 import Hwfi.Runtime.Error (StepRef (..))
 import Hwfi.Runtime.Executor (RunResult (..), performRun)
 import Hwfi.Runtime.RunStore
@@ -178,6 +179,37 @@ spec = describe "skills and trace-slice (§6.6)" $ do
               Just (VList [one]) -> skillId one `shouldBe` Just "skills/fix-shell"
               _ -> expectationFailure "expected one callable match"
           _ -> expectationFailure "discover failed"
+
+    it "discover-skills matches multi-word queries against single-word tags" $ do
+      let viteGuide =
+            SkillEntry
+              { seId = qnameFromText "skills/typescript-vite-guide",
+                seKind = SkillInstruction,
+                seSummary = "Scaffold TypeScript projects with Vite",
+                seTags = ["typescript", "vite"],
+                sePath = "skills/typescript-vite-guide.md",
+                seChecked = True,
+                seAgentEligible = False,
+                seBody = Nothing
+              }
+          htmlGuide =
+            SkillEntry
+              { seId = qnameFromText "skills/webapp-html-guide",
+                seKind = SkillInstruction,
+                seSummary = "Single-file HTML apps",
+                seTags = ["html", "javascript"],
+                sePath = "skills/webapp-html-guide.md",
+                seChecked = True,
+                seAgentEligible = False,
+                seBody = Nothing
+              }
+          cat =
+            SkillCatalog defaultSkillPolicy $
+              Map.fromList [(seId viteGuide, viteGuide), (seId htmlGuide, htmlGuide)]
+          matched = discoverSkills cat "typescript vite" [] 20
+          ids = map (renderQName . seId) matched
+      T.pack "skills/typescript-vite-guide" `elem` ids `shouldBe` True
+      T.pack "skills/webapp-html-guide" `elem` ids `shouldBe` False
 
     it "A46: discover-skills never includes instruction bodies" $
       withSkillCatalogProject $ \tp ws dir -> do

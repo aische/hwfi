@@ -141,9 +141,9 @@ discoverSkills cat query kinds limit =
     matchesQuery e
       | T.null qLower = True
       | otherwise =
-          qLower `T.isInfixOf` T.toLower (renderQName (seId e))
-            || qLower `T.isInfixOf` T.toLower (seSummary e)
-            || any (\t -> qLower `T.isInfixOf` T.toLower t) (seTags e)
+          textHits qLower (renderQName (seId e))
+            || textHits qLower (seSummary e)
+            || any (tagHits qLower) (seTags e)
     ranked =
       sortOn
         ( \e ->
@@ -154,12 +154,28 @@ discoverSkills cat query kinds limit =
             )
         )
         matched
+    scoreTag :: SkillEntry -> Int
     scoreTag e =
-      if any (\t -> qLower `T.isInfixOf` T.toLower t) (seTags e) then 1 else 0
+      if any (tagHits qLower) (seTags e) then (1 :: Int) else 0
+    scoreSummary :: SkillEntry -> Int
     scoreSummary e =
-      if qLower `T.isInfixOf` T.toLower (seSummary e) then 1 else 0
+      if textHits qLower (seSummary e) then (1 :: Int) else 0
+    scoreId :: SkillEntry -> Int
     scoreId e =
-      if qLower `T.isInfixOf` T.toLower (renderQName (seId e)) then 1 else 0
+      if textHits qLower (renderQName (seId e)) then (1 :: Int) else 0
+
+-- | Case-insensitive substring match in either direction.
+textHits :: Text -> Text -> Bool
+textHits q t =
+  let ql = T.toLower q
+      tl = T.toLower t
+   in ql `T.isInfixOf` tl || tl `T.isInfixOf` ql
+
+-- | Match a query (including individual words) against a tag.
+tagHits :: Text -> Text -> Bool
+tagHits q tag =
+  let tl = T.toLower tag
+   in textHits q tl || any (`textHits` tl) (map T.toLower (T.words q))
 
 -- | Markdown body after frontmatter (instruction skills).
 instructionBodyFromMarkdown :: MarkdownFile -> Text

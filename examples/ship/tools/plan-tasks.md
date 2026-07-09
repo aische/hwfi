@@ -10,9 +10,9 @@ imports:
 
 ## flow
 
-Bridge `plan.tasks` (JSON object keyed by slot) to a typed `List<Json>` for
-`foreach`. Up to eight slots are collected; unused slots are JSON `null` and
-skipped by the builder.
+Bridge `plan.tasks` (JSON object keyed by slot) to `List<Json>` for `foreach`.
+Collects slots `"0"` … `"7"`; missing slots are JSON `null`. The orchestrator
+skips null tasks (no build agent) via `json-get` on `id`.
 
 ```step
 t0 <- tools/plan-task-at(plan = ${inputs.plan}, slot = "0")

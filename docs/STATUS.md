@@ -9,6 +9,9 @@ R1.11 tutorials and R1.12 release tag.
 
 ## Done recently
 
+- **ship hang fixes (2026-07-09):** planner forbids dev-server verify; build agent
+  prefers build + `tools/vite-dev-smoke`; skip null task slots in `main`; bidirectional
+  `discover-skills` tag matching (`SkillCatalog.textHits` / `tagHits`).
 - **examples/ship reshape (2026-07-09):** prompt-only `spec` input, empty
   workspace, `plan` → `foreach build` → `review` → `audit`; skill library
   (TypeScript/Vite, Haskell/Cabal, React, HTML guides + `run-verify`);

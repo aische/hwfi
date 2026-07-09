@@ -19,6 +19,7 @@ imports:
   - builtin/grep
   - builtin/make-dir
   - builtin/exec
+  - tools/vite-dev-smoke
 ---
 
 ## agent
@@ -28,7 +29,8 @@ from a larger plan.
 
 **Start every task with skill discovery:**
 
-1. `discover-skills(query = "<stack keywords>", kinds = [], limit = 5)`
+1. `discover-skills(query = "<stack keyword>", kinds = [], limit = 5)` — use a
+   **single** keyword (e.g. `vite`, `typescript`, `haskell`), not a long phrase.
 2. `load-skill` for relevant **instruction** guides (TypeScript/Vite, Haskell/Cabal,
    React, single-file HTML, etc.).
 3. Optionally `load-skill` for `skills/run-verify` when you need a thin verify helper.
@@ -40,9 +42,15 @@ Then scaffold, implement, and verify:
   `builtin/grep`, `builtin/find-files`, and `builtin/edit-file`.
 - Run build/test commands with `builtin/exec` until the task is done.
 
-If the task JSON includes a non-empty `verify_command`, run it via
-`builtin/exec` (`program = "sh"`, `args = ["-c", "<command>"]`) and fix failures
-before stopping.
+**Verification (exec-safe):**
+
+- Prefer **`npm run build`**, **`cabal build`**, or file checks — not dev servers.
+- If `verify_command` mentions `npm run dev` or backgrounds a server, run
+  **`npm run build`** (or the stack's build script) instead; that satisfies verify.
+- If you truly need an HTTP smoke test, call **`tools/vite-dev-smoke`** once
+  (it traps and kills the dev child). Do **not** hand-roll `npm run dev &`.
+- After **`npm run build`** exits 0, stop — do not retry dev-server verification.
+- Run `verify_command` at most **once** when it is already a safe foreground command.
 
 If the task JSON is JSON `null`, reply that the slot was empty and stop without
 writing files.
@@ -75,7 +83,8 @@ Implement this task in the workspace. Discover and load stack skills first.""",
     builtin/find-files,
     builtin/grep,
     builtin/make-dir,
-    builtin/exec
+    builtin/exec,
+    tools/vite-dev-smoke
   ],
   max_rounds = 16
 ) @build

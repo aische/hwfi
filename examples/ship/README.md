@@ -122,8 +122,13 @@ Agent steps are non-cacheable black boxes, but inner tool calls replay from cach
 
 - **Validation is agent-side** — there is no scripted `while` loop on `exit_code`;
   builders run `verify_command` hints via `exec` inside the agent loop.
+- **Safe verification** — the planner forbids dev-server `verify_command` values;
+  builders prefer `npm run build` / `cabal build`. For HTTP smoke only,
+  `tools/vite-dev-smoke` traps and kills the Vite child (never `kill %1`).
 - **Task list bridge** — the planner emits `tasks` as a JSON object keyed by
-  `"0"`, `"1"`, …; `tools/plan-tasks` converts to `List<Json>` for `foreach`
-  (see `plan-schema.json`).
+  `"0"`, `"1"`, …; `tools/plan-tasks` converts to `List<Json>` for `foreach`.
+  Empty slots are JSON `null`; `workflows/main` skips them before calling build.
+- **Skill discovery** — use short query keywords (`vite`, `typescript`); tag
+  matching is bidirectional and matches individual query words.
 - **Step cache** does not include workspace file contents — design idempotent
   agent steps when re-running.
