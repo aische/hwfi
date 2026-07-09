@@ -8,6 +8,8 @@ Last updated: 2026-07-10
 
 ## Done recently
 
+- **`examples/ship/README.md` (2026-07-10):** experimental status, `llm-simple`
+  prerequisite, learning path, run expectations, troubleshooting.
 - **Tutorials (2026-07-10):** `docs/tutorials/` hub + hello/check/agent/show-resume;
   new `examples/hello` (no LLM); README and workflow-reference links; E2E tests.
 - **Workflow reference expansion (2026-07-10):** `llm-agent-object` / `submit`,
