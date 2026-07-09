@@ -15,6 +15,18 @@ M1–M9 complete. Near-term work is optional / perf:
 - [ ] 9.4 Skill extraction from traces
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
+- [ ] 9.9 Control-flow error handling — `try`/recover; continue-on-failure
+      options for `par` (§13.1.1)
+- [ ] 9.10 Data plumbing — record map/filter/merge, `json-get`, string concat
+      (§13.1.2)
+- [ ] 9.11 Simpler loop syntax — inline `while` bodies, counted `range`
+      loops (§13.1.3)
+- [ ] 9.12 Cache invalidation UX — author-visible "invalidate from here"
+      policy/CLI (§13.1.4; auto invalidation via Merkle fingerprints is done)
+- [ ] 9.13 Structured logging in workflows — `log` step / `builtin/log`
+      (§13.1.5)
+- [ ] 9.14 `WorkflowRef` / `ToolRef` ergonomics — examples and patterns
+      (§13.1.6)
 
 ## Done
 

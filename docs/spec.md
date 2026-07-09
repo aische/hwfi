@@ -2138,10 +2138,110 @@ A29. With `project.json` `budget.max_cost_usd` set, a provider call that
   the first error. The one exception is the agent loop's **localized**
   recoverable-error boundary (§6.1.4), which turns a bad tool call into a
   tool message the model can retry; it does not expose a general
-  `try`/recover construct to workflows.
+  `try`/recover construct to workflows. Full backlog: §13.1.1.
 - **Usage and cost accounting** — running dollar cost, `ctx.run.usage`,
   per-call `cost_usd` on `llm-call`, optional `project.json` budget;
   cached/resumed provider calls are free. Full design: §8.4.
+- **Author capability backlog (post-v1)** — data plumbing, loop sugar,
+  cache-invalidation UX, structured logging, and `WorkflowRef` patterns.
+  Prioritized list: §13.1.
+
+### 13.1 Author capability backlog (post-v1)
+
+Items surfaced by author-facing review (2026-07). Rough priority order for
+v1.1+; tracked in [TASKS.md](TASKS.md) as 9.9–9.14. None of these block v1
+milestone completion.
+
+#### 13.1.1 Control-flow error handling (`try`/recover)
+
+**Priority: 1.** Extend beyond today's partial escape hatches:
+
+- `builtin/exec` already returns non-zero exit as a **value** (§6.3).
+- The agent loop has a **localized** recoverable boundary (§6.1.4), including
+  `builtin/eval-workflow` returning `ok = false` (§6.4.3).
+- Scripted workflows have no general `try`/recover: the engine aborts on the
+  first step/sub-workflow/runtime error (§4).
+
+**Deferred design:**
+
+- A workflow-level construct (syntax TBD) that catches a failing step or
+  sub-workflow call and substitutes a fallback value or runs a recovery block.
+- **Continue-on-failure for `par`:** v1 aborts at the lowest-index iteration
+  error and discards sibling results (§4.2, executor). Authors may want
+  partial results, per-iteration `{ ok, error }` values, or a configurable
+  fail-fast vs collect-errors mode.
+- **Resume and cache interaction** must be specified before implementation:
+  whether caught errors emit `step-end`, how step-keys treat fallback paths,
+  and whether a resumed run replays the failure or the recovery branch.
+
+Not a substitute for `eval-workflow`'s `{ ok, errors }` result shape (§6.4);
+that builtin covers recoverable *static* failures on synthesized source.
+
+#### 13.1.2 Data plumbing
+
+**Priority: 2.** Reduce friction when shaping data between steps without
+giant string interpolations or ad-hoc LLM calls:
+
+- **Record operations** — map/filter/merge/update fields on
+  `Record<{…}>` values (expression forms and/or small builtins).
+- **JSON path access** — e.g. `json-get` builtin or typed path expression
+  over `Json` values (with clear error behaviour on missing keys).
+- **String concatenation** — concatenate strings (and optionally coerce
+  scalars) without JSON-encoding entire records via interpolation (§3.2.1).
+
+#### 13.1.3 Simpler loop syntax
+
+**Priority: 3.** Control flow exists (§4.2, §4.3) but common patterns are
+verbose:
+
+- **Inline `while` bodies** — today predicate and body are typically external
+  sub-workflow callees; allow inline block bodies (and optionally inline
+  predicates) where typing and step-key scoping can be made unambiguous.
+- **Counted loops** — sugar for `for i in range(n)` (or equivalent) instead
+  of constructing a list or relying on `while` + manual counter carry.
+
+#### 13.1.4 Cache invalidation policy (author-visible)
+
+**Priority: 4.** Automatic invalidation on code edit is already correct:
+Merkle `callee-fingerprint` in the step-key (§8.1) changes when any transitive
+callee changes, so resume after an edit does not silently reuse stale step
+files for changed code.
+
+**Deferred UX/policy:**
+
+- Make **"I changed code — invalidate from here"** obvious and safe for
+  authors who resume long runs: e.g. a documented rule, CLI flag, or
+  `hwfi` subcommand to drop cached steps from a given step-key / qname
+  onward without wiping the whole run dir.
+- Clarify in docs/examples when automatic fingerprint invalidation is
+  sufficient vs when authors must manually bust cache (e.g. edited
+  workspace files that are not part of declaration fingerprints, model
+  catalog changes for agent steps, D3 redaction semantics).
+
+#### 13.1.5 Observability in workflows
+
+**Priority: 5.** `ctx.trace` reconstructs full history (§8.3.5) but is heavy
+for authoring and debugging:
+
+- A **structured logging** step — statement and/or `builtin/log` — that
+  emits named, typed fields to `trace.jsonl` (and optionally stdout) at
+  a chosen point in a workflow, without reading the entire trace in
+  expressions.
+- Should integrate with secret redaction (§8.3.4) and nest under sub-workflow
+  / agent events like other step kinds.
+
+#### 13.1.6 Dynamic dispatch ergonomics (`WorkflowRef` / `ToolRef`)
+
+**Priority: 6.** First-class refs (§5.1) and fingerprint-aware step-keys
+(§8.1) support dynamic dispatch; patterns are under-documented:
+
+- **Examples** showing refs passed as inputs, refs collected into lists for
+  `builtin/llm-agent` `tools`, and conditional dispatch via `if` on ref
+  values.
+- Optional **checker hints** or lint for common mistakes (e.g. ref passed
+  where a qname call was intended).
+- Cross-link from §6.1 (agent tools) and §6.4 (`eval-workflow` vs existing
+  declarations).
 
 ## 14. Known implementation gaps
 

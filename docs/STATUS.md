@@ -5,7 +5,7 @@ Last updated: 2026-07-09
 ## Current focus
 
 **9.2 `builtin/eval-workflow` complete (A34/A35).** Optional items next: 9.1,
-9.3–9.6.
+9.3–9.6; author backlog 9.9–9.14 (spec §13.1).
 
 ## Done recently
 
@@ -31,4 +31,4 @@ Last updated: 2026-07-09
 
 ## Next up
 
-[TASKS.md](TASKS.md) → optional 9.1, 9.3–9.6.
+[TASKS.md](TASKS.md) → optional 9.1, 9.3–9.6, 9.9–9.14.

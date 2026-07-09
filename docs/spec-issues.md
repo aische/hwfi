@@ -19,9 +19,11 @@ Original review predates M1–M9 and H1. Updated 2026-07-09.
 - **Implicit returns** — uncommon; tools return `{ text }` while workflows declare `{ summary }`; explicit `return` is the norm.
 - **YAML `:` vs DSL `=`** — intentional (spec §3.4 note).
 - **No `Optional<T>`** — deferred v1.1 (spec §13).
-- **No workflow-level `try`/recover** — deferred; agent loop has localized
-  recoverable errors only (§6.1.4); `eval-workflow` parse/check failures
-  use `{ ok, errors }` (§6.4).
+- **No workflow-level `try`/recover** — deferred §13.1.1; agent loop has
+  localized recoverable errors only (§6.1.4); `eval-workflow` parse/check
+  failures use `{ ok, errors }` (§6.4).
+- **Author capability backlog** — data plumbing, loop sugar, cache-invalidation
+  UX, structured logging, `WorkflowRef` patterns: spec §13.1, tasks 9.9–9.14.
 
 ## Implementation gaps (not spec gaps)
 
