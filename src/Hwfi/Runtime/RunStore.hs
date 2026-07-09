@@ -37,6 +37,7 @@ module Hwfi.Runtime.RunStore
     cacheStepResult,
     lookupCachedResult,
     deleteCachedResult,
+    clearRunStepCache,
     cacheWhileDecision,
     lookupWhileDecision,
     readTraceEvents,
@@ -48,6 +49,7 @@ module Hwfi.Runtime.RunStore
 where
 
 import Control.Monad (when)
+import Data.List (isSuffixOf)
 import Control.Exception (IOException)
 import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.=), (.:?))
 import Data.Aeson qualified as Aeson
@@ -279,6 +281,20 @@ deleteCachedResult store key = do
   let path = stepPath store key
   exists <- doesFileExist path
   when exists (removeFile path)
+
+-- | Remove every persisted step result (and pinned @while@ decisions) for a
+-- run. Trace and @run.json@ are left intact so @hwfi resume@ re-executes
+-- cacheable steps (§13.1.4 subset).
+clearRunStepCache :: RunStore -> IO Int
+clearRunStepCache store = do
+  let dir = rsStepsDir store
+  exists <- doesDirectoryExist dir
+  if not exists
+    then pure 0
+    else do
+      files <- filter (".json" `isSuffixOf`) <$> listDirectory dir
+      mapM_ (removeFile . (dir </>)) files
+      pure (length files)
 
 -- | Persist a pinned @while@ predicate decision (§4.3.5). Stored under the
 -- same @steps/@ tree as step results, keyed by 'computeWhileDecisionKey'.

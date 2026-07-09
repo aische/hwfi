@@ -26,6 +26,7 @@ import Hwfi.Runtime.Agent
     sanitizeToolName,
     submitToolDef,
     submitToolName,
+    toolModelJson,
   )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
@@ -135,6 +136,14 @@ spec = describe "Agent loop (§6.1)" $ do
         evs2 <- snapshotEvents tracer2
         length [() | TraceEvent _ _ (LlmCall {}) <- evs2] `shouldBe` 0
 
+    it "feeds the model redacted tool JSON from cache when outputs include Secret (D3)" $ do
+      let secretTool =
+            searchTool
+              { atOutputs = [("token", TySecret TyString), ("label", TyString)]
+              }
+          cached = object ["token" .= ("sekrit" :: Text), "label" .= ("ok" :: Text)]
+      T.unpack (toolModelJson secretTool cached) `shouldNotContain` "sekrit"
+
     it "resumes from a persisted checkpoint without re-walking earlier rounds (8.g)" $
       withEnv $ \store tracer usageSeam -> do
         calls <- newIORef (0 :: Int)
@@ -197,6 +206,7 @@ searchTool =
     { atQName = searchQ,
       atToolDef = advertisedToolDef searchQ [("query", TyString)],
       atInputs = [("query", TyString)],
+      atOutputs = [("hits", TyList TyString)],
       atFingerprint = "search-fp-v1"
     }
 
@@ -236,6 +246,12 @@ execTool =
     { atQName = execQ,
       atToolDef = advertisedToolDef execQ execInputs,
       atInputs = execInputs,
+      atOutputs =
+        [ ("exit_code", TyInt),
+          ("stdout", TyString),
+          ("stderr", TyString),
+          ("timed_out", TyBool)
+        ],
       atFingerprint = "exec-fp-v1"
     }
 
@@ -245,6 +261,7 @@ editTool =
     { atQName = editQ,
       atToolDef = advertisedToolDef editQ editInputs,
       atInputs = editInputs,
+      atOutputs = [],
       atFingerprint = "edit-fp-v1"
     }
 

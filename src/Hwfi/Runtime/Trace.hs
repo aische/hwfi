@@ -35,6 +35,7 @@ module Hwfi.Runtime.Trace
 where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson (Value (..), encode, object, (.:), (.=), (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseMaybe, withObject)
 import Data.ByteString.Lazy qualified as BSL
@@ -157,6 +158,8 @@ data EventBody
     LoopEnd QName Ident Int
   | -- | @while-pred@ (?4.3, M9): qname, while-id, iteration, predicate decision.
     WhilePred QName Ident Int Bool Text
+  | -- | @workflow-log@ (?13.1.5): qname, step id, message, optional fields (redacted).
+    WorkflowLog QName Ident Text Value
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int
   | -- | @run-end@: run id, terminal status.
@@ -302,6 +305,13 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "continue" .= cont,
           "reason" .= reason
         ]
+      WorkflowLog q sid message fields ->
+        [ "tag" .= ("workflow-log" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "message" .= message,
+          "fields" .= fields
+        ]
       Resumed runId fromSeq ->
         [ "tag" .= ("resumed" :: Text),
           "run_id" .= runId,
@@ -392,6 +402,8 @@ parseEvent = withObject "TraceEvent" $ \o -> do
         LoopEnd <$> qn o <*> o .: "step_id" <*> o .: "count"
       "while-pred" ->
         WhilePred <$> qn o <*> o .: "step_id" <*> o .: "iteration" <*> o .: "continue" <*> o .: "reason"
+      "workflow-log" ->
+        WorkflowLog <$> qn o <*> o .: "step_id" <*> o .: "message" <*> o .: "fields"
       "resumed" ->
         Resumed <$> o .: "run_id" <*> o .: "from_seq"
       "run-end" ->
@@ -476,11 +488,16 @@ renderEvent (TraceEvent s at body) =
           <> (if cont then "true" else "false")
           <> "  "
           <> reason
+      WorkflowLog q sid message fields ->
+        "workflow-log " <> step q sid <> "  " <> message <> fieldsSuffix fields
       Resumed runId fromSeq ->
         "resumed     " <> runId <> "  from_seq=" <> T.pack (show fromSeq)
       RunEnd runId status ->
         "run-end     " <> runId <> "  status=" <> runStatusText status
     shortHash = T.take 12
+    fieldsSuffix Null = ""
+    fieldsSuffix (Object km) | KM.null km = ""
+    fieldsSuffix _ = "  (+fields)"
 
 -- | An event accumulator with an optional append-only file sink. Holds the
 -- next @seq@ and the events so far in reverse chronological order. When a sink

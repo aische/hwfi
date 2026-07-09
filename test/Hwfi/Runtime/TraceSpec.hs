@@ -43,6 +43,7 @@ sampleEvents =
     q (LoopStart wf "fan" "par" (Just 0)),
     q (LoopStart wf "refine" "while" Nothing),
     q (WhilePred wf "refine" 1 True "needs another pass"),
+    q (WorkflowLog wf "note" "checkpoint" (object ["n" .= (1 :: Int)])),
     q (Resumed "run-1" 12),
     q (RunEnd "run-1" Completed)
   ]

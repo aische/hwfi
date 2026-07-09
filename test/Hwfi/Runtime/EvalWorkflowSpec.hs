@@ -152,6 +152,7 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
                       { atQName = evalQ,
                         atToolDef = advertisedToolDef evalQ [("source", TyString), ("inputs", TyJson)],
                         atInputs = [("source", TyString), ("inputs", TyJson)],
+                        atOutputs = [("ok", TyBool), ("outputs", TyJson), ("errors", TyList TyString)],
                         atFingerprint = "eval-fp"
                       }
                     ],

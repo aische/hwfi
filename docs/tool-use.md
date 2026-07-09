@@ -1,15 +1,8 @@
 # LLM tool-use (agentic function calling)
 
-Status: **M6 implemented; mutation/exec toolset (§8) specified, not yet
-implemented.** This document is the design note and rationale; the
-normative behaviour it argues for has been promoted into the spec — see
-spec §6.1 (`builtin/llm-agent` / `builtin/llm-agent-object`), §5.6.9
-(type-check rules), §8.2.1 (intra-step caching), §8.3 (agent trace events),
-and acceptance criteria A17–A21. The agentic loop (§1–§7) is done; the
-filesystem-mutation and command-execution toolset for coding workflows
-(§8, spec §6.2/§6.3/§7.5) is the next milestone (TASKS.md → **M7**). This
-note is kept for the "why" and the prior-art analysis (§3) that the spec
-deliberately omits.
+Status: **M6–M7 implemented.** This document is the design note and rationale;
+normative behaviour is in spec §6.1, §6.2/§6.3, §7.5, and acceptance criteria
+A17–A26. Kept for the "why" and prior-art analysis (§3).
 
 A working reference for the design exists at `../llm-workflow`; §3 distills
 what to borrow from it and where hwfi must differ.

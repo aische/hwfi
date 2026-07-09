@@ -25,6 +25,7 @@ module Hwfi.Runtime.Agent
     AgentSpec (..),
     AgentEnv (..),
     AgentCheckpoint (..),
+    toolModelJson,
     runAgent,
     agentCheckpointKey,
     modelSubKey,
@@ -70,7 +71,7 @@ import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (EventBody (..), Tracer, emit)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
-import Hwfi.Type (Type)
+import Hwfi.Type (Type (..))
 import LLM (defaultDebugHooks)
 
 -- | One tool advertised to the model: the resolved ref's qname, its provider
@@ -81,6 +82,7 @@ data AdvertisedTool = AdvertisedTool
   { atQName :: QName,
     atToolDef :: ToolDef,
     atInputs :: [(Ident, Type)],
+    atOutputs :: [(Ident, Type)],
     atFingerprint :: Text
   }
 
@@ -333,8 +335,8 @@ runAdvertisedCall env roundIx callIx ensureStart tc tool =
       mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
       case mCached of
         Just cachedJson ->
-          -- Cache hit: no new events; reuse without re-running side effects.
-          pure (CallResult (toolResult tc (canonicalJson cachedJson)))
+          -- Cache hit: no new events; feed the model a redacted view (D3).
+          pure (CallResult (toolResult tc (toolModelJson tool cachedJson)))
         Nothing -> do
           ensureStart
           emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
@@ -351,9 +353,11 @@ runAdvertisedCall env roundIx callIx ensureStart tc tool =
                   void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
                   recoverable env roundIx callIx (renderQName (atQName tool)) tc ("tool error: " <> reMessage err)
             Right result -> do
-              let redacted = redactedJson result
+              let actual = valueToJson result
+                  redacted = redactedJson result
               void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0)
-              cacheStepResult (aeStore env) key redacted
+              -- Cache actual values (8.2.1); redact only in trace/events (D3).
+              cacheStepResult (aeStore env) key actual
               void $
                 emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
               pure (CallResult (toolResult tc (canonicalJson redacted)))
@@ -434,7 +438,7 @@ renderConversation = T.intercalate "\n" . map render
 
 -- Sub-keys (?8.2.1) ----------------------------------------------------------
 
--- | Content-addressed key for the optional agent-loop checkpoint (§8.2.1 8.g).
+-- | Content-addressed key for the optional agent-loop checkpoint (8.2.1 8.g).
 agentCheckpointKey :: Text -> Text
 agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
 
@@ -621,6 +625,17 @@ submitToolDef schema =
 
 toolResult :: ToolCall -> Text -> ToolResult
 toolResult tc content = ToolResult tc.tcId tc.tcName content
+
+-- | JSON tool-result text for the model: redact secrets using the callee output
+-- type when the cached value can be coerced (D3).
+toolModelJson :: AdvertisedTool -> Value -> Text
+toolModelJson tool cachedJson =
+  case coerceFromJson (toolOutputType tool) cachedJson of
+    Right rv -> canonicalJson (redactedJson rv)
+    Left _ -> canonicalJson cachedJson
+
+toolOutputType :: AdvertisedTool -> Type
+toolOutputType tool = TyRecord [(n, t) | (n, t) <- atOutputs tool]
 
 roundsValue :: Int -> RValue
 roundsValue roundIx = VInt (fromIntegral (roundIx + 1))

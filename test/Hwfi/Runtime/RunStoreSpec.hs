@@ -10,6 +10,7 @@ import Hwfi.Runtime.RunStore
     RunPhase (..),
     RunSummary (..),
     cacheStepResult,
+    clearRunStepCache,
     createRunStore,
     isResumable,
     listRuns,
@@ -90,6 +91,17 @@ spec = do
           >>= (`shouldSatisfy` \case
                 Left err -> ".." `T.isInfixOf` err
                 _ -> False)
+
+  describe "clearRunStepCache" $ do
+    it "removes every file under steps/ and leaves trace intact" $
+      withSystemTempDirectory "hwfi-rs" $ \root -> do
+        store <- createRunStore root "run-1"
+        cacheStepResult store "key-a" (object ["x" .= (1 :: Int)])
+        cacheStepResult store "key-b" (object ["y" .= (2 :: Int)])
+        n <- clearRunStepCache store
+        n `shouldBe` 2
+        lookupCachedResult store "key-a" `shouldReturn` Nothing
+        lookupCachedResult store "key-b" `shouldReturn` Nothing
 
   describe "workspace lock (§12)" $ do
     it "grants the lock to a single holder" $

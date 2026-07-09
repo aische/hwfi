@@ -13,6 +13,8 @@ module Hwfi.Runtime.Builtins
 where
 
 import Data.Aeson (Value (..))
+import Data.Aeson.Key qualified as K
+import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -56,6 +58,7 @@ import Hwfi.Runtime.Workspace
     writeTextFile,
   )
 import LLM (defaultDebugHooks)
+import Control.Monad (void)
 
 -- | Everything a builtin needs from the surrounding run.
 data BuiltinEnv = BuiltinEnv
@@ -100,6 +103,9 @@ runBuiltin env q args = case renderQName q of
   "builtin/list-runs" -> listRunsTool env args
   "builtin/read-run-trace" -> readRunTraceTool env args
   "builtin/trace-slice" -> traceSliceTool env args
+  "builtin/json-get" -> jsonGetTool args
+  "builtin/concat" -> concatTool args
+  "builtin/log" -> logTool env args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------
@@ -422,7 +428,7 @@ emitLlmUsage env model system prompt response usage cost =
     )
 
 emit_ :: BuiltinEnv -> EventBody -> IO ()
-emit_ env body = emit (beTracer env) body >> pure ()
+emit_ env body = void (emit (beTracer env) body)
 
 -- Argument extraction --------------------------------------------------------
 
@@ -613,3 +619,74 @@ traceSliceTool env args =
           snapshotEvents (beTracer env) >>= pure . Right
       | otherwise =
           readRunTrace (workspaceRoot (beWorkspace env)) (beRunId env) rid
+
+-- Data plumbing (§13.1.2) ------------------------------------------------------
+
+jsonGetTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+jsonGetTool args =
+  pure $
+    case (Map.lookup "json" args, argText args "path") of
+      (Just (VJson root), Right pathText) ->
+        case jsonGetPath root (T.splitOn "." pathText) of
+          Right value ->
+            Right
+              ( record
+                  [ ("ok", VBool True),
+                    ("value", VJson value),
+                    ("error", VString "")
+                  ]
+              )
+          Left err ->
+            Right
+              ( record
+                  [ ("ok", VBool False),
+                    ("value", VJson Null),
+                    ("error", VString err)
+                  ]
+              )
+      _ ->
+        Left (evalError "builtin/json-get requires json: Json and path: String")
+
+jsonGetPath :: Value -> [Text] -> Either Text Value
+jsonGetPath v [] = Right v
+jsonGetPath (Object o) (k : ks)
+  | T.null k = Left "empty path segment"
+  | otherwise =
+      case KM.lookup (K.fromText k) o of
+        Just v' -> jsonGetPath v' ks
+        Nothing -> Left ("missing key '" <> k <> "'")
+jsonGetPath _ (k : _) = Left ("not an object at '" <> k <> "'")
+
+concatTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+concatTool args =
+  pure $
+    case argStrList args "parts" of
+      Right parts -> Right (record [("text", VString (T.concat parts))])
+      Left e -> Left e
+
+-- Workflow logging (§13.1.5) ---------------------------------------------------
+
+logTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+logTool env args =
+  case (argText args "message", jsonArg args "fields") of
+    (Right message, Right fields) -> do
+      let q = srQName (beStep env)
+          sid = srStepId (beStep env)
+          redactedFields = redactJsonFields fields
+      emit_ env (WorkflowLog q sid message redactedFields)
+      pure (Right (record [("logged", VBool True)]))
+    _ ->
+      pure (Left (evalError "builtin/log requires message: String and fields: Json"))
+  where
+    jsonArg m name = case Map.lookup name m of
+      Just (VJson j) -> Right j
+      Just VNull -> Right Null
+      _ -> Left "not Json"
+    redactJsonFields Null = Null
+    redactJsonFields (Object o) =
+      Object (KM.map redactJsonValue o)
+    redactJsonFields v = v
+    redactJsonValue (String t) = String t
+    redactJsonValue v@(Object _) = redactJsonFields v
+    redactJsonValue (Array a) = Array (fmap redactJsonValue a)
+    redactJsonValue v = v

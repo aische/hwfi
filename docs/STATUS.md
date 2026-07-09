@@ -4,18 +4,15 @@ Last updated: 2026-07-09
 
 ## Current focus
 
-**9.4 done (9.4.1–9.4.3).** Skills loader, `builtin/trace-slice`, and Mode A
-example are implemented. Optional 9.4.4 (`extract-skill`) remains.
+**R1 v1.0.0 release prep.** P0 trust fixes and P1 ergonomics builtins landed;
+tutorials and tag 0.1.0.0 remain.
 
 ## Done recently
 
-- **9.4 skills (2026-07-09):** `skills/` project loader; `builtin/trace-slice`
-  (§6.6.2); non-cacheable + agent-eligible; `sliceTrace` in `Trace`; tests
-  A38/A39 in `SkillSpec`; `examples/skills` Mode A workflow. 261 tests green.
-- **9.3 cross-run traces (2026-07-09):** `builtin/list-runs`,
-  `builtin/read-run-trace` (§6.5); A36/A37 in `CrossRunTraceSpec`.
-- **§6.5–§6.6 skills + traces spec (2026-07-09):** See
-  [skills-design.md](skills-design.md).
+- **R1 P0/P1 (2026-07-09):** D3 agent cache fix; `docs/caching-and-resume.md`;
+  `builtin/json-get`, `builtin/concat`, `builtin/log`; `hwfi cache clear`;
+  root + `summarise` READMEs; `while` example (`tick-stop`); doc sync.
+- **Release planning:** R1 backlog in [TASKS.md](TASKS.md).
 
 ## Blockers
 
@@ -23,4 +20,4 @@ example are implemented. Optional 9.4.4 (`extract-skill`) remains.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → optional 9.1, 9.4.4, 9.5–9.6, 9.9–9.14.
+[TASKS.md](TASKS.md) → R1.9 harden tutorial examples, R1.11 tutorials, R1.12 tag.

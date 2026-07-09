@@ -4,18 +4,14 @@
 --
 -- @
 -- hwfi check   \<project-dir>
--- hwfi run     \<project-dir> --workspace \<dir>
---              [--env-file \<path>]
---              [--input \<k>=\<v>]... [--input \<k>=@\<file.json>]...
---              [--input-json \<file.json>]
---              [--entry \<qname>]
+-- hwfi run     \<project-dir> --workspace \<dir> ...
 -- hwfi resume  \<workspace-dir> \<run-id>
 -- hwfi show    \<workspace-dir> \<run-id>
+-- hwfi cache clear \<workspace-dir> \<run-id>
 -- @
 --
--- @hwfi check@ is implemented end-to-end (parse + model-catalog presence +
--- type-check, spec §9, §7.3, A1/A2). The remaining commands are stubs that
--- report "not implemented" and exit non-zero until their milestones land.
+-- @hwfi check@ parses and type-checks the project (spec §9, §7.3, A1/A2).
+-- @run@, @resume@, @show@, and @cache clear@ are fully implemented.
 module Hwfi.Cli
   ( Command (..),
     CheckOpts (..),
@@ -60,6 +56,7 @@ import Hwfi.Runtime.ModelCatalog
   )
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
+    clearRunStepCache,
     openRunStore,
     phaseText,
     readRunMeta,
@@ -89,6 +86,7 @@ data Command
   | Run RunOpts
   | Resume ResumeOpts
   | Show ShowOpts
+  | CacheClear CacheClearOpts
   deriving stock (Eq, Show)
 
 -- | @hwfi check \<project-dir>@.
@@ -119,6 +117,12 @@ data ResumeOpts = ResumeOpts
 data ShowOpts = ShowOpts
   { workspaceDir :: FilePath,
     runId :: Text
+  }
+  deriving stock (Eq, Show)
+
+-- | @hwfi cache clear \<workspace-dir> \<run-id>@.
+newtype CacheClearOpts = CacheClearOpts
+  { cacheClearRun :: (FilePath, Text)
   }
   deriving stock (Eq, Show)
 
@@ -160,6 +164,12 @@ commandParser =
         <> command "run" (info (Run <$> runOpts) (progDesc "Run a workflow project"))
         <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume an interrupted run"))
         <> command "show" (info (Show <$> showOpts) (progDesc "Pretty-print a run's trace"))
+        <> command
+          "cache"
+          ( info
+              (hsubparser (command "clear" (info (CacheClear <$> cacheClearOpts) (progDesc "Drop cached step results for a run"))))
+              (progDesc "Manage run caches")
+          )
     )
 
 checkOpts :: Parser CheckOpts
@@ -193,6 +203,11 @@ showOpts =
     <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run")
     <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to display"))
 
+cacheClearOpts :: Parser CacheClearOpts
+cacheClearOpts =
+  CacheClearOpts
+    <$> ((,) <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run") <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id whose step cache to clear")))
+
 -- | Parse @argv@ and dispatch. Entry point for the executable.
 defaultMain :: IO ()
 defaultMain = execParser commandParserInfo >>= dispatch
@@ -204,6 +219,7 @@ dispatch = \case
   Run opts -> runRun opts
   Resume opts -> runResume opts
   Show opts -> runShow opts
+  CacheClear opts -> runCacheClear opts
 
 -- | Run @hwfi check@ (spec §9): parse the project, require a parseable
 -- @model-catalog.json@ (§7.3), and type-check. Prints nothing and exits 0 on
@@ -373,6 +389,19 @@ runShow opts = do
               Right m -> [renderUsageSummary m.rmUsage, ""]
               Left _ -> []
       TIO.putStr (T.unlines (metaLines <> map renderEvent events <> summary))
+
+-- | Drop every file under @steps/@ for a run so @hwfi resume@ re-executes
+-- cacheable steps (§13.1.4 subset).
+runCacheClear :: CacheClearOpts -> IO ()
+runCacheClear opts = do
+  let (wsDir, runId) = cacheClearRun opts
+  workspace <- newWorkspace wsDir
+  eStore <- openRunStore (workspaceRoot workspace) runId
+  case eStore of
+    Left e -> failMsgs ["error: " <> e]
+    Right store -> do
+      n <- clearRunStepCache store
+      TIO.putStrLn ("cleared " <> T.pack (show n) <> " cached step(s) for run " <> runId)
 
 -- Input assembly (§9) --------------------------------------------------------
 

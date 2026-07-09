@@ -2,127 +2,55 @@
 
 Active work only. Move completed sections to `docs/log/archive/` weekly.
 
-Grouped by milestone. Milestones are ordered; within a milestone, tasks are
-roughly ordered but can be reshuffled.
+## Now — v1.0.0 release (R1)
 
-## Later — optional items
+Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
+`coding/fix`). Engine core (M1–M9, H1, 9.2–9.4) is done.
 
-M1–M9 complete. Near-term work is optional / perf:
+### P0 — trust before tutorials
 
-- [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups) beyond the
-      allowlist + empty-env model (§7.5)
-- [ ] 9.4 Skill extraction from traces (§6.6):
-      - [ ] 9.4.4 (Optional) `builtin/extract-skill` stub writer (A40)
+- [x] R1.1 Pin/fix agent tool-result cache (D3): cache `valueToJson`, redact
+      trace/events only; `toolModelJson` on resume; test in `AgentSpec`
+- [x] R1.2 Author guide [caching-and-resume.md](caching-and-resume.md)
+- [x] R1.3 Doc sync: `spec.md` §6.5/§6.6 status, `tool-use.md` header,
+      `Hwfi.Cli` Haddock
+- [x] R1.4 Root `README.md` (install, `llm-simple` sibling dep, quick start)
+
+### P1 — ergonomics for tutorials
+
+- [x] R1.5 `builtin/json-get` + `builtin/concat` (§13.1.2 subset)
+- [x] R1.6 `builtin/log` — `workflow-log` events + `hwfi show`
+- [x] R1.7 `examples/summarise/README.md`
+- [x] R1.8 `while` example (`workflows/tick-stop` in `control-flow`)
+
+### P2 — release surface
+
+- [ ] R1.9 Harden tutorial examples: E2E `summarise` + `coding/fix` on clean
+      workspace; pin Ollama model names in READMEs
+- [x] R1.10 Minimal cache UX: `hwfi cache clear` subcommand
+- [ ] R1.11 Tutorials (user-authored): hello → check → agent → show/resume
+- [ ] R1.12 `CHANGELOG.md` + tag 0.1.0.0
+
+## Next — v1.1 (post-release)
+
+Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
+
+- [ ] 9.9 Control-flow error handling — `try`/recover; `par` continue-on-failure
+- [ ] 9.10 Data plumbing (remainder) — record map/filter/merge
+- [ ] 9.11 Simpler loop syntax — inline `while` bodies, `range` loops
+- [ ] 9.12 Cache invalidation UX (full) — invalidate-from-step policy
+- [ ] 9.14 `WorkflowRef` / `ToolRef` patterns — docs + checker hints
+- [ ] 9.4.4 `builtin/extract-skill` stub writer (A40)
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
-- [ ] 9.9 Control-flow error handling — `try`/recover; continue-on-failure
-      options for `par` (§13.1.1)
-- [ ] 9.10 Data plumbing — record map/filter/merge, `json-get`, string concat
-      (§13.1.2)
-- [ ] 9.11 Simpler loop syntax — inline `while` bodies, counted `range`
-      loops (§13.1.3)
-- [ ] 9.12 Cache invalidation UX — author-visible "invalidate from here"
-      policy/CLI (§13.1.4; auto invalidation via Merkle fingerprints is done)
-- [ ] 9.13 Structured logging in workflows — `log` step / `builtin/log`
-      (§13.1.5)
-- [ ] 9.14 `WorkflowRef` / `ToolRef` ergonomics — examples and patterns
-      (§13.1.6)
+- [ ] 9.1 OS-level `exec` isolation (namespaces/seccomp/cgroups)
+- [ ] D1 `ctx.trace` O(n²) rebuild perf
+- [ ] D2 directory-walk perf (`find-files`/`grep`)
+- [ ] `Optional<T>` / nullable env (spec §13)
 
 ## Done
 
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
-- [x] 9.4 Skill extraction (§6.6, 2026-07-09): `skills/` loader (9.4.1);
-      `builtin/trace-slice` + `sliceTrace` (9.4.2); A38/A39 in `SkillSpec`;
-      `examples/skills` Mode A workflow (9.4.3). 261 tests green.
-- [x] 9.3 Cross-run trace reading (§6.5, 2026-07-09): `builtin/list-runs`,
-      `builtin/read-run-trace`; `RunStore` helpers; non-cacheable;
-      agent-eligible; A36/A37 in `CrossRunTraceSpec`. 257 tests green.
-- [x] 9.2 `builtin/eval-workflow` (§6.4, 2026-07-09): parse+check+run dynamic
-      source; `{ ok, outputs, errors }` recoverable failures; non-cacheable;
-      agent-eligible; tests A34/A35. 249 tests green.
-- [x] A32 integration test (2026-07-09): `while` predicate with
-      `builtin/llm-agent` replays pinned decision on resume without
-      re-invoking the model (`ControlFlowSpec`; 245 tests).
-- [x] 8.g (Optional) serialise agent machine state to skip the replay re-walk
-      on resume (§8.2.1, 2026-07-09): checkpoint `{messages, next_round}`
-      under agent step-key; reload on resume; cleared on success; 244 tests.
-- [x] M9 `while` loops (§4.3, 2026-07-09): `WhileStmt` AST + parser;
-      checker (predicate `continue`/`reason`, `carry` scoping, callee graph);
-      `execWhile` with `#i/p/` / `#i/b/` scopes and decision-key resume;
-      `while-pred` trace + optional `loop-start.count`; tests A30/A31/A33;
-      parser test. 243 tests green.
-- [x] M1 Project skeleton (1.1–1.7): cabal project, `llm-simple` wiring,
-      hspec suite, CLI stub, `project.json` parser, `KeyStore`, model
-      catalog loader + provider-key validation. `cabal build`/`cabal test`
-      green. (2026-07-07)
-- [x] M2 Parsing and AST (2.1–2.9): AST + `Hwfi.Source`; markdown/
-      frontmatter/type/expr/step/type-alias/section/project parsers on
-      `commonmark-hs` + `megaparsec`; §9.1 diagnostics; 41 tests + parse
-      fixtures. (2026-07-07)
-- [x] M3 Type checker (3.1–3.12): `Hwfi.Type` (resolved types,
-      `structEq`/`assignable`); `Hwfi.Check.{Error,Builtins,Alias,Graph,
-      Expr,Decl}` + `checkProject`/`TypedProject`; alias + import cycle
-      detection, `@self#slug` checks, `Secret<T>`/interpolation rules,
-      return rule, step cacheability, Merkle fingerprints; `hwfi check`
-      wired; 71 tests + expected-error fixtures. (2026-07-07)
-- [x] M4 Runtime and built-in tools (4.1–4.9): `Hwfi.Runtime.{Value,Error,
-      Trace,Workspace,Gateways,Context,Eval,Builtins,Executor}`; linear step
-      interpreter with per-step ambient `ctx`, sandboxed workspace, all
-      `builtin/*` tools (file I/O + `llm-generate`/`llm-chat`/`llm-gen-object`
-      + `introspect`), sub-workflow calls, in-memory tracer; `hwfi run`
-      wired; `examples/summarise/`; 102 tests (A3/A6/A9/A11 covered).
-      (2026-07-07)
-- [x] M5 Persistence, tracing, resume (5.1–5.9): `Hwfi.Runtime.{RunStore,
-      StepKey}`; run dir + `run.json`; content-addressed step cache with
-      §8.1 step-key; append-only `trace.jsonl` + `eventFromJson`; resume
-      with `ctx.trace` reconstruction; secret redaction at the writer;
-      `.hwfi/lock`; `hwfi resume`/`show`; 128 tests (A4/A7/A13/A15 +
-      truncated-trace crash resume). (2026-07-07)
-- [x] M6 LLM tool-use (6.a–6.f): `Hwfi.Runtime.{Schema,Agent}`;
-      `builtin/llm-agent` + `builtin/llm-agent-object` agentic loop over a
-      reified round/tool-call machine; `Type -> JSON Schema` + agent
-      eligibility; bespoke agent type-check (`checkAgentCall`, cycle-safe
-      `reachesIntrospect`, non-cacheable); agent trace events + `hwfi show`
-      rendering; intra-step content-addressed model/tool-call caching reused
-      on resume (§8.2.1); `examples/research` agent workflows; 152 tests
-      (A17–A21). 6.g (state serialisation) deferred as optional. (2026-07-07)
-- [x] M7 mutation + exec tools (7.1–7.6): `Hwfi.Runtime.{Glob,Exec}`;
-      navigation (`read-file-slice`/`find-files`/`grep`) + mutation
-      (`edit-file`/`move-file`/`copy-file`/`remove-file`/`make-dir`/
-      `remove-dir`) as native builtins over the sandboxed `Workspace`;
-      `builtin/exec` via `typed-process` (argv-only, allowlist + env +
-      timeout + output caps from `project.json.exec`, non-zero exit as
-      value); `ExecPolicy` parsing + `hwfi check` rejection (A24); extended
-      `file-io`/`exec` trace events + `hwfi show`; `examples/coding`
-      (scripted + agentic); 188 tests (A22–A26 incl. durable-workspace
-      resume and an end-to-end agent coding loop). (2026-07-07)
-- [x] **DEC-1** Block-local identifier scoping (spec §4.2): `@id`s unique per
-      block; sibling branches/loops may reuse names; no shadowing outward.
-      Checker + tests + `examples/control-flow` updated. (2026-07-08)
-- [x] H1 Runtime hardening (H1.1–H1.5, code review 2026-07-08): threaded RTS
-      (§7.6); symlink sandbox containment (§7.1); model-catalog fingerprint in
-      one-shot LLM step-keys (§8.1); sub-workflow scope threading (§4.1); crash
-      handler with `PhaseCrashed` + `run-end` (`crashed`) (§8.2). Source:
-      [code-issues.md](code-issues.md). (2026-07-08)
-- [x] 9.7 (Optional) user-level key store (§7.2): `$XDG_CONFIG_HOME/hwfi/.env`
-      as lowest-precedence provider-key source (below process env);
-      `KeyStoreSpec` precedence tests. (2026-07-08)
-- [x] 9.8 (Optional) usage and cost accounting (§8.4): per-call `cost_usd`
-      on `llm-call`; run-scoped running total in `run.json` and
-      `ctx.run.usage`; optional `project.json` `budget.max_cost_usd`;
-      cached/resumed provider calls bill $0; `hwfi show` usage summary.
-      `Hwfi.Runtime.{RunUsage,Usage}`; tests A27–A29. (2026-07-08)
-- [x] M8 control flow (8.1–8.3): `Statement` extended with `SIf`/`SLoop`
-      (`Hwfi.Ast.Step`); `if`/`else`, `foreach`, `par(max = N)` parsing +
-      reserved words; recursive checker (branch typing + mandatory `else`,
-      `List<T>` iteration binding, `List<U>` loop result, no-shadow,
-      per-block id namespace); callee/fingerprint/exec-policy recursion
-      through blocks; `if-branch`/`loop-start`/`loop-iter`/`loop-end` trace
-      events + `MVar`-serialised tracer for `par`; executor `execIf`/`execLoop`
-      (sequential `foreach`, bounded order-preserving `par`) with a scope
-      prefix folded into step-keys for per-iteration resume; value-producing
-      block semantics; `examples/control-flow`; 210 tests incl.
-      `Hwfi.Runtime.ControlFlowSpec` (execution, ordering, `par` concurrency,
-      resume durability, checker rejections). (2026-07-08)
+- [x] M1–M9, H1, 9.2–9.4 (2026-07-07 – 2026-07-09): see git history / log archive.

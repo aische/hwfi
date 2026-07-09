@@ -894,11 +894,13 @@ buildTool :: Runtime -> RValue -> Either RuntimeError AdvertisedTool
 buildTool rt = \case
   VRef _ q -> do
     ins <- calleeInputTypes rt q
+    outs <- calleeOutputTypes rt q
     Right
       AdvertisedTool
         { atQName = q,
           atToolDef = advertisedToolDef q ins,
           atInputs = ins,
+          atOutputs = outs,
           atFingerprint = maybe "" fpText (fingerprintOfQName (rtProject rt) q)
         }
   _ -> Left (internalError "agent 'tools' element is not a ref value")
@@ -912,6 +914,15 @@ calleeInputTypes rt q
       Nothing -> Left (internalError ("no such builtin: " <> renderQName q))
   | otherwise = case lookupTyped q (rtProject rt) of
       Just td -> Right (rsigInputs (tdSignature td))
+      Nothing -> Left (internalError ("advertised tool not found: " <> renderQName q))
+
+calleeOutputTypes :: Runtime -> QName -> Either RuntimeError [(Ident, Type)]
+calleeOutputTypes rt q
+  | isBuiltin q = case lookupBuiltin q of
+      Just c -> Right (calleeOutputs c)
+      Nothing -> Left (internalError ("no such builtin: " <> renderQName q))
+  | otherwise = case lookupTyped q (rtProject rt) of
+      Just td -> Right (rsigOutputs (tdSignature td))
       Nothing -> Left (internalError ("advertised tool not found: " <> renderQName q))
 
 builtinEnv :: Runtime -> StepRef -> Map Ident RValue -> Text -> BuiltinEnv

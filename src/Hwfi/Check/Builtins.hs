@@ -18,6 +18,9 @@ module Hwfi.Check.Builtins
     listRunsQName,
     readRunTraceQName,
     traceSliceQName,
+    logQName,
+    jsonGetQName,
+    concatQName,
     isAgentBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
@@ -74,6 +77,18 @@ readRunTraceQName = qnameFromText "builtin/read-run-trace"
 -- | The @builtin/trace-slice@ qname (§6.6): extract events for one logical step.
 traceSliceQName :: QName
 traceSliceQName = qnameFromText "builtin/trace-slice"
+
+-- | The @builtin/log@ qname (§13.1.5): structured workflow logging.
+logQName :: QName
+logQName = qnameFromText "builtin/log"
+
+-- | The @builtin/json-get@ qname (§13.1.2): JSON path lookup.
+jsonGetQName :: QName
+jsonGetQName = qnameFromText "builtin/json-get"
+
+-- | The @builtin/concat@ qname (§13.1.2): string concatenation.
+concatQName :: QName
+concatQName = qnameFromText "builtin/concat"
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
 -- bespoke argument checking (the @tools@ argument is a heterogeneous list of
@@ -210,7 +225,16 @@ builtinCallees =
           ("step_id", TyString),
           ("include_nested", TyBool)
         ]
-        [("ok", TyBool), ("events", TyList TyTraceEvent), ("error", TyString)]
+        [("ok", TyBool), ("events", TyList TyTraceEvent), ("error", TyString)],
+      builtin
+        "builtin/json-get"
+        [("json", TyJson), ("path", TyString)]
+        [("ok", TyBool), ("value", TyJson), ("error", TyString)],
+      builtin "builtin/concat" [("parts", TyList TyString)] [("text", TyString)],
+      builtin
+        "builtin/log"
+        [("message", TyString), ("fields", TyJson)]
+        [("logged", TyBool)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

@@ -93,3 +93,19 @@ cabal run hwfi -- resume /tmp/cf-ws <run-id>
 
 The manifest still contains exactly three lines and no command is re-run — every
 iteration's result is served from the cache.
+
+## `while` (predicate/body loop, §4.3)
+
+A second entrypoint demonstrates the `while` construct with external predicate
+and body workflows:
+
+```bash
+cabal run hwfi -- run examples/control-flow \
+  --workspace /tmp/cf-ws \
+  --entry workflows/tick-stop
+```
+
+Output: `{"done":true}`. The predicate returns `continue = false` on the first
+evaluation, so the body never runs. See `workflows/tick-stop.md`,
+`workflows/tick-pred.md`, and `workflows/tick-body.md` for the split
+predicate/body pattern and required `predicate_args` / `body_args` records.

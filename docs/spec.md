@@ -1206,7 +1206,7 @@ wrapper or by including a `ToolRef` to such a wrapper in the agent's
 
 ### 6.5 Cross-run trace reading
 
-**Status: specified (task 9.3), not implemented.**
+**Status: implemented (2026-07-09, task 9.3).**
 
 Today `ctx.trace` and `builtin/introspect` expose only the **current**
 logical run, up to the executing step (§5.2, §8.3.5). Cross-run reading
@@ -1262,7 +1262,7 @@ Each builtin emits a `file-io` trace event with op `"list"` (for
 
 ### 6.6 Skills (trace-derived reusable declarations)
 
-**Status: specified (task 9.4), not implemented.**
+**Status: implemented (2026-07-09, tasks 9.4.1–9.4.3). Mode B (`extract-skill`) optional.**
 
 A **skill** is a normal project declaration (tool or workflow markdown
 file) plus optional **provenance metadata** recording which run and step
@@ -2372,8 +2372,8 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
   **no longer deferred**: it is specified in §6.2/§6.3/§7.5. What remains
   deferred is only stronger per-process containment beyond the allowlist +
   empty-environment model.)
-- Cross-run trace reading — specified §6.5 (task 9.3); not implemented.
-- Skill extraction from traces — specified §6.6 (task 9.4); not implemented.
+- Cross-run trace reading — §6.5 (implemented 2026-07-09).
+- Skill extraction from traces — §6.6 Mode A (implemented 2026-07-09); Mode B optional.
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).

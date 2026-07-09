@@ -45,10 +45,10 @@ when long agent runs hurt.
 
 `walkEntries` left-nested `(<>)`; deferred in spec §14.
 
-### D3. Agent tool results cached redacted — **open (design)**
+### D3. Agent tool results cached redacted — **fixed (R1.1, 2026-07-09)**
 
-Model receives redacted JSON from tool cache; may be intentional (§5.5). Document
-at call site or cache real value and redact trace only.
+Cache stores actual `valueToJson`; trace/events redact; model receives
+`redactedJson` via `toolModelJson` on cache hits. Test in `AgentSpec`.
 
 ### D4. Sub-workflow scope reset — **fixed (H1.4)**
 
