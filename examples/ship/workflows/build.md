@@ -86,7 +86,7 @@ Implement this task in the workspace. Discover and load stack skills first.""",
     builtin/exec,
     tools/vite-dev-smoke
   ],
-  max_rounds = 16
+  max_rounds = 30
 ) @build
 return { answer = ${result.text}, rounds = ${result.rounds} }
 ```
