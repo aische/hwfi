@@ -22,7 +22,7 @@ A command-line workflow engine, written in Haskell (GHC2021), that:
 6. Is designed so that agent steps can synthesize new workflows at runtime,
    type-check them against the same checker used at load time, and execute
    them via `builtin/eval-workflow` (§6.4). Reading prior runs' traces and
-   extracting reusable skills are specified in §6.5–§6.6 (not yet implemented).
+   extracting reusable skills are specified in §6.5–§6.6 (implemented).
 
 Non-goals for v1: GUI, remote/distributed execution, multi-tenant isolation,
 a package registry for workflows.
@@ -862,6 +862,18 @@ Provided by the engine, addressed as `builtin/<name>`:
   `{ source: String, inputs: Json }
    -> { ok: Bool, outputs: Json, errors: List<String> }` — parse,
   type-check, and run a workflow definition produced at runtime (§6.4).
+- `builtin/json-get` :
+  `{ json: Json, path: String }
+   -> { ok: Bool, value: Json, error: String }` — dot-separated object-key
+  lookup (e.g. `"user.name"`). Missing keys or non-object traversal return
+  `ok = false` with an `error` message; does not abort the enclosing run.
+- `builtin/concat` :
+  `{ parts: List<String> } -> { text: String }` — concatenate strings in
+  order.
+- `builtin/log` :
+  `{ message: String, fields: Json } -> { logged: Bool }` — emit a
+  `workflow-log` trace event (§8.3.2) with secrets in `fields` redacted
+  (§8.3.4). Non-cacheable (§8.1).
 
 For all LLM tools, `model` names an entry in the **model catalog** (§7.3),
 not a raw provider model id. Retry, timeout, temperature, and pricing
@@ -959,12 +971,15 @@ When the model emits `ToolCall { name, arguments }`:
    so its `step-start`/`step-end`, `llm-call`, and `file-io` events nest
    under the agent step (§8.3.3.6) and its effects go through the sandboxed
    `Workspace` (§7.1). The model never touches the filesystem directly.
-4. The result `RValue` is serialised to **redacted** JSON as the tool-message
-   content for the next round (§8.3.4). Intra-step tool-call caches store this
-   same redacted form so resume replays exactly what the model originally saw;
-   secrets in a tool result therefore appear as `<secret:…>` to the model on
-   both the fresh and resume paths. Scripted (non-agent) steps cache the actual
-   `RValue` instead (§8.1).
+4. The result `RValue` is consumed in three ways:
+   - **Tool message to the model** — redacted JSON (§8.3.4), including on
+     resume when served from the intra-step cache (`toolModelJson`).
+   - **Intra-step tool cache** (`steps/*.json`) — actual non-redacted JSON
+     (`valueToJson`), so resume can reconstruct the typed value and re-apply
+     redaction for the model without re-running the callee (§8.2.1).
+   - **Trace** (`agent-tool-result`, nested `step-end`) — redacted JSON as
+     persisted (§8.3.4). Scripted (non-agent) steps cache the actual `RValue`
+     at the step level instead (§8.1).
 
 #### 6.1.3 Terminating `submit` tool for typed output
 
@@ -1430,6 +1445,20 @@ implementation adds `skills/` to the project parser roots (task 9.4.1).
 
 Extended rationale and example flows: [skills-design.md](skills-design.md).
 
+### 6.7 Data plumbing and workflow logging
+
+**Status: implemented (R1, tasks 9.5 subset).**
+
+The builtins `builtin/json-get`, `builtin/concat`, and `builtin/log` are
+listed in the §6 builtin table above. They reduce friction when shaping data
+between steps without giant string interpolations or ad-hoc LLM calls.
+
+- `json-get` and `concat` are **cacheable** (§8.1).
+- `log` is **non-cacheable**: authors expect a fresh `workflow-log` line when
+  the step re-executes on resume.
+
+Further record operations remain in the backlog (§13.1.2).
+
 ## 7. Workspace, project, and sandboxing
 
 ### 7.1 Filesystem layout at runtime
@@ -1536,9 +1565,8 @@ Editing a catalog entry (provider model id, temperature, token cap,
 timeouts, retry policy) must change the **model-catalog fingerprint**
 used in step-key hashing (§8.1) and agent intra-step model sub-keys
 (§8.2.1), so cached one-shot LLM step results are invalidated on
-`hwfi resume` after a catalog change. When §8.4 is implemented, `pricing`
-changes do not rewrite historical `llm-call` events; they affect only new
-live calls.
+`hwfi resume` after a catalog change. `pricing` changes do not rewrite
+historical `llm-call` events; they affect only new live calls (§8.4).
 
 Provider–key linking is validated at startup: for every model referenced
 in the catalog, the corresponding provider key must be available from
@@ -1679,6 +1707,11 @@ A step that references any volatile `ctx` field, or calls
 resume. This is statically decidable at type-check time and recorded on
 the AST node.
 
+The following builtins are also **always non-cacheable** regardless of
+arguments: `builtin/eval-workflow`, `builtin/list-runs`,
+`builtin/read-run-trace`, `builtin/trace-slice`, and `builtin/log`
+(§6.5, §6.7).
+
 An agent step (`builtin/llm-agent` / `builtin/llm-agent-object`, §6.1) is
 **also non-cacheable as a whole**: its behaviour — which tools it calls, in
 what order, with what arguments — is chosen by the model and is not a
@@ -1687,6 +1720,8 @@ function of its resolved arguments, so it cannot be a cacheable black box.
 units are cached instead (§8.2.1).
 
 ### 8.2 Resume semantics
+
+Author-facing guide: [caching-and-resume.md](caching-and-resume.md).
 
 - Cacheable steps: skipped on resume if their `step-key` has a persisted
   result. A skipped step emits **no new trace events**; its original
@@ -1757,11 +1792,10 @@ Two kinds of unit are cached under the enclosing agent step-key:
   tool results, so the key chain is self-consistent.
 
 **Canonicalization caveat.** Sub-keys hash the **actual** message content
-and resolved args (as stored in `steps/*.json`, non-redacted, §8.3.4 /
-STATUS notes), never the trace's `redactedJson` form, and use
-`canonicalJson` so turn ordering, tool-result serialisation, and JSON
-field order do not perturb the key. Any instability here silently turns
-cache hits into misses on resume.
+and resolved args (as stored in `steps/*.json`, non-redacted — §6.1.2),
+never the trace's redacted form, and use `canonicalJson` so turn ordering,
+tool-result serialisation, and JSON field order do not perturb the key. Any
+instability here silently turns cache hits into misses on resume.
 
 **Resume behaviour.** The loop re-drives from round 0 but consults the
 cache (only on resume, per §8.2):
@@ -1769,8 +1803,9 @@ cache (only on resume, per §8.2):
 - Each model call: on a hit, reuse the cached assistant turn *including the
   tool calls it chose*, without paying the provider — this makes the
   nondeterministic replay follow the **same branch** deterministically.
-- Each tool call: on a hit, reuse the cached result without re-running its
-  side effects.
+- Each tool call: on a hit, reuse the cached non-redacted result without
+  re-running its side effects; the model still receives the redacted tool
+  message (§6.1.2).
 - A miss anywhere re-runs from that point; every downstream sub-key then
   changes and re-runs too — exactly the existing "cacheable ⇒ skip, else
   re-run" rule applied one level down.
@@ -1837,8 +1872,8 @@ TraceEvent =
       prompt     : String,         -- may be redacted per §5.5
       response   : String,         -- may be redacted per §5.5
       tokens_in  : Int,
-      tokens_out : Int
-      -- cost_usd : Double         -- [optional v1.1, §8.4] this call only
+      tokens_out : Int,
+      cost_usd   : Double         -- this call only (§8.4)
     }
   | FileIo {
       tag     : "file-io",
@@ -1924,6 +1959,12 @@ TraceEvent =
       continue  : Bool,
       reason    : String
     }
+  | WorkflowLog {
+      tag     : "workflow-log",
+      seq, at, qname, step_id,
+      message : String,
+      fields  : Json              -- secrets redacted (§8.3.4)
+    }
   | Resumed {
       tag      : "resumed",
       seq, at,
@@ -1982,7 +2023,9 @@ A trace represents one *logical run*, which may span several execution
    `AgentRoundStart`/`AgentRoundEnd` pair per model round (with strictly
    increasing `round`), and within a round zero or more
    `AgentToolCall`/`AgentToolResult` pairs matched by `(round,
-   call_index)`. Each round's model generation appears as an `LlmCall`
+   call_index)`. A `builtin/log` step emits `workflow-log` between its
+   `StepStart` and terminal. Each round's model generation appears as an
+   `LlmCall`
    between its `AgentRoundStart` and the round's first tool call (or
    `AgentRoundEnd`). Each tool call runs a nested step (§6.1.2), so that
    callee's own `StepStart`/inner/`StepEnd` events appear between the
@@ -2018,13 +2061,12 @@ crash happened to occur.
 Consumers that want per-attempt segmentation can split on `Resumed`
 markers; consumers that want the logical-run view can ignore them.
 
-### 8.4 Usage and cost accounting **[optional v1.1]**
+### 8.4 Usage and cost accounting
 
-**Status: not implemented in v1.** v1 records per-call token counts on
-`llm-call` trace events (§8.3.2) and stores per-million pricing in
-`model-catalog.json` (§7.3), but does not compute dollar cost, maintain a
-running total, or enforce budgets. This section specifies the intended
-behaviour when the feature is added.
+**Status: implemented (R1, task 9.8).** v1 records per-call token counts and
+`cost_usd` on `llm-call` trace events (§8.3.2), maintains a running total in
+`run.json` and `ctx.run.usage`, and supports an optional `project.json`
+budget ceiling.
 
 #### 8.4.1 Scope
 
@@ -2109,7 +2151,7 @@ it makes the step non-cacheable, same as `ctx.trace`.
 
 #### 8.4.5 Trace extension
 
-Each billed `llm-call` event gains a `cost_usd` field:
+Each billed `llm-call` event includes a `cost_usd` field:
 
 ```
 | LlmCall {
@@ -2163,12 +2205,14 @@ hwfi run     <project-dir> --workspace <dir>
              [--input-json <file.json>]
              [--entry <qname>]
 hwfi resume  <workspace-dir> <run-id>
-hwfi show    <workspace-dir> <run-id>          # pretty-print trace
+hwfi show    <workspace-dir> <run-id>          # pretty-print trace + usage
+hwfi cache clear <workspace-dir> <run-id>      # drop all steps/*.json cache
 ```
 
-When §8.4 is implemented, `hwfi show` also prints the run's accumulated
-`usage` (tokens and `cost_usd`) from `run.json` and/or a rollup over
-`llm-call` events.
+`hwfi show` prints the run's accumulated `usage` (tokens and `cost_usd`) from
+`run.json` after the trace. `hwfi cache clear` deletes every file under
+`<workspace>/.hwfi/runs/<run-id>/steps/` so the next `hwfi resume` re-executes
+cacheable steps (subset of §13.1.4; does not delete trace or run metadata).
 
 - `hwfi check` performs parse + type-check only, exits non-zero on any
   error.
@@ -2314,26 +2358,18 @@ A32. A `while` whose predicate workflow contains `builtin/llm-agent` replays the
     same `continue` decision on resume without re-invoking the predicate (§4.3.5).
 A33. `${carry}` in `predicate_args`/`body_args` is rejected at `hwfi check`
     when it would be in scope for iteration 0 (§4.3.4).
-
-The following are specified for optional v1.1 (§6.4, §8.4) and are not
-required in v1:
-
-A34. `builtin/eval-workflow` with ill-typed `source` returns
-    `{ ok = false, errors = [...] }` and does not abort the enclosing run;
-    the workflow body is not executed.
-A35. When `eval-workflow` is an agent tool and returns `ok = false`, the
-    agent loop continues and the model receives the error diagnostics in
-    the tool message (§6.4.3).
 A27. A live `builtin/llm-generate` call increments `run.json` `usage.cost_usd`
     and `ctx.run.usage.cost_usd`; a cache hit on resume does not.
 A28. An agent model round served from intra-step cache on resume emits no
     new `llm-call` and does not increment the running total.
 A29. With `project.json` `budget.max_cost_usd` set, a provider call that
     would exceed the ceiling aborts before the request is sent.
-
-The following are specified for optional v1.1 (§6.5, §6.6) and are not
-yet implemented:
-
+A34. `builtin/eval-workflow` with ill-typed `source` returns
+    `{ ok = false, errors = [...] }` and does not abort the enclosing run;
+    the workflow body is not executed.
+A35. When `eval-workflow` is an agent tool and returns `ok = false`, the
+    agent loop continues and the model receives the error diagnostics in
+    the tool message (§6.4.3).
 A36. `builtin/list-runs` returns prior runs for the current workspace,
     most recent first, without reading outside `.hwfi/runs/`.
 A37. `builtin/read-run-trace` with a missing `run_id` returns
@@ -2343,6 +2379,17 @@ A38. `builtin/trace-slice` with `include_nested = true` on an agent step
     includes `agent-tool-call` / `agent-tool-result` events for that step.
 A39. A declaration under `skills/` type-checks and is callable like an
     equivalent `tools/` declaration once loaded (§6.6.1).
+A41. `builtin/json-get` returns `{ ok = true, value = ... }` for an
+    existing dot-separated path and `{ ok = false, error = ... }` for a
+    missing key without aborting the run.
+A42. `builtin/concat` joins a list of strings into `text`.
+A43. `builtin/log` emits a `workflow-log` trace event with redacted `fields`
+    and is re-executed on resume (non-cacheable).
+A44. `hwfi cache clear` removes cached step results so a subsequent
+    `hwfi resume` re-runs previously cached steps.
+
+The following are specified but not yet implemented:
+
 A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
     refuses overwrite when `allow_overwrite` is false.
 
@@ -2372,8 +2419,9 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
   **no longer deferred**: it is specified in §6.2/§6.3/§7.5. What remains
   deferred is only stronger per-process containment beyond the allowlist +
   empty-environment model.)
-- Cross-run trace reading — §6.5 (implemented 2026-07-09).
-- Skill extraction from traces — §6.6 Mode A (implemented 2026-07-09); Mode B optional.
+- Cross-run trace reading — §6.5 (implemented).
+- Skill extraction from traces — §6.6 Mode A (implemented); Mode B
+  (`builtin/extract-skill`) optional / not implemented.
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
@@ -2382,12 +2430,9 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
   recoverable-error boundary (§6.1.4), which turns a bad tool call into a
   tool message the model can retry; it does not expose a general
   `try`/recover construct to workflows. Full backlog: §13.1.1.
-- **Usage and cost accounting** — running dollar cost, `ctx.run.usage`,
-  per-call `cost_usd` on `llm-call`, optional `project.json` budget;
-  cached/resumed provider calls are free. Full design: §8.4.
-- **Author capability backlog (post-v1)** — data plumbing, loop sugar,
-  cache-invalidation UX, structured logging, and `WorkflowRef` patterns.
-  Prioritized list: §13.1.
+- **Author capability backlog (post-v1)** — remaining data plumbing, loop
+  sugar, cache-invalidation UX, and `WorkflowRef` patterns. Prioritized
+  list: §13.1.
 
 ### 13.1 Author capability backlog (post-v1)
 
@@ -2427,10 +2472,11 @@ giant string interpolations or ad-hoc LLM calls:
 
 - **Record operations** — map/filter/merge/update fields on
   `Record<{…}>` values (expression forms and/or small builtins).
-- **JSON path access** — e.g. `json-get` builtin or typed path expression
-  over `Json` values (with clear error behaviour on missing keys).
-- **String concatenation** — concatenate strings (and optionally coerce
-  scalars) without JSON-encoding entire records via interpolation (§3.2.1).
+  **[deferred]**
+- **JSON path access** — `builtin/json-get` over `Json` values with dot-separated
+  keys and recoverable `{ ok, error }` on missing paths. **[implemented, §6.7]**
+- **String concatenation** — `builtin/concat` concatenates strings without
+  JSON-encoding entire records via interpolation (§3.2.1). **[implemented, §6.7]**
 
 #### 13.1.3 Simpler loop syntax
 
@@ -2450,28 +2496,28 @@ Merkle `callee-fingerprint` in the step-key (§8.1) changes when any transitive
 callee changes, so resume after an edit does not silently reuse stale step
 files for changed code.
 
+**Partial implementation:** `hwfi cache clear <workspace-dir> <run-id>` drops
+all files under `steps/` for a run so the next resume re-executes every
+cacheable step (§9). Author guide: [caching-and-resume.md](caching-and-resume.md).
+
 **Deferred UX/policy:**
 
-- Make **"I changed code — invalidate from here"** obvious and safe for
-  authors who resume long runs: e.g. a documented rule, CLI flag, or
-  `hwfi` subcommand to drop cached steps from a given step-key / qname
-  onward without wiping the whole run dir.
+- **Invalidate from step** — drop cached steps from a given step-key / qname
+  onward without wiping the whole run dir (finer than `cache clear`).
 - Clarify in docs/examples when automatic fingerprint invalidation is
   sufficient vs when authors must manually bust cache (e.g. edited
   workspace files that are not part of declaration fingerprints, model
-  catalog changes for agent steps, D3 redaction semantics).
+  catalog changes for agent steps).
 
 #### 13.1.5 Observability in workflows
 
 **Priority: 5.** `ctx.trace` reconstructs full history (§8.3.5) but is heavy
 for authoring and debugging:
 
-- A **structured logging** step — statement and/or `builtin/log` — that
-  emits named, typed fields to `trace.jsonl` (and optionally stdout) at
-  a chosen point in a workflow, without reading the entire trace in
-  expressions.
-- Should integrate with secret redaction (§8.3.4) and nest under sub-workflow
-  / agent events like other step kinds.
+- **`builtin/log`** — emits a `workflow-log` trace event (§8.3.2) with
+  named fields in `fields` (secrets redacted, §8.3.4). Non-cacheable so
+  resume replays log lines. **[implemented, §6.7]**
+- Optional stdout mirroring and richer field typing remain deferred.
 
 #### 13.1.6 Dynamic dispatch ergonomics (`WorkflowRef` / `ToolRef`)
 
@@ -2501,5 +2547,4 @@ for authoring and debugging:
 **Deferred hardening** (acceptable for v1; track in [TASKS.md](TASKS.md) if
 needed): O(n²) `ctx.trace` rebuild per step (§8.3.5, perf); O(n²)
 `find-files`/`grep` walk; `read-file-slice` re-reads whole file per page
-(§6.2, bounded by read cap); agent tool-result redaction to model
-([code-issues.md](code-issues.md) D3).
+(§6.2, bounded by read cap).

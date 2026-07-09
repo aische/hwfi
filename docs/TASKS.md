@@ -12,8 +12,8 @@ Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
 - [x] R1.1 Pin/fix agent tool-result cache (D3): cache `valueToJson`, redact
       trace/events only; `toolModelJson` on resume; test in `AgentSpec`
 - [x] R1.2 Author guide [caching-and-resume.md](caching-and-resume.md)
-- [x] R1.3 Doc sync: `spec.md` §6.5/§6.6 status, `tool-use.md` header,
-      `Hwfi.Cli` Haddock
+- [x] R1.3 Doc sync: `spec.md` (§6.1.2 D3, §6.7, §8.4, §9, §11, §13.1),
+      `tool-use.md` header, `Hwfi.Cli` Haddock
 - [x] R1.4 Root `README.md` (install, `llm-simple` sibling dep, quick start)
 
 ### P1 — ergonomics for tutorials

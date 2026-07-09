@@ -78,5 +78,4 @@ Tracked in [spec.md](spec.md) §14 deferred hardening and [TASKS.md](TASKS.md):
 
 - O(n²) `ctx.trace` rebuild per step (perf)
 - O(n²) `find-files` / `grep` walk (perf)
-- Agent tool results redacted before model (D3; document or fix)
 - Property tests for step-keys, glob, trace round-trip (nice-to-have)
