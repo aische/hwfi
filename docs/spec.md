@@ -2560,8 +2560,8 @@ available, the source location of the step block.
 ## 10. Dependencies and tooling
 
 - GHC2021.
-- Cabal project. `llm-simple` referenced as a local `packages:` entry
-  pointing at `../llm-simple` via `cabal.project`.
+- Cabal project. `llm-simple` `^>=0.1.0.1` from Hackage (`build-depends` in
+  `hwfi.cabal`).
 - Test framework: `hspec`.
 - Markdown parser: `commonmark-hs`.
 - Other libraries expected: `aeson`, `text`, `bytestring`, `containers`,

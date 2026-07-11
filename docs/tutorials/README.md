@@ -25,8 +25,8 @@ for detail.
 
 ## Prerequisites
 
-- GHC 9.x and **[llm-simple](https://github.com/aische/llm-simple)** v0.1.0.0 as a
-  sibling package — see root [README.md](../../README.md#prerequisites)
+- GHC 9.x and **[llm-simple](https://hackage.haskell.org/package/llm-simple-0.1.0.1)**
+  `^>=0.1.0.1` from Hackage — see root [README.md](../../README.md#prerequisites)
 - Built `hwfi` from this repo (`cabal build`)
 - For tutorials 3–4: `DEEPSEEK_API_KEY` (see each example's `.env.example`)
 

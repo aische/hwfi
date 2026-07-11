@@ -25,10 +25,8 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 ## Prerequisites
 
 - GHC 9.x (GHC2021)
-- **[llm-simple](https://github.com/aische/llm-simple)** — required, **not on
-  Hackage**. Clone from GitHub (use **v0.1.0.0** with this release) as a sibling
-  of this repo so the layout is `hwfi/` and `llm-simple/` side by side;
-  `cabal.project` references `../llm-simple`. All LLM provider calls
+- **[llm-simple](https://hackage.haskell.org/package/llm-simple-0.1.0.1)**
+  `^>=0.1.0.1` — resolved from Hackage by Cabal. All LLM provider calls
   (`llm-generate`, `llm-chat`, `llm-agent`, …) go through `llm-simple`.
 - For hosted providers: API keys via project `.env`, `--env-file`, or
   `$XDG_CONFIG_HOME/hwfi/.env` (tutorial examples use **DeepSeek**;
@@ -37,7 +35,7 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 ## Build
 
 ```bash
-cd /path/to/hwfi   # with ../llm-simple present
+cd /path/to/hwfi
 cabal build
 cabal test
 ```

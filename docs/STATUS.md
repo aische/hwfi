@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-07-10
+Last updated: 2026-07-11
 
 ## Current focus
 
@@ -8,22 +8,16 @@ Last updated: 2026-07-10
 
 ## Done recently
 
+- **`llm-simple` from Hackage (2026-07-11):** dropped `../llm-simple` from
+  `cabal.project`; pinned `^>=0.1.0.1` in `hwfi.cabal`; README, tutorials hub,
+  `spec.md`, `idea.md` updated.
 - **README accuracy pass (2026-07-10):** example tiers aligned with tutorials
-  hub; test-suite wording (not CI); `llm-simple` Hackage vs GitHub; ship
-  experimental markers in tutorials/workflow-reference.
-- **Root + ship README split (2026-07-10):** `llm-simple` unpublished dep and
-  example tiers in root README; ship README trimmed to capstone-specific ops.
-- **`examples/ship/README.md` (2026-07-10):** experimental status, run
-  expectations, troubleshooting (ship-specific).
+  hub; test-suite wording (not CI); ship experimental markers in
+  tutorials/workflow-reference.
+- **Root + ship README split (2026-07-10):** example tiers in root README;
+  ship README trimmed to capstone-specific ops.
 - **Tutorials (2026-07-10):** `docs/tutorials/` hub + hello/check/agent/show-resume;
   new `examples/hello` (no LLM); README and workflow-reference links; E2E tests.
-- **Workflow reference expansion (2026-07-10):** `llm-agent-object` / `submit`,
-  recoverable vs fatal agent errors, tool schema translation, skill discover/load
-  limits, `eval-workflow`, cross-run trace, secrets/`ctx.env`, caching fixes,
-  `examples/research` + `skills-runtime` patterns.
-- **`builtin/json-values` (2026-07-10):** object/array → `List<Json>` for
-  `foreach`; numeric key sort; null filtering. `examples/ship` `plan-tasks`
-  bridge simplified.
 
 ## Blockers
 
