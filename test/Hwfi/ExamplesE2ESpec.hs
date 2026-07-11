@@ -1,11 +1,8 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 module Hwfi.ExamplesE2ESpec (spec) where
 
 import Control.Exception (SomeException, catch, throwIO, try)
 import Control.Monad (unless)
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)

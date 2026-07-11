@@ -1,9 +1,7 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 module Hwfi.Runtime.CrossRunTraceSpec (spec) where
 
 import Control.Exception (bracket)
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value (..), object)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -53,7 +51,7 @@ spec = describe "cross-run trace reading (§6.5)" $ do
     it "readRunTrace resolves current against the supplied run id" $
       withRunsFixture $ \wsRoot -> do
         store <- createRunStore wsRoot "run-mid"
-        bracketTrace store $ \_ tracer ->
+        _ <-bracketTrace store $ \_ tracer ->
           emit tracer (RunStart "run-mid" "workflows/main" (Object mempty) "abc")
         events <- readRunTrace wsRoot "run-mid" "current"
         fmap length events `shouldBe` Right 1
@@ -169,7 +167,7 @@ seedPriorRuns root = do
   writeRun root "run-mid" "2026-07-02T00:00:00.000Z" PhaseCompleted
   writeRun root "run-new" "2026-07-03T00:00:00.000Z" PhaseCompleted
   oldStore <- createRunStore root "run-old"
-  bracketTrace oldStore $ \h tracer -> do
+  bracketTrace oldStore $ \_h tracer -> do
     _ <- emit tracer (RunStart "run-old" "workflows/main" (Object mempty) "abc")
     pure ()
 
