@@ -43,16 +43,19 @@ import Data.Aeson (Value (..), fromJSON, object, toJSON, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
+import Data.Either (fromRight)
+import Data.Functor ((<&>))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
-import Data.Functor ((<&>))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
+import Hwfi.Ast.Skill (SkillKind (..))
+import Hwfi.Check.Builtins (loadSkillQName)
 import Hwfi.Compat
   ( ChatResponse (..),
     ContentBlock (..),
@@ -67,27 +70,24 @@ import Hwfi.Compat
     llmHooks,
     noHooks,
   )
-import Hwfi.Check.Builtins (loadSkillQName)
+import Hwfi.Project.Manifest (SkillPolicy (..))
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), llmError)
 import Hwfi.Runtime.Gateways (primaryModel)
 import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, deleteCachedResult, lookupCachedResult)
 import Hwfi.Runtime.Schema (recordSchema)
+import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
 import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (EventBody (..), Tracer, emit)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
-import Hwfi.Ast.Skill (SkillKind (..))
-import Hwfi.Project.Manifest (SkillPolicy (..))
-import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
+import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
 import Hwfi.SkillCatalog
   ( SkillCatalog,
     SkillEntry (..),
     lookupSkillEntry,
     skillKindText,
   )
-import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
 import Hwfi.Type (Type (..))
 import LLM (defaultDebugHooks)
-import Data.Either (fromRight)
 
 -- | One tool advertised to the model: the resolved ref's qname, its provider
 -- 'ToolDef' (schema-translated inputs, ?6.1.1), the declared input\/output
@@ -380,43 +380,43 @@ runAdvertisedCall env _spec skillState roundIx callIx ensureStart tc tool
       runLoadSkillCall env skillState roundIx callIx ensureStart tc
   | otherwise =
       case coerceArgs (atInputs tool) tc.tcArguments of
-    Left reason -> do
-      -- ?6.1.4: malformed/ill-typed arguments are recoverable.
-      ensureStart
-      emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
-      recoverable env roundIx callIx (renderQName (atQName tool)) tc ("invalid arguments: " <> reason)
-    Right resolved -> do
-      let argsJson = valueToJson (VRecord resolved)
-          key = toolSubKey env roundIx callIx (atFingerprint tool) argsJson
-      mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
-      case mCached of
-        Just cachedJson ->
-          -- Cache hit: no new events; feed the model a redacted view (D3).
-          pure (CallResult (toolResult tc (toolModelJson tool cachedJson)))
-        Nothing -> do
+        Left reason -> do
+          -- ?6.1.4: malformed/ill-typed arguments are recoverable.
           ensureStart
           emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
-          let sid = toolStepId env roundIx callIx
-          void $ emit (aeTracer env) (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) True)
-          dr <- aeDispatch env (atQName tool) sid resolved
-          case dr of
-            Left err
-              | reKind err == KInternal -> do
-                  void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
-                  pure (CallFatal err)
-              | otherwise -> do
-                  -- ?6.1.4: a tool result the callee surfaces as an error is recoverable.
-                  void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
-                  recoverable env roundIx callIx (renderQName (atQName tool)) tc ("tool error: " <> reMessage err)
-            Right result -> do
-              let actual = valueToJson result
-                  redacted = redactedJson result
-              void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0)
-              -- Cache actual values (�8.2.1); redact only in trace/events (D3).
-              cacheStepResult (aeStore env) key actual
-              void $
-                emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
-              pure (CallResult (toolResult tc (canonicalJson redacted)))
+          recoverable env roundIx callIx (renderQName (atQName tool)) tc ("invalid arguments: " <> reason)
+        Right resolved -> do
+          let argsJson = valueToJson (VRecord resolved)
+              key = toolSubKey env roundIx callIx (atFingerprint tool) argsJson
+          mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
+          case mCached of
+            Just cachedJson ->
+              -- Cache hit: no new events; feed the model a redacted view (D3).
+              pure (CallResult (toolResult tc (toolModelJson tool cachedJson)))
+            Nothing -> do
+              ensureStart
+              emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
+              let sid = toolStepId env roundIx callIx
+              void $ emit (aeTracer env) (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) True)
+              dr <- aeDispatch env (atQName tool) sid resolved
+              case dr of
+                Left err
+                  | reKind err == KInternal -> do
+                      void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
+                      pure (CallFatal err)
+                  | otherwise -> do
+                      -- ?6.1.4: a tool result the callee surfaces as an error is recoverable.
+                      void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
+                      recoverable env roundIx callIx (renderQName (atQName tool)) tc ("tool error: " <> reMessage err)
+                Right result -> do
+                  let actual = valueToJson result
+                      redacted = redactedJson result
+                  void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0)
+                  -- Cache actual values (�8.2.1); redact only in trace/events (D3).
+                  cacheStepResult (aeStore env) key actual
+                  void $
+                    emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
+                  pure (CallResult (toolResult tc (canonicalJson redacted)))
 
 runLoadSkillCall :: AgentEnv -> IORef AgentSkillState -> Int -> Int -> IO () -> ToolCall -> IO CallOutcome
 runLoadSkillCall env skillState roundIx callIx ensureStart tc = do
@@ -476,41 +476,46 @@ loadInstruction env st e skillId =
           ( st,
             loadSkillResultRecord True (skillKindText SkillInstruction) False False (fromMaybe "" (seBody e)) ""
           )
-        else if length (assLoadedInstruction st) >= spMaxInstructionLoads policy
-          then (st, loadSkillResultRecord False (skillKindText SkillInstruction) False False "" "instruction load cap exceeded")
-          else
-            let body = fromMaybe "" (seBody e)
-                newChars = assInstructionChars st + T.length body
-             in if newChars > spMaxInstructionChars policy
-                  then (st, loadSkillResultRecord False (skillKindText SkillInstruction) False False "" "instruction body exceeds max_instruction_chars")
-                  else
-                    let q = seId e
-                        injection = instructionInjectionText skillId body
-                     in ( st
-                            { assLoadedInstruction = q : assLoadedInstruction st,
-                              assInstructionChars = newChars,
-                              assPendingInjections = assPendingInjections st <> [injection]
-                            },
-                          loadSkillResultRecord True (skillKindText SkillInstruction) True True body ""
-                        )
+        else
+          if length (assLoadedInstruction st) >= spMaxInstructionLoads policy
+            then (st, loadSkillResultRecord False (skillKindText SkillInstruction) False False "" "instruction load cap exceeded")
+            else
+              let body = fromMaybe "" (seBody e)
+                  newChars = assInstructionChars st + T.length body
+               in if newChars > spMaxInstructionChars policy
+                    then (st, loadSkillResultRecord False (skillKindText SkillInstruction) False False "" "instruction body exceeds max_instruction_chars")
+                    else
+                      let q = seId e
+                          injection = instructionInjectionText skillId body
+                       in ( st
+                              { assLoadedInstruction = q : assLoadedInstruction st,
+                                assInstructionChars = newChars,
+                                assPendingInjections = assPendingInjections st <> [injection]
+                              },
+                            loadSkillResultRecord True (skillKindText SkillInstruction) True True body ""
+                          )
 
 loadCallable :: AgentEnv -> AgentSkillState -> SkillEntry -> Text -> (AgentSkillState, RValue)
 loadCallable env st e _skillId =
   let q = seId e
    in if q `elem` assLoadedCallable st
         then (st, loadSkillResultRecord True (skillKindText SkillCallable) False False "" "")
-        else if not (seChecked e)
-          then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill failed hwfi check")
-          else if not (seAgentEligible e)
-            then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill is not agent-eligible")
-            else if length (assLoadedCallable st) >= spMaxCallableLoads (aeSkillPolicy env)
-              then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable load cap exceeded")
-              else if isNothing (aeBuildTool env q)
-                then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill could not be resolved")
+        else
+          if not (seChecked e)
+            then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill failed hwfi check")
+            else
+              if not (seAgentEligible e)
+                then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill is not agent-eligible")
                 else
-                  ( st {assLoadedCallable = q : assLoadedCallable st},
-                    loadSkillResultRecord True (skillKindText SkillCallable) True False "" ""
-                  )
+                  if length (assLoadedCallable st) >= spMaxCallableLoads (aeSkillPolicy env)
+                    then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable load cap exceeded")
+                    else
+                      if isNothing (aeBuildTool env q)
+                        then (st, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill could not be resolved")
+                        else
+                          ( st {assLoadedCallable = q : assLoadedCallable st},
+                            loadSkillResultRecord True (skillKindText SkillCallable) True False "" ""
+                          )
 
 applyPendingInjections :: IORef AgentSkillState -> [Turn] -> IO [Turn]
 applyPendingInjections ref msgs = do

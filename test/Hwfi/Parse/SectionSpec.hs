@@ -3,7 +3,7 @@ module Hwfi.Parse.SectionSpec (spec) where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Name (Slug (..))
-import Hwfi.Parse.Markdown (parseMarkdown, MarkdownFile (..))
+import Hwfi.Parse.Markdown (MarkdownFile (..), parseMarkdown)
 import Hwfi.Parse.Section
 import Test.Hspec
 

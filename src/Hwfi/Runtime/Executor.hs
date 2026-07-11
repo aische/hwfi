@@ -30,14 +30,17 @@ module Hwfi.Runtime.Executor
   )
 where
 
+import Control.Exception (SomeException, displayException)
 import Control.Monad (join)
-import Data.IORef (IORef, newIORef)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
+import Data.Either (lefts, rights)
+import Data.IORef (IORef, newIORef, readIORef)
 import Data.List (nub, sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
@@ -66,6 +69,7 @@ import Hwfi.Check.Builtins
   )
 import Hwfi.Check.Decl (classifyCacheable)
 import Hwfi.Check.Graph (builtinFingerprint)
+import Hwfi.Project.Manifest (ProjectManifest (..), budgetMaxCostUsd)
 import Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     AgentEnv (..),
@@ -77,7 +81,6 @@ import Hwfi.Runtime.Agent
     runAgent,
     submitToolDef,
   )
-import Hwfi.SkillCatalog (skillPolicyFromManifest)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord, contextValue)
 import Hwfi.Runtime.Error
@@ -89,9 +92,8 @@ import Hwfi.Runtime.Error
     internalError,
     userError_,
   )
-import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..))
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
-import Hwfi.Project.Manifest (ProjectManifest (..), budgetMaxCostUsd)
+import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..))
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, modelCatalogFingerprint, oneShotLlmCtxProjection)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
@@ -112,6 +114,7 @@ import Hwfi.Runtime.RunStore
     withWorkspaceLock,
     writeRunMeta,
   )
+import Hwfi.Runtime.RunUsage (emptyRunUsage, runUsageToJson)
 import Hwfi.Runtime.StepKey (computeStepKey, computeWhileDecisionKey, sha256Hex)
 import Hwfi.Runtime.Trace
   ( EventBody (..),
@@ -123,6 +126,7 @@ import Hwfi.Runtime.Trace
     snapshotEvents,
     snapshotJson,
   )
+import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.Value
   ( RValue (..),
     RefKind (..),
@@ -131,9 +135,8 @@ import Hwfi.Runtime.Value
     redactedJson,
     valueToJson,
   )
-import Hwfi.Runtime.RunUsage (emptyRunUsage, runUsageToJson)
-import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.Workspace (Workspace, workspaceRoot)
+import Hwfi.SkillCatalog (skillPolicyFromManifest)
 import Hwfi.Type (Type (..))
 import Hwfi.TypedProject
   ( Fingerprint (..),
@@ -143,13 +146,9 @@ import Hwfi.TypedProject
     TypedStep (..),
     lookupTyped,
   )
-import Control.Exception (SomeException, displayException)
-import Data.IORef (readIORef)
-import Data.Maybe (fromMaybe)
 import System.IO (hClose)
 import UnliftIO.Async (pooledForConcurrentlyN)
 import UnliftIO.Exception (bracket, tryAny)
-import Data.Either (lefts, rights)
 
 -- | Everything the executor threads through a run.
 data Runtime = Runtime
@@ -571,9 +570,14 @@ execWhile rt q sections scope bindings s = do
     go stepRef i acc mCarry env maxIter = do
       _ <- emit (rtTracer rt) (LoopIter q (whileId s) i)
       let decisionKey = computeWhileDecisionKey q scope (whileId s) i
-      decisionRes <- (if rtResume rt then lookupWhileDecision (rtStore rt) decisionKey >>= \case
-        Just pinned -> pure (Right pinned)
-        Nothing -> runPredicate i env mCarry decisionKey else runPredicate i env mCarry decisionKey)
+      decisionRes <-
+        ( if rtResume rt
+            then
+              lookupWhileDecision (rtStore rt) decisionKey >>= \case
+                Just pinned -> pure (Right pinned)
+                Nothing -> runPredicate i env mCarry decisionKey
+            else runPredicate i env mCarry decisionKey
+          )
       case decisionRes of
         Left e -> pure (Left e)
         Right (cont, _reason)
@@ -760,8 +764,8 @@ stepKeyFor rt scope env bindings mts q sid target argMap s =
     ctxProj = baseCtxProj <> modelCatalogProj
     baseCtxProj =
       [ (renderRefPath rp, canonicalJson (valueToJson v))
-      | rp <- stableCtxPaths s,
-        Right v <- [resolveRefPath env rp]
+        | rp <- stableCtxPaths s,
+          Right v <- [resolveRefPath env rp]
       ]
     modelCatalogProj
       | isOneShotLlmBuiltin target = oneShotLlmCtxProjection argMap (rtModels rt)

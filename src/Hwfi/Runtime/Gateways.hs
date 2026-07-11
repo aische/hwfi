@@ -23,10 +23,9 @@ where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Hwfi.Ast.Name (Ident)
-import Hwfi.Runtime.Value (RValue (..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Hwfi.Ast.Name (Ident)
 import Hwfi.Compat
   ( LLMGateway,
     ModelCatalogItem (..),
@@ -45,6 +44,7 @@ import Hwfi.Runtime.KeyStore (KeyStore, lookupKey)
 import Hwfi.Runtime.ModelCatalog (CatalogError (..))
 import Hwfi.Runtime.Provider (ProviderName (..), allProviders, parseProvider)
 import Hwfi.Runtime.Secret (exposeSecret)
+import Hwfi.Runtime.Value (RValue (..))
 
 -- | Provider gateways available for this run.
 type GatewayMap = Map ProviderName LLMGateway

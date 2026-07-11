@@ -31,7 +31,7 @@ module Hwfi.Parse.Lexer
 where
 
 import Control.Monad (void, when)
-import Data.Char (isAsciiLower, isAsciiUpper)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
@@ -96,7 +96,7 @@ isIdentCont :: Char -> Bool
 isIdentCont c = isIdentStart c || isAsciiDigit c || c == '-' || c == '_'
 
 isAsciiDigit :: Char -> Bool
-isAsciiDigit c = c >= '0' && c <= '9'
+isAsciiDigit = isDigit
 
 -- | Parse a bare identifier (no trailing whitespace consumed). Fails without
 -- consuming input if the word is a reserved keyword.

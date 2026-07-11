@@ -16,7 +16,7 @@ module Hwfi.Parse.Frontmatter
   )
 where
 
-import Data.Aeson (Object, Value (..), withObject, (.:), (.:?))
+import Data.Aeson (Object, Value (..))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Foldable (toList)
@@ -26,10 +26,10 @@ import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Yaml qualified as Yaml
 import Hwfi.Ast.Name (qnameFromText)
+import Hwfi.Ast.Skill (SkillKind (..), SkillMeta (..), parseSkillKind)
 import Hwfi.Ast.Type (TypeExpr)
 import Hwfi.Ast.Workflow (Signature (..))
 import Hwfi.Parse.Type (parseTypeExprText)
-import Hwfi.Ast.Skill (SkillKind (..), SkillMeta (..), parseSkillKind)
 import Hwfi.Source (Diagnostic (..), Pos (..))
 
 -- | Decode frontmatter YAML into a top-level mapping.
@@ -96,8 +96,7 @@ signatureFromYaml :: FilePath -> Text -> Object -> Either [Diagnostic] Signature
 signatureFromYaml path yamlText o = do
   inputs <- typeMap "inputs"
   outputs <- typeMap "outputs"
-  imports <- importList
-  pure (Signature inputs outputs imports)
+  Signature inputs outputs <$> importList
   where
     typeMap :: Text -> Either [Diagnostic] [(Text, TypeExpr)]
     typeMap key = case KM.lookup (K.fromText key) o of
@@ -167,4 +166,4 @@ locateNestedValue yamlText parent child =
     matches l = childTok `T.isPrefixOf` T.stripStart l
 
 diagAt :: FilePath -> Int -> Text -> Diagnostic
-diagAt path line msg = Diagnostic path (Pos line 1) 1 msg
+diagAt path line = Diagnostic path (Pos line 1) 1

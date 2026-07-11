@@ -21,10 +21,12 @@ module Hwfi.Type
     normalizeType,
     renderType,
     isSecret,
+
     -- * Ambient context (§5.2)
     contextFieldType,
     runFieldType,
     selfFieldType,
+
     -- * Secret env auto-tagging (§5.5)
     isSecretEnvName,
   )

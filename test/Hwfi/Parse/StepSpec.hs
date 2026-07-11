@@ -5,8 +5,8 @@ import Data.Text qualified as T
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..))
 import Hwfi.Ast.Name (qnameFromText)
 import Hwfi.Ast.Step
-import Hwfi.Source (Pos (..), spanStart)
 import Hwfi.Parse.Step (parseStepBlock)
+import Hwfi.Source (Pos (..), spanStart)
 import Test.Hspec
 
 parseB :: Pos -> Text -> Either [String] [Statement]

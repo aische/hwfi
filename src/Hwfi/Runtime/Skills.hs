@@ -8,12 +8,10 @@ module Hwfi.Runtime.Skills
   )
 where
 
-import Data.Aeson (Value (..), object, (.=))
-import Data.Maybe (fromMaybe)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import Data.Text qualified as T
-import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
+import Hwfi.Ast.Name (qnameFromText, renderQName)
 import Hwfi.Project.Manifest ()
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.SkillCatalog
@@ -58,7 +56,7 @@ loadSkillScripted cat skillId =
           loadSkillResultRecord True (skillKindText SkillCallable) False False "" ""
 
 loadSkillResultRecord :: Bool -> Text -> Bool -> Bool -> Text -> Text -> RValue
-loadSkillResultRecord ok kind loaded isLoaded content err =
+loadSkillResultRecord ok kind _loaded isLoaded content err =
   record
     [ ("ok", VBool ok),
       ("kind", VString kind),

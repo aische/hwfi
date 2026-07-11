@@ -13,6 +13,7 @@ module Hwfi.Parse.Section
   )
 where
 
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -30,9 +31,9 @@ computeSlug t = Slug collapsed
 
 isWordChar :: Char -> Bool
 isWordChar c =
-  (c >= 'a' && c <= 'z')
-    || (c >= 'A' && c <= 'Z')
-    || (c >= '0' && c <= '9')
+  isAsciiLower c
+    || isAsciiUpper c
+    || isDigit c
     || c == '_'
 
 -- | Build the addressable H2/H3 sections of a file from its heading list and

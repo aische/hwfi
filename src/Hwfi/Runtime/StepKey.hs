@@ -42,13 +42,13 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, renderQName)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
-import Data.Maybe (fromMaybe)
 
 -- | Compute the hex step-key (spec §8.1).
 computeStepKey ::

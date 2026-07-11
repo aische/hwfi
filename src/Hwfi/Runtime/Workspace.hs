@@ -33,6 +33,7 @@ import Control.Exception (IOException, try)
 import Control.Monad (foldM)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.Either (fromRight)
 import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -217,8 +218,8 @@ findFiles ws rel glob = do
           let globSegs = splitGlob glob
               matched =
                 [ T.pack (makeRelative (workspaceRoot ws) full)
-                | (segs, full, _) <- entries,
-                  matchGlob globSegs segs
+                  | (segs, full, _) <- entries,
+                    matchGlob globSegs segs
                 ]
           pure (Right (sort matched))
 
@@ -260,8 +261,8 @@ grepOne ws regex full = do
           Right content ->
             let relPath = T.pack (makeRelative (workspaceRoot ws) full)
              in [ (relPath, n, line)
-                | (n, line) <- zip [1 ..] (T.lines content),
-                  matchTest regex (T.unpack line)
+                  | (n, line) <- zip [1 ..] (T.lines content),
+                    matchTest regex (T.unpack line)
                 ]
 
 -- Mutation (§6.2) ------------------------------------------------------------
@@ -364,7 +365,7 @@ guardIo msg act = do
 -- hidden (dot-prefixed) entries. Each entry is @(segments-relative-to-root,
 -- absolute-path, is-directory)@. Directories are yielded and descended.
 walkEntries :: FilePath -> IO [([Text], FilePath, Bool)]
-walkEntries searchRoot = go 0 [] searchRoot
+walkEntries = go 0 []
   where
     go depth relSegs dir
       | depth > maxWalkDepth = pure []
@@ -390,7 +391,7 @@ walkEntries searchRoot = go 0 [] searchRoot
 safeList :: FilePath -> IO [FilePath]
 safeList path = do
   r <- try (listDirectory path) :: IO (Either IOException [FilePath])
-  pure (either (const []) id r)
+  pure (fromRight [] r)
 
 -- | Whether a file should be skipped by 'grepFiles': too large, or binary
 -- (a NUL byte in the first 'binarySniffBytes').

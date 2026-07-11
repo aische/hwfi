@@ -151,4 +151,4 @@ record :: [(Ident, RValue)] -> RValue
 record = VRecord . Map.fromList
 
 mkDiag :: Text -> Diagnostic
-mkDiag msg = Diagnostic evalWorkflowDiagPath (Pos 1 1) 1 msg
+mkDiag = Diagnostic evalWorkflowDiagPath (Pos 1 1) 1

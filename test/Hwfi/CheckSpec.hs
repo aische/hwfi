@@ -2,13 +2,14 @@ module Hwfi.CheckSpec (spec) where
 
 import Data.Either (isRight)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Text (pack)
 import Hwfi.Ast.Name (qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Check.Error (TypeError (..), TypeErrorKind (..))
 import Hwfi.Parse.Project (loadProject)
-import Hwfi.TypedProject
 import Hwfi.Type (Type (..))
+import Hwfi.TypedProject
 import Test.Hspec
 
 -- | Parse a fixture project and run the pure checker over it.
@@ -43,7 +44,7 @@ spec = do
           length steps `shouldBe` 3
           map tsCacheable steps `shouldBe` [True, True, True]
           -- Every step target here is statically known, so has a fingerprint.
-          all (\s -> tsCalleeFingerprint s /= Nothing) steps `shouldBe` True
+          all (isJust . tsCalleeFingerprint) steps `shouldBe` True
           declFingerprint "workflows/main" tp `shouldNotBe` Fingerprint ""
         Left errs -> expectationFailure (show errs)
 

@@ -8,10 +8,10 @@ module Hwfi.Ast.Workflow
   )
 where
 
+import Data.Text (Text)
 import Hwfi.Ast.Name (Ident, QName, Slug)
 import Hwfi.Ast.Step (Statement)
 import Hwfi.Ast.Type (TypeExpr)
-import Data.Text (Text)
 
 -- | The typed frontmatter signature of a workflow or tool (§3, §3.4).
 -- Field order for @inputs@/@outputs@ is preserved as parsed but is not

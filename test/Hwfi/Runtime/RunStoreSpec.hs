@@ -88,9 +88,11 @@ spec = do
     it "readRunTrace rejects invalid run_id" $
       withSystemTempDirectory "hwfi-rs" $ \root ->
         readRunTrace root "current" ".."
-          >>= (`shouldSatisfy` \case
-                Left err -> ".." `T.isInfixOf` err
-                _ -> False)
+          >>= ( `shouldSatisfy`
+                  \case
+                    Left err -> ".." `T.isInfixOf` err
+                    _ -> False
+              )
 
   describe "clearRunStepCache" $ do
     it "removes every file under steps/ and leaves trace intact" $

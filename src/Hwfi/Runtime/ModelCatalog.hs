@@ -16,6 +16,7 @@ where
 
 import Control.Monad.Except (runExceptT)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Runtime.KeyStore (KeyStore, lookupKey)
@@ -59,7 +60,7 @@ renderCatalogError = \case
   CatalogUnknownProvider m p ->
     "error: model '" <> m <> "' in model-catalog.json names unknown provider '" <> p <> "'"
   CatalogMissingKey m p ->
-    let envVar = maybe "(no key)" id (providerEnvVar p)
+    let envVar = fromMaybe "(no key)" (providerEnvVar p)
      in "error: model '"
           <> m
           <> "' in model-catalog.json requires provider '"

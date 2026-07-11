@@ -23,6 +23,8 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Ord (Down (..))
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.InstructionSkill (InstructionSkill (..))
@@ -30,12 +32,10 @@ import Hwfi.Ast.Name (Ident, QName, qnameSegments, renderQName)
 import Hwfi.Ast.Project (Declaration (..), Project (..))
 import Hwfi.Ast.Skill (SkillKind (..), SkillMeta (..), parseSkillKind, skillKindText)
 import Hwfi.Ast.Tool (Tool (..))
-import Hwfi.Type (Type (..))
 import Hwfi.Parse.Markdown (MarkdownFile (..))
 import Hwfi.Project.Manifest (ProjectManifest (..), SkillPolicy (..), defaultSkillPolicy)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
-import Data.Set (Set)
-import Data.Set qualified as Set
+import Hwfi.Type (Type (..))
 
 skillPolicyFromManifest :: ProjectManifest -> SkillPolicy
 skillPolicyFromManifest manifest = fromMaybe defaultSkillPolicy (pmSkills manifest)
@@ -49,7 +49,7 @@ data SkillEntry = SkillEntry
     sePath :: FilePath,
     seChecked :: Bool,
     seAgentEligible :: Bool,
-  -- | Full markdown body for instruction skills (never exposed via discover).
+    -- | Full markdown body for instruction skills (never exposed via discover).
     seBody :: Maybe Text
   }
   deriving stock (Eq, Show)

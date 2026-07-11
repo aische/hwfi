@@ -58,8 +58,7 @@ returnStmt = do
   _ <- symbolN "{"
   fields <- sepEndBy argField (symbolN ",")
   _ <- symbol "}"
-  end <- getPos
-  pure (SReturn fields (spanFromTo start end))
+  SReturn fields . spanFromTo start <$> getPos
 
 -- | A binding statement: @binder \<- rhs \@id?@, where the right-hand side is a
 -- call ('SStep'), an @if@ ('SIf'), a @foreach@\/@par@ loop ('SLoop'), or a
@@ -206,8 +205,7 @@ argField = do
   n <- lexemeN pIdentRaw
   _ <- symbolN "="
   e <- expr
-  end <- getPos
-  pure (Arg n e (spanFromTo start end))
+  Arg n e . spanFromTo start <$> getPos
 
 getPos :: Parser Pos
 getPos = do

@@ -23,13 +23,14 @@ module Hwfi.Runtime.Value
 where
 
 import Data.Aeson (Value (..))
+import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Scientific (Scientific, floatingOrInteger, fromFloatDigits, toRealFloat)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -97,7 +98,7 @@ redactedJson = \case
   VList xs -> Array (V.fromList (map redactedJson xs))
   VRecord m -> Object (KM.fromList [(K.fromText k, redactedJson v) | (k, v) <- Map.toList m])
   VJson v -> v
-  VSecret mName _ -> String ("<secret:" <> maybe "?" id mName <> ">")
+  VSecret mName _ -> String ("<secret:" <> fromMaybe "?" mName <> ">")
   VRef _ q -> String (renderQName q)
 
 -- | Compact canonical JSON with lexicographically-sorted object keys. This is
@@ -111,7 +112,7 @@ canonicalJson = \case
       <> T.intercalate
         ","
         [ encodeString (K.toText k) <> ":" <> canonicalJson v
-        | (k, v) <- sortOn fst (KM.toList o)
+          | (k, v) <- sortOn fst (KM.toList o)
         ]
       <> "}"
   Array a -> "[" <> T.intercalate "," (map canonicalJson (V.toList a)) <> "]"

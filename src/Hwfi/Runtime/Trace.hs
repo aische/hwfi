@@ -7,8 +7,8 @@
 -- encoding; M5 layers the append-only file writer and resume reconstruction on
 -- top of the same 'Tracer' seam.
 --
--- Common fields (?8.3.1) ùùù @tag@, @seq@, @at@, and for in-step events @qname@
--- and @step_id@ ùùù are attached by 'emit', which assigns the monotonic,
+-- Common fields (?8.3.1) ÔøΩÔøΩÔøΩ @tag@, @seq@, @at@, and for in-step events @qname@
+-- and @step_id@ ÔøΩÔøΩÔøΩ are attached by 'emit', which assigns the monotonic,
 -- gap-free @seq@ and the ISO-8601 millisecond timestamp.
 module Hwfi.Runtime.Trace
   ( FileOp (..),
@@ -35,8 +35,8 @@ module Hwfi.Runtime.Trace
 where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Data.Aeson (Value (..), encode, object, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson (Value (..), encode, object, (.:), (.=), (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseMaybe, withObject)
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -150,7 +150,7 @@ data EventBody
     -- (@"then"@\/@"else"@\/@"none"@).
     IfBranch QName Ident Text
   | -- | @loop-start@ (?13, M8; ?4.3, M9): qname, loop-id, kind
-  -- (@"foreach"@\/@"par"@\/@"while"@), iteration count (@Nothing@ for @while@).
+    -- (@"foreach"@\/@"par"@\/@"while"@), iteration count (@Nothing@ for @while@).
     LoopStart QName Ident Text (Maybe Int)
   | -- | @loop-iter@ (?13, M8): qname, loop-id, 0-based iteration index.
     LoopIter QName Ident Int
@@ -160,9 +160,9 @@ data EventBody
     WhilePred QName Ident Int Bool Text
   | -- | @workflow-log@ (?13.1.5): qname, step id, message, optional fields (redacted).
     WorkflowLog QName Ident Text Value
-  | -- | @skill-discover@ (ù6.7.1): qname, step id, query, kinds, limit, result count.
+  | -- | @skill-discover@ (ÔøΩ6.7.1): qname, step id, query, kinds, limit, result count.
     SkillDiscover QName Ident Text [Text] Int Int
-  | -- | @skill-load@ (ù6.7.2): qname, step id, skill id, kind, loaded flag.
+  | -- | @skill-load@ (ÔøΩ6.7.2): qname, step id, skill id, kind, loaded flag.
     SkillLoad QName Ident Text Text Bool
   | -- | @resumed@: run id, last seq of the interrupted attempt.
     Resumed Text Int

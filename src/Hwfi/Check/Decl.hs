@@ -14,6 +14,7 @@ module Hwfi.Check.Decl
   )
 where
 
+import Data.Either (fromLeft)
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -21,20 +22,19 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
-import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameFromText, qnameSegments, renderQName)
 import Hwfi.Ast.InstructionSkill (InstructionSkill (..))
+import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameFromText, qnameSegments, renderQName)
 import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, loadSkillQName, llmAgentObjectQName, logQName, readRunTraceQName, traceSliceQName)
-import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError, CheckWarning (..), checkWarning)
+import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, traceSliceQName)
+import Hwfi.Check.Error (CheckWarning (..), TypeError, TypeErrorKind (..), checkWarning, typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
 import Hwfi.Source (Pos (..), Span (..))
 import Hwfi.Type
 import Hwfi.TypedProject (ResolvedSignature (..))
-import Data.Either (fromLeft)
 
 -- | Ambient information a body check needs about the rest of the project.
 data CheckCtx = CheckCtx
@@ -319,7 +319,7 @@ checkLoop ctx path sections st s =
           pos
           DuplicateBind
           ("loop variable '" <> loopVar s <> "' shadows an existing binding (no shadowing, §3.4)")
-      | loopVar s `elem` (Map.keys (bsRoots st) <> bsBound st)
+        | loopVar s `elem` (Map.keys (bsRoots st) <> bsBound st)
       ]
 
     childRoots = maybe Map.empty (Map.singleton (loopVar s)) elemTy
@@ -420,7 +420,7 @@ resolveExprTarget ctx env path pos = \case
 predicateShapeErrors :: FilePath -> Pos -> Callee -> [TypeError]
 predicateShapeErrors path pos callee =
   [ typeError path pos TypeMismatch msg
-  | not (hasField outs TyBool "continue" && hasField outs TyString "reason")
+    | not (hasField outs TyBool "continue" && hasField outs TyString "reason")
   ]
   where
     outs = calleeOutputs callee
@@ -464,8 +464,8 @@ checkArgsWithCarry mCarry env callee args = missingErrs <> extraErrs <> valueErr
     valueErrs =
       concat
         [ fromLeft [] (checkExprWithCarry mCarry env (spanStart (argSpan a)) t (argValue a))
-        | a <- args,
-          Just t <- [lookup (argName a) inputs]
+          | a <- args,
+            Just t <- [lookup (argName a) inputs]
         ]
 
 mkEnv :: CheckCtx -> FilePath -> [Section] -> Map Ident Type -> Env
@@ -596,19 +596,19 @@ checkAgentCall ctx env path pos target args =
     argNames = map argName args
     missingExtra =
       [ typeError path pos ArgMismatch ("missing argument '" <> n <> "'")
-      | n <- expectedNames,
-        n `notElem` argNames
+        | n <- expectedNames,
+          n `notElem` argNames
       ]
         <> [ typeError path (spanStart (argSpan a)) ArgMismatch ("unexpected argument '" <> argName a <> "'")
-           | a <- args,
-             argName a `notElem` expectedNames
+             | a <- args,
+               argName a `notElem` expectedNames
            ]
 
     scalarErrs =
       concat
         [ fromLeft [] (checkExpr env (spanStart (argSpan a)) t (argValue a))
-        | a <- args,
-          Just t <- [lookup (argName a) expected]
+          | a <- args,
+            Just t <- [lookup (argName a) expected]
         ]
         <> maxRoundsErrs
 
@@ -633,7 +633,7 @@ checkToolsExpr :: CheckCtx -> Env -> FilePath -> Pos -> Expr -> ([TypeError], [C
 checkToolsExpr ctx env path pos expr =
   case staticQNameList expr of
     Just qnames ->
-      (concatMap (\q -> checkToolElem ctx path pos (EQName q)) qnames, [])
+      (concatMap (checkToolElem ctx path pos . EQName) qnames, [])
     Nothing ->
       case inferExpr env pos expr of
         Left errs -> (errs, [])
@@ -682,7 +682,7 @@ checkToolElem ctx path pos = \case
           [err ("advertised tool '" <> renderQName q <> "' does not resolve to a workflow, tool, or builtin")]
         Just callee ->
           [ err ("advertised tool '" <> renderQName q <> "' is not agent-eligible: " <> reason)
-          | reason <- ineligibilityReasons (calleeInputs callee)
+            | reason <- ineligibilityReasons (calleeInputs callee)
           ]
   _ -> [err "each advertised tool must be a bare tool/workflow name (§6.1.1)"]
   where

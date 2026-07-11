@@ -6,8 +6,8 @@ import Hwfi.Ast.Project
 import Hwfi.Ast.Type (TypeExpr (..))
 import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Workflow (Workflow (..))
-import Hwfi.Source (Diagnostic (..), Pos (..))
 import Hwfi.Parse.Project (loadProject)
+import Hwfi.Source (Diagnostic (..), Pos (..))
 import Test.Hspec
 
 spec :: Spec

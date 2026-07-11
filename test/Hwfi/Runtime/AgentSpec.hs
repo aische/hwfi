@@ -6,15 +6,15 @@ import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Hwfi.SkillCatalog (emptySkillCatalog)
-import Hwfi.TypedProject (TypedProject (..))
-import Data.Maybe (isJust)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
 import Data.Vector qualified as V
-import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
+import Hwfi.Ast.Name (Ident, QName, qnameFromText)
+import Hwfi.Check (checkProject)
 import Hwfi.Check.Builtins (discoverSkillsQName, loadSkillQName)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (ExecPolicy (..), defaultSkillPolicy)
@@ -24,9 +24,9 @@ import Hwfi.Runtime.Agent
     AgentSkillState (..),
     AgentSpec (..),
     SubmitSpec (..),
-    emptyAgentSkillState,
     advertisedToolDef,
     agentCheckpointKey,
+    emptyAgentSkillState,
     modelSubKey,
     runAgent,
     sanitizeToolName,
@@ -36,13 +36,15 @@ import Hwfi.Runtime.Agent
   )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
-import Hwfi.Runtime.RunUsage (emptyRunUsage)
-import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.RunStore (RunStore, createRunStore, deleteCachedResult, lookupCachedResult)
+import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), Tracer, newTracer, snapshotEvents)
+import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace, readTextFile, writeTextFile)
+import Hwfi.SkillCatalog (emptySkillCatalog)
 import Hwfi.Type (Type (..))
+import Hwfi.TypedProject (TypedProject (..))
 import LLM.Core.Types
   ( ChatRequest (..),
     ChatResponse (..),
@@ -56,10 +58,8 @@ import LLM.Core.Types
   )
 import LLM.Core.Usage (PricingInfo (..), Usage (..))
 import LLM.Generate.ModelConfig (ModelConfig (..), ModelWithFallbacks (..))
-import Data.Text.IO qualified as TIO
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
-import Hwfi.Check (checkProject)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -181,7 +181,8 @@ spec = describe "Agent loop (§6.1)" $ do
       withSkillAgent $ \tp store tracer usageSeam skillState -> do
         reqs <- newIORef ([] :: [ChatRequest])
         let gw =
-              capturingGateway reqs
+              capturingGateway
+                reqs
                 [ loadSkillCall "c1" "skills/shell-guide",
                   loadSkillCall "c2" "skills/shell-guide",
                   textResp "done"
@@ -200,7 +201,8 @@ spec = describe "Agent loop (§6.1)" $ do
       withSkillAgent $ \tp store tracer usageSeam skillState -> do
         reqs <- newIORef ([] :: [ChatRequest])
         let gw =
-              capturingGateway reqs
+              capturingGateway
+                reqs
                 [ loadSkillCall "c1" "skills/fix-shell",
                   textResp "done"
                 ]
@@ -210,7 +212,7 @@ spec = describe "Agent loop (§6.1)" $ do
         res `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 2)])
         requests <- readIORef reqs
         length requests `shouldSatisfy` (>= 2)
-        let toolNames = map toolDefName (requests !! 0).reqTools
+        let toolNames = map toolDefName (head requests).reqTools
         sanitizeToolName fixShellQ `elem` toolNames `shouldBe` True
 
     it "A49: resume restores loaded skills without re-dispatching load-skill" $
@@ -258,11 +260,11 @@ spec = describe "Agent loop (§6.1)" $ do
                   beStep = StepRef mainQ "agent",
                   beExecPolicy = Just codingPolicy,
                   beUsage = usageSeam,
-                beIntrospect = pure Null,
-                beEvalWorkflow = Nothing,
-                beRunId = "run-agent",
-                beSkillCatalog = emptySkillCatalog defaultSkillPolicy
-              }
+                  beIntrospect = pure Null,
+                  beEvalWorkflow = Nothing,
+                  beRunId = "run-agent",
+                  beSkillCatalog = emptySkillCatalog defaultSkillPolicy
+                }
             dispatch q _sid = runBuiltin benv q
         res <- runAgent (env store tracer usageSeam False dispatch skillState) codingSpec
         res `shouldBe` Right (record [("text", VString "build passed"), ("rounds", VInt 4)])
@@ -591,6 +593,8 @@ skillAgentMainMd =
 
 toolDefName :: ToolDef -> Text
 toolDefName (ToolDef n _ _ _) = n
+
+capturingGateway :: IORef [ChatRequest] -> [ChatResponse] -> LLMGateway
 capturingGateway ref responses = gatewayOf $ \req -> do
   modifyIORef' ref (req :)
   let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
@@ -608,15 +612,6 @@ crashAfterSkillLoads =
             0 -> Right (loadSkillCall "c1" "skills/shell-guide")
             1 -> Right (loadSkillCall "c2" "skills/fix-shell")
             _ -> Left (NetworkError "simulated crash after skill loads")
-
-finishAfterSkillLoads :: LLMGateway
-finishAfterSkillLoads =
-  gatewayOf $ \req ->
-    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
-     in pure $
-          if toolRounds >= 2
-            then Right (textResp "done")
-            else Left (NetworkError "resume expected skill loads in checkpoint")
 
 loadSkillCall :: Text -> Text -> ChatResponse
 loadSkillCall cid skillId =
@@ -822,5 +817,5 @@ recoverableToolResult :: TraceEvent -> Bool
 recoverableToolResult (TraceEvent _ _ (AgentToolResult _ _ _ _ _ _ recov)) = recov
 recoverableToolResult _ = False
 
-tshow :: Show a => a -> Text
+tshow :: (Show a) => a -> Text
 tshow = T.pack . show

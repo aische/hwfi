@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
+
 module Hwfi.Runtime.GatewaysSpec (spec) where
 
 import Data.Either (isRight)
@@ -5,7 +7,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Hwfi.Compat (ModelConfig (..))
 import Hwfi.Runtime.Error (RuntimeError (..))
-import Hwfi.Runtime.Gateways (ModelStore, buildGateways, buildModelStore, lookupModel, availableModelNames, modelCatalogFingerprint, oneShotLlmCtxProjection)
+import Hwfi.Runtime.Gateways (ModelStore, availableModelNames, buildGateways, buildModelStore, lookupModel, modelCatalogFingerprint, oneShotLlmCtxProjection)
 import Hwfi.Runtime.KeyStore (loadKeyStore)
 import Hwfi.Runtime.ModelCatalog (loadCatalog)
 import Hwfi.Runtime.Value (RValue (..))

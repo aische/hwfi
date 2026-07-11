@@ -13,9 +13,9 @@ where
 
 import Data.Text (Text)
 import Hwfi.Ast.Name (QName)
+import Hwfi.Ast.Skill (SkillMeta)
 import Hwfi.Ast.Step (Statement)
 import Hwfi.Ast.Workflow (Section, Signature)
-import Hwfi.Ast.Skill (SkillMeta)
 
 -- | A parsed tool declaration.
 data Tool = Tool

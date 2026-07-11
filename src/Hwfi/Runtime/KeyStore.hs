@@ -1,3 +1,7 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Use bimap" #-}
+
 -- | Provider API-key store. See spec §7.2.
 --
 -- @hwfi@ builds its own key store rather than using

@@ -66,9 +66,9 @@ import LLM.Generate
     GenerateErrorResult (..),
     ModelConfig (..),
     ModelWithFallbacks (..),
-    generateTextWithFallbacks,
     genObject,
     genObjectUntyped,
+    generateTextWithFallbacks,
     llmHooks,
     noHooks,
   )

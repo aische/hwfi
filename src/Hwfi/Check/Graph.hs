@@ -43,8 +43,8 @@ import Hwfi.Ast.Workflow (Workflow (..))
 import Hwfi.Check.Builtins (builtinIdentity, isBuiltin)
 import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError)
 import Hwfi.Source (Pos (..))
-import Hwfi.TypedProject (Fingerprint (..), ResolvedSignature (..))
 import Hwfi.Type (Type, renderType)
+import Hwfi.TypedProject (Fingerprint (..), ResolvedSignature (..))
 
 -- | The statements of a declaration (empty for aliases and prompts).
 declStatements :: Declaration -> [Statement]

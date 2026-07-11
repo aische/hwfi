@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 
 module Hwfi.Runtime.SkillSpec (spec) where
 
@@ -18,7 +19,6 @@ import Hwfi.Check.Builtins (discoverSkillsQName)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
-import Hwfi.SkillCatalog (SkillCatalog (..), SkillEntry (..), discoverSkills, emptySkillCatalog)
 import Hwfi.Runtime.Error (StepRef (..))
 import Hwfi.Runtime.Executor (RunResult (..), performRun)
 import Hwfi.Runtime.RunStore
@@ -39,11 +39,11 @@ import Hwfi.Runtime.Trace
     newPersistentTracer,
     newTracer,
     sliceTrace,
-    snapshotEvents,
   )
-import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
+import Hwfi.Runtime.Usage (newUsageSeam)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace)
+import Hwfi.SkillCatalog (SkillCatalog (..), SkillEntry (..), discoverSkills, emptySkillCatalog)
 import Hwfi.TypedProject (TypedProject (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -58,14 +58,13 @@ spec = describe "skills and trace-slice (§6.6)" $ do
       let sliced = sliceTrace agentTrace wfQ "agent" False
           tags = map eventTag sliced
       tags
-        `shouldBe`
-          [ "step-start",
-            "agent-round-start",
-            "agent-tool-call",
-            "agent-tool-result",
-            "agent-round-end",
-            "step-end"
-          ]
+        `shouldBe` [ "step-start",
+                     "agent-round-start",
+                     "agent-tool-call",
+                     "agent-tool-result",
+                     "agent-round-end",
+                     "step-end"
+                   ]
 
     it "include_nested=true includes nested sub-workflow events under the agent step" $ do
       let sliced = sliceTrace agentTrace wfQ "agent" True
@@ -75,7 +74,7 @@ spec = describe "skills and trace-slice (§6.6)" $ do
           "step-start" `elem` ts
             && "agent-tool-call" `elem` ts
             && "agent-tool-result" `elem` ts
-            && any (== "tools/helper") (mapMaybe eventQname sliced)
+            && elem "tools/helper" (mapMaybe eventQname sliced)
 
   it "A38: builtin/trace-slice with include_nested=true includes agent-tool-call/result" $
     withSystemTempDirectory "hwfi-a38" $ \root -> do
@@ -114,7 +113,7 @@ spec = describe "skills and trace-slice (§6.6)" $ do
               let tags = mapMaybe jsonTag evs
               "agent-tool-call" `elem` tags `shouldBe` True
               "agent-tool-result" `elem` tags `shouldBe` True
-              any (== "tools/helper") (mapMaybe jsonQname evs) `shouldBe` True
+              elem "tools/helper" (mapMaybe jsonQname evs) `shouldBe` True
             _ -> expectationFailure "expected events list"
 
   it "A39: a declaration under skills/ type-checks and is callable like tools/" $
@@ -144,7 +143,8 @@ spec = describe "skills and trace-slice (§6.6)" $ do
         usageSeam <- newUsageSeam store Nothing emptyRunUsage
         let emptyBenv =
               (discoverBuiltinEnv ws tracer (emptySkillCatalog defaultSkillPolicy))
-                {beUsage = usageSeam}
+                { beUsage = usageSeam
+                }
         empty <-
           runBuiltin
             emptyBenv
@@ -163,7 +163,7 @@ spec = describe "skills and trace-slice (§6.6)" $ do
         usageSeam <- newUsageSeam store Nothing emptyRunUsage
         let benv =
               (discoverBuiltinEnv ws tracer (tpSkillCatalog tp)) {beUsage = usageSeam}
-            run args = runBuiltin benv discoverSkillsQName args
+            run = runBuiltin benv discoverSkillsQName
         filtered <-
           run
             ( Map.fromList
@@ -229,8 +229,8 @@ spec = describe "skills and trace-slice (§6.6)" $ do
               Just (VList skills) -> do
                 let bodies = mapMaybe skillContent skills
                 bodies `shouldBe` []
-                any (== Just "instruction") (map skillKind skills) `shouldBe` True
-                any (== Just "skills/shell-guide") (map skillId skills) `shouldBe` True
+                elem (Just "instruction") (map skillKind skills) `shouldBe` True
+                elem (Just "skills/shell-guide") (map skillId skills) `shouldBe` True
                 mapMaybe skillSummary skills `shouldNotSatisfy` any (instructionBodyText `T.isInfixOf`)
               _ -> expectationFailure "expected skills list"
           _ -> expectationFailure "discover failed"

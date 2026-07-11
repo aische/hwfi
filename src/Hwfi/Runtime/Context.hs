@@ -19,8 +19,8 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Hwfi.Ast.Name (Ident, QName, renderQName)
-import Hwfi.Runtime.Trace (TraceEvent, eventToJson)
 import Hwfi.Runtime.RunUsage (RunUsage (..), usageRecordValue)
+import Hwfi.Runtime.Trace (TraceEvent, eventToJson)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Type (isSecretEnvName)
 
@@ -42,7 +42,7 @@ data RunInfo = RunInfo
 buildEnvRecord :: Map Text Text -> [(Ident, RValue)]
 buildEnvRecord vars =
   [ (name, fieldValue name value)
-  | (name, value) <- Map.toList vars
+    | (name, value) <- Map.toList vars
   ]
   where
     fieldValue name value

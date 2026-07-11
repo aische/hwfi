@@ -20,6 +20,7 @@ module Hwfi.Check
 where
 
 import Control.Applicative ((<|>))
+import Data.Either (fromRight)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
@@ -31,21 +32,19 @@ import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
 import Hwfi.Ast.Project
 import Hwfi.Ast.Step (Arg (..), IfStmt (..), LoopStmt (..), Statement (..), StepStmt (..), stepTarget)
 import Hwfi.Ast.Tool (Tool (..))
-import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Type (TypeExpr)
+import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Workflow (Signature (..), Workflow (..), emptySignature)
 import Hwfi.Check.Alias (resolveAliasDefs, resolveSigTypeExpr)
 import Hwfi.Check.Builtins (Callee (..), execQName, introspectQName, isBuiltin, lookupBuiltin)
 import Hwfi.Check.Decl (CheckCtx (..), checkDeclBody)
-import Hwfi.Check.Error (TypeError, TypeErrorKind (..), typeError, renderTypeErrors, renderCheckWarnings)
+import Hwfi.Check.Error (TypeError, TypeErrorKind (..), renderCheckWarnings, renderTypeErrors, typeError)
 import Hwfi.Check.Graph (computeFingerprints, detectImportCycles, directCallees, lookupCalleeFingerprint, projectCallees)
-import Data.Set qualified as Set
 import Hwfi.Project.Manifest (ExecPolicy (..), ProjectManifest (..))
-import Hwfi.SkillCatalog (buildSkillCatalog, skillPolicyFromManifest)
+import Hwfi.SkillCatalog (buildSkillCatalog)
 import Hwfi.Source (Diagnostic, Pos (..), spanStart)
-import Hwfi.TypedProject
 import Hwfi.Type (Type (..), isSecretEnvName)
-import Data.Either (fromRight)
+import Hwfi.TypedProject
 
 -- | Type-check a parsed project. Returns all accumulated errors, or the
 -- checked project.
@@ -64,7 +63,7 @@ checkProject proj
 
     sigResults =
       [ (q, resolveSignature known aliasMap (declPath q) (declSignature d))
-      | (q, d) <- Map.toList decls
+        | (q, d) <- Map.toList decls
       ]
     sigErrs = concat [e | (_, (e, _)) <- sigResults]
     sigMap = Map.fromList [(q, s) | (q, (_, s)) <- sigResults]
@@ -78,7 +77,7 @@ checkProject proj
     ctx = mkCtx decls sigMap manifest (reachesIntrospect decls)
     bodyResults =
       [ (q, checkDeclBody ctx q d (sigLookup q))
-      | (q, d) <- Map.toList decls
+        | (q, d) <- Map.toList decls
       ]
     bodyErrs = concat [e | (_, (e, _, _)) <- bodyResults]
     bodyWarnings = concat [w | (_, (_, w, _)) <- bodyResults]
@@ -120,7 +119,7 @@ checkProject proj
                   tsCalleeFingerprint = lookupCalleeFingerprint fps (stepTargetOf stmt),
                   tsResultType = resultTy
                 }
-            | (stmt, cacheable, resultTy) <- Map.findWithDefault [] q stepMap
+              | (stmt, cacheable, resultTy) <- Map.findWithDefault [] q stepMap
             ],
           tdFingerprint = Map.findWithDefault (Fingerprint "") q fps
         }
@@ -154,8 +153,8 @@ importErrors decls (q, d) =
       (Pos 1 1)
       UnknownImport
       ("imported name '" <> renderQName imp <> "' does not resolve to a workflow, tool, or builtin")
-  | imp <- sigImports (declSignature d),
-    not (isBuiltin imp || isCallableDecl (Map.lookup imp decls))
+    | imp <- sigImports (declSignature d),
+      not (isBuiltin imp || isCallableDecl (Map.lookup imp decls))
   ]
 
 entrypointError :: Map QName Declaration -> ProjectManifest -> [TypeError]
@@ -243,15 +242,15 @@ mkCtx decls sigMap manifest reaches =
     calleeMap =
       Map.fromList
         [ (q, Callee (rsigInputs s) (rsigOutputs s))
-        | (q, d) <- Map.toList decls,
-          isCallableDecl (Just d),
-          Just s <- [Map.lookup q sigMap]
+          | (q, d) <- Map.toList decls,
+            isCallableDecl (Just d),
+            Just s <- [Map.lookup q sigMap]
         ]
     refMap =
       Map.fromList
         [ (q, refTypeFor d (rsigInputs s) (rsigOutputs s))
-        | (q, d) <- Map.toList decls,
-          Just s <- [Map.lookup q sigMap]
+          | (q, d) <- Map.toList decls,
+            Just s <- [Map.lookup q sigMap]
         ]
     refTypeFor d ins outs = case d of
       DeclTool _ -> TyToolRef (TyRecord ins) (TyRecord outs)

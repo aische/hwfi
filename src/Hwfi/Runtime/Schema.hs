@@ -78,6 +78,6 @@ recordSchema fs = do
 ineligibilityReasons :: [(Ident, Type)] -> [Text]
 ineligibilityReasons inputs =
   [ "input '" <> n <> "': " <> reason
-  | (n, t) <- inputs,
-    Left reason <- [typeToSchema t]
+    | (n, t) <- inputs,
+      Left reason <- [typeToSchema t]
   ]

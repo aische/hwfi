@@ -98,7 +98,7 @@ instance IsBlock Inlines Blocks where
   heading level il = Blocks [BHeading level (inlineText il) (SourceRange [])]
   rawBlock _ _ = mempty
   referenceLinkDefinition _ _ = mempty
-  list _ _ bs = mconcat bs
+  list _ _ = mconcat
 
 -- Public API ----------------------------------------------------------------
 

@@ -51,7 +51,7 @@ spec = describe "cross-run trace reading (§6.5)" $ do
     it "readRunTrace resolves current against the supplied run id" $
       withRunsFixture $ \wsRoot -> do
         store <- createRunStore wsRoot "run-mid"
-        _ <-bracketTrace store $ \_ tracer ->
+        _ <- bracketTrace store $ \_ tracer ->
           emit tracer (RunStart "run-mid" "workflows/main" (Object mempty) "abc")
         events <- readRunTrace wsRoot "run-mid" "current"
         fmap length events `shouldBe` Right 1
@@ -59,9 +59,11 @@ spec = describe "cross-run trace reading (§6.5)" $ do
     it "readRunTrace fails for a missing run" $
       withRunsFixture $ \wsRoot -> do
         readRunTrace wsRoot "run-mid" "nope"
-          >>= (`shouldSatisfy` \case
-                Left err -> "no run" `T.isInfixOf` err
-                _ -> False)
+          >>= ( `shouldSatisfy`
+                  \case
+                    Left err -> "no run" `T.isInfixOf` err
+                    _ -> False
+              )
 
   it "A36: list-runs returns prior workspace runs without leaving .hwfi/runs" $
     withTraceProject $ \tp ws projDir -> do

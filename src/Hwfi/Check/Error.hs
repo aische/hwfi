@@ -85,7 +85,7 @@ data TypeError = TypeError
 
 -- | Construct a 'TypeError' with a caret width of 1.
 typeError :: FilePath -> Pos -> TypeErrorKind -> Text -> TypeError
-typeError path pos kind msg = TypeError path pos 1 kind msg
+typeError path pos = TypeError path pos 1
 
 -- | Render a 'TypeError' as a 'Diagnostic' (spec §9.1).
 renderTypeError :: TypeError -> Diagnostic
@@ -100,7 +100,7 @@ data CheckWarning = CheckWarning
   deriving stock (Eq, Show)
 
 checkWarning :: FilePath -> Pos -> Text -> CheckWarning
-checkWarning path pos msg = CheckWarning path pos msg
+checkWarning = CheckWarning
 
 renderCheckWarning :: CheckWarning -> Diagnostic
 renderCheckWarning CheckWarning {..} = Diagnostic warnPath warnPos 1 warnMessage

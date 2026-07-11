@@ -17,10 +17,11 @@ module Hwfi.Parse.Project
 where
 
 import Control.Monad (forM)
-import Data.Maybe (fromMaybe)
 import Data.Aeson (Object)
+import Data.Either (lefts, rights)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -78,7 +79,7 @@ parseEvalWorkflowSource content = do
     Nothing -> Right Nothing
     Just yamlText -> Just . (,) yamlText <$> parseYamlObject evalWorkflowDiagPath yamlText
   let kindTag =
-        case classify "" (snd <$> mObj >>= frontmatterKind) of
+        case classify "" (mObj >>= frontmatterKind . snd) of
           CUnknown -> CWorkflow
           k -> k
   case kindTag of
@@ -121,7 +122,7 @@ parseDeclaration relpath content = do
       topDir = case splitDirectories relpath of
         (d : _) -> d
         [] -> ""
-      kindTag = classify topDir (snd <$> mObj >>= frontmatterKind)
+      kindTag = classify topDir (mObj >>= frontmatterKind . snd)
       skillKind = skillKindFromObj relpath mObj
   case (topDir, skillKind) of
     ("skills", Just SkillInstruction) -> buildInstructionSkillDecl relpath qname md mObj
@@ -310,9 +311,9 @@ findMarkdownFiles projectDir =
           else pure [relE | takeExtension e == ".md"]
 
 collect :: [Either [d] a] -> Either [d] [a]
-collect es = case concat [ds | Left ds <- es] of
-  [] -> Right [a | Right a <- es]
+collect es = case concat (lefts es) of
+  [] -> Right (rights es)
   ds -> Left ds
 
 diag :: FilePath -> Text -> Diagnostic
-diag path msg = Diagnostic path (Pos 1 1) 1 msg
+diag path = Diagnostic path (Pos 1 1) 1

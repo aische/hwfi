@@ -19,12 +19,11 @@ import Hwfi.Runtime.Agent
     AgentEnv (..),
     AgentSkillState (..),
     AgentSpec (..),
-    emptyAgentSkillState,
     advertisedToolDef,
+    emptyAgentSkillState,
     runAgent,
     sanitizeToolName,
   )
-import Hwfi.SkillCatalog (emptySkillCatalog)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (RuntimeError (..), StepRef (..))
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
@@ -35,6 +34,7 @@ import Hwfi.Runtime.Trace (Tracer, newTracer)
 import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace)
+import Hwfi.SkillCatalog (emptySkillCatalog)
 import Hwfi.Type (Type (..))
 import Hwfi.TypedProject (TypedProject)
 import LLM.Core.Types
@@ -161,7 +161,7 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
                         atOutputs = [("ok", TyBool), ("outputs", TyJson), ("errors", TyList TyString)],
                         atFingerprint = "eval-fp"
                       }
-                    ],
+                  ],
                 asMaxRounds = 3,
                 asSubmit = Nothing
               }

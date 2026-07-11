@@ -44,5 +44,5 @@ parseTypeAlias path expectedName yamlText = do
       t <- parseTypeExprText path (locateValue yamlText "definition") def
       Right (TypeAlias expectedName t)
   where
-    diag msg = Diagnostic path (Pos 1 1) 1 msg
-    diagAt pos msg = Diagnostic path pos 1 msg
+    diag = Diagnostic path (Pos 1 1) 1
+    diagAt pos = Diagnostic path pos 1

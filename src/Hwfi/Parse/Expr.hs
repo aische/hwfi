@@ -11,6 +11,8 @@ module Hwfi.Parse.Expr
   )
 where
 
+import Data.Char (isDigit)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr
@@ -78,7 +80,7 @@ eNumber = lexemeN $ do
     ds <- takeWhile1P (Just "digit") isAsciiDigit
     pure (T.cons dot ds)
   mExp <- optional expPart
-  let txt = sign <> intPart <> maybe "" id mFrac <> maybe "" id mExp
+  let txt = sign <> intPart <> fromMaybe "" mFrac <> fromMaybe "" mExp
   pure $ case (mFrac, mExp) of
     (Nothing, Nothing) -> EInt (read (T.unpack txt))
     _ -> EDouble (read (T.unpack txt))
@@ -170,4 +172,4 @@ coalesce = foldr step []
     step p rest = p : rest
 
 isAsciiDigit :: Char -> Bool
-isAsciiDigit c = c >= '0' && c <= '9'
+isAsciiDigit = isDigit

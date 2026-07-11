@@ -1,5 +1,6 @@
 module Hwfi.Runtime.ExecSpec (spec) where
 
+import Control.Monad ((>=>))
 import Data.Either (isLeft)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -22,7 +23,7 @@ policy allow =
     }
 
 withWs :: (Workspace -> IO a) -> IO a
-withWs k = withSystemTempDirectory "hwfi-exec" (\dir -> newWorkspace dir >>= k)
+withWs k = withSystemTempDirectory "hwfi-exec" (newWorkspace >=> k)
 
 execArgs :: Text -> [Text] -> ExecArgs
 execArgs program args = ExecArgs program args "" 0

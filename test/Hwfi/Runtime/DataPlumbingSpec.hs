@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 module Hwfi.Runtime.DataPlumbingSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))
@@ -41,24 +39,22 @@ spec = describe "data plumbing builtins (§13.1.2)" $ do
                 ]
         result <- run plan "tasks"
         result
-          `shouldBe`
-            Right
-              ( VBool True,
-                VList
-                  [ VJson (Object (KM.fromList [("id", String "a")])),
-                    VJson (Object (KM.fromList [("id", String "c")])),
-                    VJson (Object (KM.fromList [("id", String "d")]))
-                  ],
-                ""
-              )
+          `shouldBe` Right
+            ( VBool True,
+              VList
+                [ VJson (Object (KM.fromList [("id", String "a")])),
+                  VJson (Object (KM.fromList [("id", String "c")])),
+                  VJson (Object (KM.fromList [("id", String "d")]))
+                ],
+              ""
+            )
 
     it "collects array elements in order and drops null" $
       withJsonValues $ \run -> do
         let items = object ["items" .= Array (V.fromList [String "x", Null, String "y"])]
         result <- run items "items"
         result
-          `shouldBe`
-            Right (VBool True, VList [VJson (String "x"), VJson (String "y")], "")
+          `shouldBe` Right (VBool True, VList [VJson (String "x"), VJson (String "y")], "")
 
     it "uses lexicographic key order when keys are not all integers" $
       withJsonValues $ \run -> do
@@ -72,16 +68,14 @@ spec = describe "data plumbing builtins (§13.1.2)" $ do
                 ]
         result <- run tagged "tags"
         result
-          `shouldBe`
-            Right (VBool True, VList [VJson (String "a"), VJson (String "b")], "")
+          `shouldBe` Right (VBool True, VList [VJson (String "a"), VJson (String "b")], "")
 
     it "treats an empty path as the root value" $
       withJsonValues $ \run -> do
         let root = object ["0" .= String "a", "1" .= String "b"]
         result <- run root ""
         result
-          `shouldBe`
-            Right (VBool True, VList [VJson (String "a"), VJson (String "b")], "")
+          `shouldBe` Right (VBool True, VList [VJson (String "a"), VJson (String "b")], "")
 
     it "returns ok=false when the path is missing" $
       withJsonValues $ \run -> do
@@ -94,8 +88,7 @@ spec = describe "data plumbing builtins (§13.1.2)" $ do
       withJsonValues $ \run -> do
         result <- run (object ["goal" .= String "x"]) "goal"
         result
-          `shouldBe`
-            Right (VBool False, VList [], "expected a JSON object or array")
+          `shouldBe` Right (VBool False, VList [], "expected a JSON object or array")
 
   describe "builtin/json-get" $ do
     it "still resolves dot-separated object paths" $
@@ -109,10 +102,10 @@ type JsonValuesResult = (RValue, RValue, Text)
 type JsonGetResult = (RValue, RValue, Text)
 
 withJsonValues :: ((Value -> Text -> IO (Either Text JsonValuesResult)) -> IO a) -> IO a
-withJsonValues body = withPlumbingHarness jsonValuesQName extractValues body
+withJsonValues = withPlumbingHarness jsonValuesQName extractValues
 
 withJsonGet :: ((Value -> Text -> IO (Either Text JsonGetResult)) -> IO a) -> IO a
-withJsonGet body = withPlumbingHarness jsonGetQName extractValue body
+withJsonGet = withPlumbingHarness jsonGetQName extractValue
 
 extractValues :: Map.Map Ident RValue -> Either Text JsonValuesResult
 extractValues m =

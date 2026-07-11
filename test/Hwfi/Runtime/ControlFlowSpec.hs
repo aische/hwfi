@@ -50,7 +50,7 @@ writeProject dir mainMd = writeProjectWithSub dir mainMd Nothing
 
 -- | Like 'writeProject', optionally adding a @workflows/tick.md@ sub-workflow.
 writeProjectWithSub :: FilePath -> Text -> Maybe Text -> IO ()
-writeProjectWithSub dir mainMd mSubMd = writeProjectWithSubs dir mainMd (maybe Map.empty (\s -> Map.singleton "tick.md" s) mSubMd)
+writeProjectWithSub dir mainMd mSubMd = writeProjectWithSubs dir mainMd (maybe Map.empty (Map.singleton "tick.md") mSubMd)
 
 writeProjectWithSubs :: FilePath -> Text -> Map.Map Text Text -> IO ()
 writeProjectWithSubs dir mainMd subs = do
@@ -80,11 +80,10 @@ errKinds :: Either [TypeError] TypedProject -> [TypeErrorKind]
 errKinds = either (map errKind) (const [])
 
 runProject :: Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
-runProject mainMd inputs k = runProjectWithSub mainMd Nothing inputs k
+runProject mainMd = runProjectWithSub mainMd Nothing
 
 runProjectWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
-runProjectWithSub mainMd mSubMd inputs k =
-  runProjectWithSubs mainMd (maybe Map.empty (\s -> Map.singleton "tick.md" s) mSubMd) inputs k
+runProjectWithSub mainMd mSubMd = runProjectWithSubs mainMd (maybe Map.empty (Map.singleton "tick.md") mSubMd)
 
 runProjectWithSubs :: Text -> Map.Map Text Text -> Map.Map Ident RValue -> (RunResult -> FilePath -> IO a) -> IO a
 runProjectWithSubs mainMd subs inputs k =
@@ -106,8 +105,7 @@ checkOnlyWithSubs mainMd subs =
     either (\ds -> error ("parse failed: " <> show ds)) (pure . checkProject) eproj
 
 runThenResumeWithSubs :: Text -> Map.Map Text Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
-runThenResumeWithSubs mainMd subs inputs k =
-  runThenResumeWithSubsModels mainMd subs inputs Map.empty Map.empty k
+runThenResumeWithSubs mainMd subs inputs = runThenResumeWithSubsModels mainMd subs inputs Map.empty Map.empty
 
 runThenResumeWithSubsModels ::
   Text ->
@@ -133,11 +131,10 @@ runThenResumeWithSubsModels mainMd subs inputs models1 models2 k =
 
 -- | Run to completion, mark the run resumable (aborted), then resume.
 runThenResume :: Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
-runThenResume mainMd inputs k = runThenResumeWithSub mainMd Nothing inputs k
+runThenResume mainMd = runThenResumeWithSub mainMd Nothing
 
 runThenResumeWithSub :: Text -> Maybe Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
-runThenResumeWithSub mainMd mSubMd inputs k =
-  runThenResumeWithSubs mainMd (maybe Map.empty (\s -> Map.singleton "tick.md" s) mSubMd) inputs k
+runThenResumeWithSub mainMd mSubMd = runThenResumeWithSubs mainMd (maybe Map.empty (Map.singleton "tick.md") mSubMd)
 
 -- Workflow bodies ------------------------------------------------------------
 
@@ -889,7 +886,7 @@ wrapBodyWithImports extraImports bodyLines ins outs =
            "  - builtin/read-file"
          ]
       <> map ("  - " <>) extraImports
-      <> [ "---", "", "## flow", "", "```step" ]
+      <> ["---", "", "## flow", "", "```step"]
       <> bodyLines
       <> ["```"]
 

@@ -60,7 +60,7 @@ data Diagnostic = Diagnostic
 
 -- | Convenience constructor spanning a single position (width 1).
 mkDiagnostic :: FilePath -> Pos -> Text -> Diagnostic
-mkDiagnostic path pos msg = Diagnostic path pos 1 msg
+mkDiagnostic path pos = Diagnostic path pos 1
 
 -- | Render a single diagnostic in the spec §9.1 format. @src@ is the full
 -- text of the offending file, used to quote the source line and draw the

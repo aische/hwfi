@@ -63,8 +63,8 @@ import Hwfi.Runtime.RunStore
     readRunMeta,
     readTraceEvents,
   )
-import Hwfi.Runtime.Trace (renderEvent)
 import Hwfi.Runtime.RunUsage (renderUsageSummary)
+import Hwfi.Runtime.Trace (renderEvent)
 import Hwfi.Runtime.Value (RValue, coerceFromJson, coerceFromString, redactedJson)
 import Hwfi.Runtime.Workspace (Workspace, newWorkspace, workspaceRoot)
 import Hwfi.Source (Diagnostic (..), renderDiagnostic)

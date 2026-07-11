@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-type-defaults #-}
+
 -- | The engine-provided @builtin/*@ tools (spec §6, tasks 4.4, 4.5, 4.7).
 --
 -- Each builtin takes the already-resolved argument map and runs in IO,
@@ -40,14 +41,12 @@ import Hwfi.Compat
     noHooks,
   )
 import Hwfi.Project.Manifest (ExecPolicy)
-import Hwfi.Runtime.Skills (discoverSkillsResult, loadSkillScripted)
-import Hwfi.SkillCatalog (SkillCatalog)
-import Hwfi.SkillCatalog qualified as Cat
 import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sandboxError)
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
+import Hwfi.Runtime.Skills (discoverSkillsResult, loadSkillScripted)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, sliceTrace, snapshotEvents)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, valueToJson)
@@ -67,6 +66,8 @@ import Hwfi.Runtime.Workspace
     workspaceRoot,
     writeTextFile,
   )
+import Hwfi.SkillCatalog (SkillCatalog)
+import Hwfi.SkillCatalog qualified as Cat
 import LLM (defaultDebugHooks)
 
 -- | Everything a builtin needs from the surrounding run.
@@ -715,7 +716,7 @@ jsonValues :: Value -> Either Text [Value]
 jsonValues (Object o) =
   Right $
     filter (/= Null) $
-      mapMaybe (\k -> KM.lookup k o) (sortObjectKeys o)
+      mapMaybe (`KM.lookup` o) (sortObjectKeys o)
 jsonValues (Array a) = Right $ filter (/= Null) (V.toList a)
 jsonValues _ = Left "expected a JSON object or array"
 
@@ -788,13 +789,13 @@ loadSkillTool env args =
     case result of
       VRecord m
         | Map.lookup "ok" m == Just (VBool True) ->
-            let kind = fieldText m "kind"
+            let kind = fieldText_ m "kind"
                 loaded = Map.lookup "loaded" m == Just (VBool True)
              in do
                   emit_ env (SkillLoad q sid skillId kind loaded)
                   pure (Right result)
       _ -> pure (Right result)
   where
-    fieldText m name = case Map.lookup name m of
+    fieldText_ m name = case Map.lookup name m of
       Just (VString t) -> t
       _ -> ""

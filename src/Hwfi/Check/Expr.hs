@@ -46,13 +46,11 @@ data Env = Env
 
 -- | Like 'inferExpr', but with an optional @${carry}@ type in scope (§4.3.4).
 inferExprWithCarry :: Maybe Type -> Env -> Pos -> Expr -> Either [TypeError] Type
-inferExprWithCarry mCarry env pos e =
-  inferExpr env {envCarryType = mCarry} pos e
+inferExprWithCarry mCarry env = inferExpr env {envCarryType = mCarry}
 
 -- | Like 'checkExpr', but with an optional @${carry}@ type in scope (§4.3.4).
 checkExprWithCarry :: Maybe Type -> Env -> Pos -> Type -> Expr -> Either [TypeError] ()
-checkExprWithCarry mCarry env pos expected e =
-  checkExpr env {envCarryType = mCarry} pos expected e
+checkExprWithCarry mCarry env = checkExpr env {envCarryType = mCarry}
 
 -- | Infer the type of an expression. @pos@ is the location errors are
 -- attributed to (expressions carry no spans of their own; the enclosing
@@ -189,7 +187,7 @@ resolveRef env pos (RefPath root accs)
                 (envPath env)
                 pos
                 UndeclaredRef
-                ("'carry' is not in scope; it is only available in while(...) predicate_args/body_args after the first body iteration (§4.3.4)")
+                "'carry' is not in scope; it is only available in while(...) predicate_args/body_args after the first body iteration (§4.3.4)"
             ]
   | otherwise =
       case Map.lookup root (envRoots env) of
