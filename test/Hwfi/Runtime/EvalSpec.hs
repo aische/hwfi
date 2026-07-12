@@ -49,3 +49,8 @@ spec = describe "Runtime expression evaluator (§5.3, §3.2.1, §8.3.2)" $ do
 
   it "builds record and list literals" $
     evalExpr env (ERecord [("a", EInt 1)]) `shouldBe` Right (VRecord (Map.fromList [("a", VInt 1)]))
+
+  it "evaluates range(n) to [0..n-1] (§13.1.3)" $ do
+    evalExpr env (ERange (EInt 3)) `shouldBe` Right (VList [VInt 0, VInt 1, VInt 2])
+    evalExpr env (ERange (EInt 0)) `shouldBe` Right (VList [])
+    evalExpr env (ERange (EInt (-1))) `shouldSatisfy` isLeft

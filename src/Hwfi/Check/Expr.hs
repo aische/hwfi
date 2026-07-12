@@ -91,6 +91,9 @@ inferExpr env pos = \case
               BadQNameValue
               ("bare name '" <> renderQ q <> "' does not refer to a callable workflow or tool")
           ]
+  ERange e -> do
+    checkExpr env pos TyInt e
+    Right (TyList TyInt)
 
 -- | Check an expression against an expected type. Handles empty and nested
 -- list/record literals structurally (so @[]@ checks against any @List<_>@),

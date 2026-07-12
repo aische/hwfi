@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
-import Hwfi.Check.Builtins (jsonGetQName, jsonValuesQName)
+import Hwfi.Check.Builtins (jsonGetQName, jsonValuesQName, recordFilterQName, recordMapQName, recordMergeQName)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (StepRef (..), renderRuntimeError)
@@ -97,6 +97,50 @@ spec = describe "data plumbing builtins (§13.1.2)" $ do
         result <- run root "user.name"
         result `shouldBe` Right (VBool True, VJson (String "Ada"), "")
 
+  describe "record builtins" $ do
+    it "record-merge overlays fields with overlay winning on duplicates" $
+      withRecordMerge $ \run -> do
+        let base = VRecord (Map.fromList [("a", VString "1"), ("b", VString "old")])
+            overlay = VRecord (Map.fromList [("b", VString "new"), ("c", VString "3")])
+        result <- run base overlay
+        result
+          `shouldBe` Right
+            ( VRecord
+                ( Map.fromList
+                    [ ("a", VString "1"),
+                      ("b", VString "new"),
+                      ("c", VString "3")
+                    ]
+                )
+            )
+
+    it "record-filter keeps records whose field equals a value" $
+      withRecordFilter $ \run -> do
+        let items =
+              VList
+                [ VRecord (Map.fromList [("id", VString "a"), ("n", VInt 1)]),
+                  VRecord (Map.fromList [("id", VString "b"), ("n", VInt 2)]),
+                  VRecord (Map.fromList [("id", VString "c"), ("n", VInt 1)])
+                ]
+        result <- run items "n" (VInt 1)
+        result
+          `shouldBe` Right
+            ( VList
+                [ VRecord (Map.fromList [("id", VString "a"), ("n", VInt 1)]),
+                  VRecord (Map.fromList [("id", VString "c"), ("n", VInt 1)])
+                ]
+            )
+
+    it "record-map plucks a field from each record" $
+      withRecordMap $ \run -> do
+        let items =
+              VList
+                [ VRecord (Map.fromList [("id", VString "a")]),
+                  VRecord (Map.fromList [("id", VString "b")])
+                ]
+        result <- run items "id"
+        result `shouldBe` Right (VList [VString "a", VString "b"])
+
 type JsonValuesResult = (RValue, RValue, Text)
 
 type JsonGetResult = (RValue, RValue, Text)
@@ -157,3 +201,81 @@ withPlumbingHarness q parseOut body =
 
 emptyModelStore :: ModelStore
 emptyModelStore = Map.empty
+
+extractRecord :: Map.Map Ident RValue -> Either Text RValue
+extractRecord m =
+  case Map.lookup "record" m of
+    Just v -> Right v
+    _ -> Left "unexpected record-merge result shape"
+
+extractItems :: Map.Map Ident RValue -> Either Text RValue
+extractItems m =
+  case Map.lookup "items" m of
+    Just v -> Right v
+    _ -> Left "unexpected record-filter result shape"
+
+extractRecordValues :: Map.Map Ident RValue -> Either Text RValue
+extractRecordValues m =
+  case Map.lookup "values" m of
+    Just v -> Right v
+    _ -> Left "unexpected record-map result shape"
+
+withRecordMerge :: ((RValue -> RValue -> IO (Either Text RValue)) -> IO a) -> IO a
+withRecordMerge body = withRecordEnv recordMergeQName extractRecord $ \benv parseOut -> do
+  let run base overlay = invokeRecord benv recordMergeQName parseOut (Map.fromList [("base", base), ("overlay", overlay)])
+  body run
+
+withRecordFilter :: ((RValue -> Text -> RValue -> IO (Either Text RValue)) -> IO a) -> IO a
+withRecordFilter body = withRecordEnv recordFilterQName extractItems $ \benv parseOut -> do
+  let run items field equals =
+        invokeRecord
+          benv
+          recordFilterQName
+          parseOut
+          (Map.fromList [("items", items), ("field", VString field), ("equals", equals)])
+  body run
+
+withRecordMap :: ((RValue -> Text -> IO (Either Text RValue)) -> IO a) -> IO a
+withRecordMap body = withRecordEnv recordMapQName extractRecordValues $ \benv parseOut -> do
+  let run items field =
+        invokeRecord benv recordMapQName parseOut (Map.fromList [("items", items), ("field", VString field)])
+  body run
+
+withRecordEnv ::
+  QName ->
+  (Map.Map Ident RValue -> Either Text RValue) ->
+  (BuiltinEnv -> (Map.Map Ident RValue -> Either Text RValue) -> IO a) ->
+  IO a
+withRecordEnv _ parseOut body =
+  withSystemTempDirectory "hwfi-record-plumbing" $ \dir -> do
+    ws <- newWorkspace dir
+    tracer <- newTracer
+    store <- createRunStore dir "run-record"
+    usageSeam <- newUsageSeam store Nothing emptyRunUsage
+    let benv =
+          BuiltinEnv
+            { beWorkspace = ws,
+              beModels = emptyModelStore,
+              beTracer = tracer,
+              beStep = StepRef (qnameFromText "tools/test") "step",
+              beExecPolicy = Nothing,
+              beUsage = usageSeam,
+              beIntrospect = pure Null,
+              beEvalWorkflow = Nothing,
+              beRunId = "run-record",
+              beSkillCatalog = emptySkillCatalog defaultSkillPolicy
+            }
+    body benv parseOut
+
+invokeRecord ::
+  BuiltinEnv ->
+  QName ->
+  (Map.Map Ident RValue -> Either Text RValue) ->
+  Map.Map Ident RValue ->
+  IO (Either Text RValue)
+invokeRecord benv q parseOut args = do
+  out <- runBuiltin benv q args
+  case out of
+    Left e -> pure (Left (renderRuntimeError e))
+    Right (VRecord m) -> pure (parseOut m)
+    Right other -> pure (Left ("unexpected result: " <> T.pack (show other)))

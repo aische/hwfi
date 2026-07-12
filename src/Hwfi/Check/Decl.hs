@@ -15,10 +15,10 @@ module Hwfi.Check.Decl
 where
 
 import Data.Either (fromLeft)
-import Data.List (foldl')
+import Data.List (find, foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Accessor (..), Expr (..), RefPath (..), StringPart (..))
@@ -28,7 +28,7 @@ import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, traceSliceQName)
+import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, isRecordPlumbingBuiltin, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, recordFilterQName, recordMapQName, recordMergeQName, traceSliceQName)
 import Hwfi.Check.Error (CheckWarning (..), TypeError, TypeErrorKind (..), checkWarning, typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
@@ -502,6 +502,8 @@ checkStep ctx path sections st s =
       -- Agent builtins take a heterogeneous @tools@ list and need bespoke
       -- checking (§5.6.9); the generic 'checkArgs' path cannot express it.
       | isAgentBuiltin target = checkAgentCall ctx env path pos target (stepArgs s)
+      | isRecordPlumbingBuiltin target =
+          checkRecordPlumbingCall env path pos target (stepArgs s)
       | otherwise = case mCallee of
           Nothing -> ([], [], Nothing)
           Just callee ->
@@ -570,6 +572,223 @@ resolveTarget ctx env path pos target
                 ("ref target '" <> renderQName target <> "' does not have record input/output types")
             ]
           )
+
+-- Record plumbing (§13.1.2) --------------------------------------------------
+
+-- | Check record-plumbing builtins (§13.1.2) with structurally merged/filtered
+-- result types.
+checkRecordPlumbingCall ::
+  Env -> FilePath -> Pos -> QName -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkRecordPlumbingCall env path pos target args =
+  case target of
+    q | q == recordMergeQName -> checkRecordMerge env path pos args
+    q | q == recordFilterQName -> checkRecordFilter env path pos args
+    q | q == recordMapQName -> checkRecordMap env path pos args
+    _ -> ([], [], Nothing)
+
+checkRecordMerge :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkRecordMerge env path pos args =
+  (missingExtra <> valueErrs <> mergeErrs, [], resultTy)
+  where
+    expected = ["base", "overlay"]
+    (missingExtra, argMap) = plumbingArgErrors path pos args expected
+    baseArg = Map.lookup "base" argMap
+    overlayArg = Map.lookup "overlay" argMap
+    valueErrs =
+      concat
+        [ fromLeft [] (checkRecordArg env (argSpan a) (argValue a))
+          | a <- maybeToList baseArg ++ maybeToList overlayArg
+        ]
+    (mergeErrs, mergedFields) =
+      case (baseArg, overlayArg) of
+        (Just baseA, Just overlayA) ->
+          case
+            ( inferRecordArg env (argSpan baseA) (argValue baseA),
+              inferRecordArg env (argSpan overlayA) (argValue overlayA)
+            )
+            of
+              (Right baseFs, Right overlayFs) ->
+                mergeRecordFields path (spanStart (argSpan baseA)) baseFs overlayFs
+              _ -> ([], Nothing)
+        _ -> ([], Nothing)
+    resultTy = fmap (\fs -> TyRecord [("record", TyRecord fs)]) mergedFields
+
+checkRecordFilter :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkRecordFilter env path pos args =
+  (missingExtra <> valueErrs <> equalsErrs, [], resultTy)
+  where
+    expected = ["items", "field", "equals"]
+    (missingExtra, argMap) = plumbingArgErrors path pos args expected
+    itemsArg = Map.lookup "items" argMap
+    fieldArg = Map.lookup "field" argMap
+    equalsArg = Map.lookup "equals" argMap
+    valueErrs =
+      maybe [] itemsErrs itemsArg
+        <> maybe [] (\a -> fromLeft [] (checkExpr env (spanStart (argSpan a)) TyString (argValue a))) fieldArg
+    equalsErrs =
+      case (fieldArg >>= staticStringLit . argValue, itemsArg) of
+        (Just field, Just itemsA) ->
+          case inferExpr env (spanStart (argSpan itemsA)) (argValue itemsA) of
+            Right (TyList (TyRecord fs)) ->
+              case (lookup field fs, equalsArg) of
+                (Just fieldTy, Just eqA) ->
+                  fromLeft []
+                    (checkExpr env (spanStart (argSpan eqA)) fieldTy (argValue eqA))
+                (Nothing, Just eqA) ->
+                  [ typeError
+                      path
+                      (spanStart (argSpan eqA))
+                      TypeMismatch
+                      ("record element type has no field '" <> field <> "'")
+                  ]
+                _ -> []
+            _ -> []
+        _ -> []
+    resultTy =
+      case itemsArg of
+        Just itemsA ->
+          case inferExpr env (spanStart (argSpan itemsA)) (argValue itemsA) of
+            Right listTy -> Just (TyRecord [("items", listTy)])
+            _ -> Nothing
+        Nothing -> Nothing
+    itemsErrs a =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left errs -> errs
+        Right (TyList (TyRecord _)) -> []
+        Right other ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              TypeMismatch
+              ("record-filter 'items' must be List<Record>, got " <> renderType other)
+          ]
+
+checkRecordMap :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkRecordMap env path pos args =
+  (missingExtra <> valueErrs <> fieldErrs, [], resultTy)
+  where
+    expected = ["items", "field"]
+    (missingExtra, argMap) = plumbingArgErrors path pos args expected
+    itemsArg = Map.lookup "items" argMap
+    fieldArg = Map.lookup "field" argMap
+    valueErrs =
+      maybe [] itemsErrs itemsArg
+        <> maybe [] (\a -> fromLeft [] (checkExpr env (spanStart (argSpan a)) TyString (argValue a))) fieldArg
+    fieldErrs =
+      case (fieldArg >>= staticStringLit . argValue, itemsArg) of
+        (Just field, Just itemsA) ->
+          case inferExpr env (spanStart (argSpan itemsA)) (argValue itemsA) of
+            Right (TyList (TyRecord fs)) ->
+              case lookup field fs of
+                Just _ -> []
+                Nothing ->
+                  maybe
+                    []
+                    ( \a ->
+                        [ typeError
+                            path
+                            (spanStart (argSpan a))
+                            TypeMismatch
+                            ("record element type has no field '" <> field <> "'")
+                        ]
+                    )
+                    fieldArg
+            _ -> []
+        _ -> []
+    resultTy =
+      case (fieldArg >>= staticStringLit . argValue, itemsArg) of
+        (Just field, Just itemsA) ->
+          case inferExpr env (spanStart (argSpan itemsA)) (argValue itemsA) of
+            Right (TyList (TyRecord fs)) ->
+              fmap (\t -> TyRecord [("values", TyList t)]) (lookup field fs)
+            _ -> Just (TyRecord [("values", TyList TyJson)])
+        _ -> Just (TyRecord [("values", TyList TyJson)])
+    itemsErrs a =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left errs -> errs
+        Right (TyList (TyRecord _)) -> []
+        Right other ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              TypeMismatch
+              ("record-map 'items' must be List<Record>, got " <> renderType other)
+          ]
+
+plumbingArgErrors :: FilePath -> Pos -> [Arg] -> [Ident] -> ([TypeError], Map Ident Arg)
+plumbingArgErrors path pos args expected =
+  ( missingExtra <> extraErrs,
+    Map.fromList [(argName a, a) | a <- args]
+  )
+  where
+    argNames = map argName args
+    missingExtra =
+      [ typeError path pos ArgMismatch ("missing argument '" <> n <> "'")
+        | n <- expected,
+          n `notElem` argNames
+      ]
+    extraErrs =
+      [ typeError path (spanStart (argSpan a)) ArgMismatch ("unexpected argument '" <> argName a <> "'")
+        | a <- args,
+          argName a `notElem` expected
+      ]
+
+checkRecordArg :: Env -> Span -> Expr -> Either [TypeError] ()
+checkRecordArg env sp e =
+  case inferExpr env (spanStart sp) e of
+    Left errs -> Left errs
+    Right (TyRecord _) -> Right ()
+    Right other ->
+      Left
+        [ typeError
+            (envPath env)
+            (spanStart sp)
+            TypeMismatch
+            ("expected Record, got " <> renderType other)
+        ]
+
+inferRecordArg :: Env -> Span -> Expr -> Either [TypeError] [(Ident, Type)]
+inferRecordArg env sp e =
+  case inferExpr env (spanStart sp) e of
+    Left errs -> Left errs
+    Right (TyRecord fs) -> Right fs
+    Right other ->
+      Left
+        [ typeError
+            (envPath env)
+            (spanStart sp)
+            TypeMismatch
+            ("expected Record, got " <> renderType other)
+        ]
+
+mergeRecordFields ::
+  FilePath -> Pos -> [(Ident, Type)] -> [(Ident, Type)] -> ([TypeError], Maybe [(Ident, Type)])
+mergeRecordFields path pos baseFs overlayFs =
+  case find mismatch (Map.keys overlayMap) of
+    Just field ->
+      ( [ typeError
+            path
+            pos
+            TypeMismatch
+            ( "record-merge field '"
+                <> field
+                <> "' has incompatible types in base and overlay"
+            )
+        ],
+        Nothing
+      )
+    Nothing -> ([], Just (Map.toList (Map.union overlayMap baseMap)))
+  where
+    baseMap = Map.fromList baseFs
+    overlayMap = Map.fromList overlayFs
+    mismatch field =
+      case (Map.lookup field baseMap, Map.lookup field overlayMap) of
+        (Just baseTy, Just overlayTy) -> not (structEq baseTy overlayTy)
+        _ -> False
+
+staticStringLit :: Expr -> Maybe Ident
+staticStringLit (EString [SLit t]) = Just t
+staticStringLit _ = Nothing
 
 -- Agent tool-use checking (§5.6.9, §6.1.1, §6.1.5, A18) ----------------------
 
@@ -871,6 +1090,7 @@ refPaths = \case
   ERef rp -> [rp]
   EList es -> concatMap refPaths es
   ERecord fs -> concatMap (refPaths . snd) fs
+  ERange e -> refPaths e
   _ -> []
 
 -- Helpers -------------------------------------------------------------------

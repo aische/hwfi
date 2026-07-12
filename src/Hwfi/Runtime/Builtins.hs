@@ -118,6 +118,9 @@ runBuiltin env q args = case renderQName q of
   "builtin/json-get" -> jsonGetTool args
   "builtin/json-values" -> jsonValuesTool args
   "builtin/concat" -> concatTool args
+  "builtin/record-merge" -> recordMergeTool args
+  "builtin/record-filter" -> recordFilterTool args
+  "builtin/record-map" -> recordMapTool args
   "builtin/log" -> logTool env args
   "builtin/discover-skills" -> discoverSkillsTool env args
   "builtin/load-skill" -> loadSkillTool env args
@@ -738,6 +741,59 @@ concatTool args =
     case argStrList args "parts" of
       Right parts -> Right (record [("text", VString (T.concat parts))])
       Left e -> Left e
+
+-- Record plumbing (§13.1.2) --------------------------------------------------
+
+recordMergeTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+recordMergeTool args =
+  pure $
+    case (Map.lookup "base" args, Map.lookup "overlay" args) of
+      (Just (VRecord base), Just (VRecord overlay)) ->
+        Right (record [("record", VRecord (Map.union overlay base))])
+      _ ->
+        Left (evalError "builtin/record-merge requires base and overlay records")
+
+recordFilterTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+recordFilterTool args =
+  pure $
+    case (Map.lookup "items" args, argText args "field") of
+      (Just (VList items), Right field) ->
+        case Map.lookup "equals" args of
+          Nothing -> Left (evalError "builtin/record-filter requires equals")
+          Just wanted ->
+            Right
+              ( record
+                  [ ( "items",
+                      VList
+                        [ item
+                          | item@(VRecord m) <- items,
+                            case Map.lookup field m of
+                              Just v -> v == wanted
+                              Nothing -> False
+                        ]
+                    )
+                  ]
+              )
+      (Just (VList _), _) -> Left (evalError "builtin/record-filter requires field: String")
+      _ -> Left (evalError "builtin/record-filter requires items: List<Record>")
+
+recordMapTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+recordMapTool args =
+  pure $
+    case (Map.lookup "items" args, argText args "field") of
+      (Just (VList items), Right field) ->
+        case traverse (fieldValue field) items of
+          Left err -> Left (evalError err)
+          Right values -> Right (record [("values", VList values)])
+      (Just (VList _), _) -> Left (evalError "builtin/record-map requires field: String")
+      _ -> Left (evalError "builtin/record-map requires items: List<Record>")
+  where
+    fieldValue field = \case
+      VRecord m ->
+        case Map.lookup field m of
+          Just v -> Right v
+          Nothing -> Left ("record has no field '" <> field <> "'")
+      _ -> Left "record-map items must be records"
 
 -- Workflow logging (§13.1.5) ---------------------------------------------------
 

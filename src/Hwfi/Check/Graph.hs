@@ -260,6 +260,7 @@ encodeExpr = \case
   ERecord fs -> "rec{" <> T.intercalate "," [n <> "=" <> encodeExpr e | (n, e) <- sortOn fst fs] <> "}"
   ESelf slug -> "self:" <> renderSlug slug
   EQName q -> "qn:" <> renderQName q
+  ERange e -> "range(" <> encodeExpr e <> ")"
 
 encodePart :: StringPart -> Text
 encodePart = \case

@@ -22,9 +22,13 @@ module Hwfi.Check.Builtins
     jsonGetQName,
     jsonValuesQName,
     concatQName,
+    recordMergeQName,
+    recordFilterQName,
+    recordMapQName,
     discoverSkillsQName,
     loadSkillQName,
     isAgentBuiltin,
+    isRecordPlumbingBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
     builtinIdentity,
@@ -96,6 +100,23 @@ jsonValuesQName = qnameFromText "builtin/json-values"
 -- | The @builtin/concat@ qname (§13.1.2): string concatenation.
 concatQName :: QName
 concatQName = qnameFromText "builtin/concat"
+
+-- | The @builtin/record-merge@ qname (§13.1.2): merge two records.
+recordMergeQName :: QName
+recordMergeQName = qnameFromText "builtin/record-merge"
+
+-- | The @builtin/record-filter@ qname (§13.1.2): filter a record list.
+recordFilterQName :: QName
+recordFilterQName = qnameFromText "builtin/record-filter"
+
+-- | The @builtin/record-map@ qname (§13.1.2): pluck a field from each record.
+recordMapQName :: QName
+recordMapQName = qnameFromText "builtin/record-map"
+
+-- | Whether @q@ is a record-plumbing builtin needing bespoke type checking.
+isRecordPlumbingBuiltin :: QName -> Bool
+isRecordPlumbingBuiltin q =
+  q == recordMergeQName || q == recordFilterQName || q == recordMapQName
 
 -- | Skill catalog discovery (§6.7.1).
 discoverSkillsQName :: QName
@@ -250,6 +271,18 @@ builtinCallees =
         [("json", TyJson), ("path", TyString)]
         [("ok", TyBool), ("values", TyList TyJson), ("error", TyString)],
       builtin "builtin/concat" [("parts", TyList TyString)] [("text", TyString)],
+      builtin
+        "builtin/record-merge"
+        [("base", TyJson), ("overlay", TyJson)]
+        [("record", TyJson)],
+      builtin
+        "builtin/record-filter"
+        [("items", TyJson), ("field", TyString), ("equals", TyJson)]
+        [("items", TyJson)],
+      builtin
+        "builtin/record-map"
+        [("items", TyJson), ("field", TyString)]
+        [("values", TyJson)],
       builtin
         "builtin/log"
         [("message", TyString), ("fields", TyJson)]

@@ -28,6 +28,7 @@ expr =
     [ EString <$> lexemeN stringLit,
       ERef <$> lexemeN refPath,
       eSelf,
+      eRange,
       eNumber,
       eBoolNull,
       eList,
@@ -35,6 +36,13 @@ expr =
       EQName <$> lexemeN pQNameRaw
     ]
     <?> "expression"
+
+-- | @range(expr)@ or @range ( expr )@ (§13.1.3).
+eRange :: Parser Expr
+eRange = lexemeN $ do
+  _ <- pKeyword "range"
+  n <- choice [between (symbolN "(") (symbolN ")") expr, expr]
+  pure (ERange n)
 
 -- | A reference path @root(.field | [index])*@ (no internal whitespace).
 refPath :: Parser RefPath

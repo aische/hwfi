@@ -40,6 +40,10 @@ spec = describe "expression parser (spec §3.2, §3.4)" $ do
   it "parses @self# references" $
     parseE "@self#system" `shouldBe` Right (ESelf (Slug "system"))
 
+  it "parses range(n) as a counted loop helper (§13.1.3)" $ do
+    parseE "range(3)" `shouldBe` Right (ERange (EInt 3))
+    parseE "range(${n})" `shouldBe` Right (ERange (ERef (RefPath "n" [])))
+
   it "decodes escapes and honours triple-quoted strings" $ do
     parseE "\"a\\nb\"" `shouldBe` Right (EString [SLit "a\nb"])
     parseE "\"\"\"a \"quoted\" b\"\"\"" `shouldBe` Right (EString [SLit "a \"quoted\" b"])

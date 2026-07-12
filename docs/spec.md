@@ -882,6 +882,18 @@ Provided by the engine, addressed as `builtin/<name>`:
 - `builtin/concat` :
   `{ parts: List<String> } -> { text: String }` — concatenate strings in
   order.
+- `builtin/record-merge` :
+  `{ base: Record, overlay: Record } -> { record: Record }` — merge two
+  records; fields present in both must have structurally equal types; overlay
+  wins on duplicate keys. Cacheable (§8.1).
+- `builtin/record-filter` :
+  `{ items: List<Record>, field: String, equals: T } -> { items: List<Record> }`
+  — keep records whose named field equals `equals` (static `field` literal
+  required for typed `equals`). Cacheable.
+- `builtin/record-map` :
+  `{ items: List<Record>, field: String } -> { values: List<T> }` — collect
+  one field from each record (static `field` literal required for typed
+  output). Cacheable.
 - `builtin/log` :
   `{ message: String, fields: Json } -> { logged: Bool }` — emit a
   `workflow-log` trace event (§8.3.2) with secrets in `fields` redacted
@@ -1754,6 +1766,19 @@ LLM calls.
   the step re-executes on resume.
 
 Further record operations remain in the backlog (§13.1.2).
+
+Record builtins `record-merge`, `record-filter`, and `record-map` are
+**implemented** (v1.1, task 9.10). The checker infers merged/filtered/mapped
+types from the argument record shapes when `field` is a string literal.
+
+### 6.8.1 Counted loop sugar (`range`)
+
+**Status: implemented (v1.1, task 9.11 subset).**
+
+The expression `range(n)` evaluates to `List<Int>` containing `[0, …, n-1]`
+when `n : Int` and `n ≥ 0`; negative counts are a runtime `eval` error. It
+may appear anywhere a `List<Int>` is expected, e.g. `foreach i in range(3) {
+… }`. Inline `while` bodies remain deferred (§13.1.3).
 
 ## 7. Workspace, project, and sandboxing
 
@@ -2809,9 +2834,8 @@ that builtin covers recoverable *static* failures on synthesized source.
 **Priority: 2.** Reduce friction when shaping data between steps without
 giant string interpolations or ad-hoc LLM calls:
 
-- **Record operations** — map/filter/merge/update fields on
-  `Record<{…}>` values (expression forms and/or small builtins).
-  **[deferred]**
+- **Record operations** — `builtin/record-merge`, `record-filter`, and
+  `record-map` on typed `Record<{…}>` values. **[implemented, §6.8]**
 - **JSON path access** — `builtin/json-get` over `Json` values with dot-separated
   keys and recoverable `{ ok, error }` on missing paths. **[implemented, §6.8]**
 - **JSON object/array to list** — `builtin/json-values` collects values into
@@ -2828,8 +2852,9 @@ verbose:
 - **Inline `while` bodies** — today predicate and body are typically external
   sub-workflow callees; allow inline block bodies (and optionally inline
   predicates) where typing and step-key scoping can be made unambiguous.
-- **Counted loops** — sugar for `for i in range(n)` (or equivalent) instead
-  of constructing a list or relying on `while` + manual counter carry.
+  **[deferred]**
+- **Counted loops** — `range(n)` expression sugar for `foreach`/`par`.
+  **[implemented, §6.8.1]**
 
 #### 13.1.4 Cache invalidation policy (author-visible)
 

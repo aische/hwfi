@@ -58,6 +58,13 @@ evalExpr env = \case
     Just kind -> Right (VRef kind q)
     Nothing ->
       Left (evalError ("bare name '" <> renderQName q <> "' is not a callable at runtime"))
+  ERange e -> do
+    n <- evalExpr env e
+    case n of
+      VInt count | count >= 0 -> Right (VList [VInt i | i <- [0 .. count - 1]])
+      VInt count ->
+        Left (evalError ("range count must be >= 0, got " <> T.pack (show count)))
+      _ -> Left (evalError "range(...) requires an Int count")
   where
     field (n, e) = (,) n <$> evalExpr env e
 

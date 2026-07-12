@@ -873,6 +873,17 @@ spec = do
               [("got", "String")]
       errKinds <$> checkOnlyWithSubs md subs `shouldReturn` []
 
+    it "accepts foreach i in range(n) as List<Int> (§13.1.3)" $ do
+      let md =
+            wrapBody
+              [ "_ <- foreach i in range(3) {",
+                "} @loop",
+                "return { got = \"ok\" }"
+              ]
+              []
+              [("got", "String")]
+      errKinds <$> checkOnly md `shouldReturn` []
+
 -- | Assemble a @main.md@ with extra import lines and body lines.
 wrapBodyWithImports :: [Text] -> [Text] -> [(Text, Text)] -> [(Text, Text)] -> Text
 wrapBodyWithImports extraImports bodyLines ins outs =

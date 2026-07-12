@@ -38,6 +38,8 @@ data Expr
   | -- | A bare qualified name, permitted only where a @ToolRef@/@WorkflowRef@
     -- value is expected (§3.2, §3.4).
     EQName QName
+  | -- | @range(n)@ — a counted loop helper producing @List<Int>@ (§13.1.3).
+    ERange Expr
   deriving stock (Eq, Show)
 
 -- | One piece of a string literal.

@@ -4,16 +4,14 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 ## Now
 
-_No active milestone._ v0.1.0.0 (R1) shipped 2026-07-10. Pick v1.1 items below
-when starting the next cycle.
+- [ ] 9.9 Control-flow error handling — `try`/recover; `par` continue-on-failure
+      (blocked: resume/cache semantics in spec §13.1.1)
 
 ## Next — v1.1 (post-release)
 
 Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 
-- [ ] 9.9 Control-flow error handling — `try`/recover; `par` continue-on-failure
-- [ ] 9.10 Data plumbing (remainder) — record map/filter/merge
-- [ ] 9.11 Simpler loop syntax — inline `while` bodies, `range` loops
+- [ ] 9.11 Simpler loop syntax (remainder) — inline `while` bodies
 - [ ] 9.12 Cache invalidation UX (full) — invalidate-from-step policy
 - [ ] 9.14 `WorkflowRef` / `ToolRef` patterns — docs + checker hints
 - [ ] 9.4.4 `builtin/extract-skill` stub writer (A40)
@@ -29,6 +27,10 @@ Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] 9.10 Data plumbing (remainder) — `record-merge`/`record-filter`/`record-map`
+      (2026-07-12)
+- [x] 9.11 `range(n)` loop sugar — expression form for counted `foreach`/`par`
+      (2026-07-12)
 - [x] R1 v1.0.0 release (P0–P2, tag `v0.1.0.0`) — archived in
       [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md) (2026-07-12)
 - [x] 9.15.1–9.15.4 Agent skill runtime (§6.7): catalog, `discover-skills`,

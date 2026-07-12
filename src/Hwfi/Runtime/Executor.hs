@@ -1054,6 +1054,7 @@ exprRefPaths = \case
   ERef rp -> [rp]
   EList es -> concatMap exprRefPaths es
   ERecord fs -> concatMap (exprRefPaths . snd) fs
+  ERange e -> exprRefPaths e
   _ -> []
 
 renderRefPath :: RefPath -> Text
