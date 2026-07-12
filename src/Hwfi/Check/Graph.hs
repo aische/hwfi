@@ -37,6 +37,7 @@ import Hwfi.Ast.Step
     Statement (..),
     StepStmt (..),
     WhileStmt (..),
+    WhileBody (..),
   )
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Workflow (..))
@@ -75,7 +76,11 @@ callTargets = concatMap go
       SReturn _ _ -> []
       SIf s -> callTargets (ifThen s) <> maybe [] callTargets (ifElse s)
       SLoop s -> callTargets (loopBody s)
-      SWhile s -> staticCallee (whilePredicate s) <> staticCallee (whileBody s)
+      SWhile s -> staticCallee (whilePredicate s) <> whileBodyTargets (whileBody s)
+
+    whileBodyTargets = \case
+      WhileBodyCallee e _ -> staticCallee e
+      WhileBodyInline stmts -> callTargets stmts
 
 -- | The direct callees that resolve to /project/ declarations (used for cycle
 -- detection; builtins are always leaves).
@@ -222,11 +227,15 @@ encodeStmt = \case
       <> " predArgs{"
       <> encodeArgs (whilePredicateArgs s)
       <> "} body="
-      <> encodeExpr (whileBody s)
-      <> " bodyArgs{"
-      <> encodeArgs (whileBodyArgs s)
-      <> "} max="
+      <> encodeWhileBody (whileBody s)
+      <> " max="
       <> encodeExpr (whileMaxIterations s)
+
+encodeWhileBody :: WhileBody -> Text
+encodeWhileBody = \case
+  WhileBodyCallee e args ->
+    encodeExpr e <> " bodyArgs{" <> encodeArgs args <> "}"
+  WhileBodyInline stmts -> "inline{" <> encodeStmts stmts <> "}"
 
 encodeStmts :: [Statement] -> Text
 encodeStmts = T.intercalate ";" . map encodeStmt

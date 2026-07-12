@@ -113,46 +113,82 @@ whileRhs :: Pos -> Binder -> Parser Statement
 whileRhs start b = do
   _ <- keyword "while"
   _ <- symbolN "("
-  fields <- sepEndBy argField (symbolN ",")
+  fields <- sepEndBy whileField (symbolN ",")
   _ <- symbol ")"
   mId <- optional stepIdP
   end <- getPos
   sid <- resolveStepId b mId
-  (predE, predArgs, bodyE, bodyArgs, maxIter) <- parseWhileFields fields
+  (predE, predArgs, wb, maxIter) <- parseWhileFields fields
   pure
     ( SWhile
         ( WhileStmt
             b
             predE
             predArgs
-            bodyE
-            bodyArgs
+            wb
             maxIter
             sid
             (spanFromTo start end)
         )
     )
 
--- | Extract the required @while@ fields from a parsed argument list.
-parseWhileFields :: [Arg] -> Parser (Expr, [Arg], Expr, [Arg], Expr)
+-- | One @key = value@ field inside @while(...)@. The @body@ field accepts
+-- either a callee expression or a brace-delimited inline block (§4.3.7).
+whileField :: Parser (Ident, Either [Statement] Expr)
+whileField = do
+  n <- lexemeN pIdentRaw
+  _ <- symbolN "="
+  val <-
+    if n == "body"
+      then (Left <$> block) <|> (Right <$> expr)
+      else Right <$> expr
+  pure (n, val)
+
+-- | Extract the required @while@ fields from a parsed field list.
+parseWhileFields ::
+  [(Ident, Either [Statement] Expr)] ->
+  Parser (Expr, [Arg], WhileBody, Expr)
 parseWhileFields fields = do
-  predE <- reqField "predicate"
+  predE <- reqExpr "predicate"
   predArgs <- reqRecordArgs "predicate_args"
-  bodyE <- reqField "body"
-  bodyArgs <- reqRecordArgs "body_args"
-  maxIter <- reqField "max_iterations"
-  let allowed = ["predicate", "predicate_args", "body", "body_args", "max_iterations"]
-  mapM_ (\a -> unless (argName a `elem` allowed) (fail ("unexpected while(...) argument '" <> T.unpack (argName a) <> "' (§4.3)"))) fields
-  pure (predE, predArgs, bodyE, bodyArgs, maxIter)
+  wb <-
+    case fieldVal "body" of
+      Just (Left stmts) -> pure (WhileBodyInline stmts)
+      Just (Right e) -> WhileBodyCallee e <$> reqRecordArgs "body_args"
+      Nothing -> fail "while(...) requires 'body' (§4.3)"
+  maxIter <- reqExpr "max_iterations"
+  let allowed =
+        case wb of
+          WhileBodyInline _ ->
+            ["predicate", "predicate_args", "body", "max_iterations"]
+          WhileBodyCallee _ _ ->
+            ["predicate", "predicate_args", "body", "body_args", "max_iterations"]
+  mapM_
+    ( \(n, _) ->
+        unless (n `elem` allowed) (fail ("unexpected while(...) argument '" <> T.unpack n <> "' (§4.3)"))
+    )
+    fields
+  case fieldVal "body_args" of
+    Just _ | case wb of WhileBodyInline _ -> True; _ -> False ->
+      fail "while(...) inline body must not use body_args (§4.3.7)"
+    _ -> pure ()
+  pure (predE, predArgs, wb, maxIter)
   where
-    reqField name =
-      case lookup name [(argName a, argValue a) | a <- fields] of
-        Just e -> pure e
+    fieldVal name =
+      case [v | (n', v) <- fields, n' == name] of
+        [v] -> Just v
+        _ -> Nothing
+    reqExpr name =
+      case fieldVal name of
+        Just (Right e) -> pure e
+        Just (Left _) -> fail ("while(...) '" <> T.unpack name <> "' must be an expression (§4.3)")
         Nothing -> fail ("while(...) requires '" <> T.unpack name <> "' (§4.3)")
     reqRecordArgs name =
-      case lookup name [(argName a, argValue a) | a <- fields] of
-        Just (ERecord fs) -> pure [Arg n e (spanFromTo (Pos 0 0) (Pos 0 0)) | (n, e) <- fs]
-        Just _ -> fail ("while(...) '" <> T.unpack name <> "' must be a record literal (§4.3)")
+      case fieldVal name of
+        Just (Right (ERecord fs)) ->
+          pure [Arg n e (spanFromTo (Pos 0 0) (Pos 0 0)) | (n, e) <- fs]
+        Just (Right _) -> fail ("while(...) '" <> T.unpack name <> "' must be a record literal (§4.3)")
+        Just (Left _) -> fail ("while(...) '" <> T.unpack name <> "' must be a record literal (§4.3)")
         Nothing -> fail ("while(...) requires '" <> T.unpack name <> "' (§4.3)")
 
 loopKindP :: Parser LoopKind

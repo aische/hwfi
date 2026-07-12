@@ -139,7 +139,9 @@ duplicateIdErrors path statements =
     dupNested = \case
       SIf s -> duplicateIdErrors path (ifThen s) <> maybe [] (duplicateIdErrors path) (ifElse s)
       SLoop s -> duplicateIdErrors path (loopBody s)
-      SWhile _ -> []
+      SWhile s -> case whileBody s of
+        WhileBodyInline stmts -> duplicateIdErrors path stmts
+        WhileBodyCallee _ _ -> []
       _ -> []
 
     dupInBlock stmts = go [] idPositions
@@ -354,9 +356,11 @@ checkWhile ctx path sections st s =
           <> predShapeErrs
           <> predArgErrs
           <> bodyArgErrs
+          <> inlineBodyErrs
           <> maxErrs
           <> resErrs
           <> bindErrs,
+      bsSteps = bodySteps <> bsSteps st,
       bsRoots = roots',
       bsBound = bound',
       bsLastResult = resultType
@@ -366,21 +370,36 @@ checkWhile ctx path sections st s =
     pos = spanStart (whileSpan s)
 
     (mPredCallee, predTargetErrs) = resolveExprTarget ctx env path pos (whilePredicate s)
-    (mBodyCallee, bodyTargetErrs) = resolveExprTarget ctx env path pos (whileBody s)
     targetErrs = predTargetErrs <> bodyTargetErrs
 
     predShapeErrs = case mPredCallee of
       Nothing -> []
       Just callee -> predicateShapeErrors path pos callee
 
-    bodyOutTy = mBodyCallee >>= calleeResultType
+    (bodyOutTy, bodyTargetErrs, bodyArgErrs, inlineBodyErrs, bodySteps) =
+      case whileBody s of
+        WhileBodyCallee target args ->
+          let (mCallee, errs) = resolveExprTarget ctx env path pos target
+           in ( mCallee >>= calleeResultType,
+                errs,
+                case mCallee of
+                  Nothing -> []
+                  Just callee -> checkArgsWithCarry (mCallee >>= calleeResultType) env callee args,
+                [],
+                []
+              )
+        WhileBodyInline stmts ->
+          let (e1, steps, bodyTail) = checkChild ctx path sections st Map.empty [] stmts
+           in case bodyTail of
+                Just t ->
+                  let (e2, steps2, _) =
+                        checkChild ctx path sections st (Map.singleton "carry" t) [] stmts
+                   in (bodyTail, [], [], e2, steps <> steps2)
+                Nothing -> (bodyTail, [], [], e1, steps)
 
     predArgErrs = case mPredCallee of
       Nothing -> []
       Just callee -> checkArgsWithCarry bodyOutTy env callee (whilePredicateArgs s)
-    bodyArgErrs = case mBodyCallee of
-      Nothing -> []
-      Just callee -> checkArgsWithCarry bodyOutTy env callee (whileBodyArgs s)
 
     maxErrs = fromLeft [] (checkExpr env pos TyInt (whileMaxIterations s))
 
@@ -394,7 +413,7 @@ checkWhile ctx path sections st s =
                 path
                 pos
                 ReturnRule
-                "a value-binding 'while' requires a body workflow with known outputs (§4.3.3)"
+                "a value-binding 'while' requires a body with a known value type (§4.3.3)"
             ]
           )
 

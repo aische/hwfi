@@ -105,6 +105,41 @@ spec = describe "step DSL parser (spec §3.1, §3.4)" $ do
         whileId s `shouldBe` "loop"
         whileMaxIterations s `shouldBe` EInt 10
         length (whilePredicateArgs s) `shouldBe` 1
+        case whileBody s of
+          WhileBodyCallee _ args -> length args `shouldBe` 0
+          _ -> expectationFailure "expected callee body"
       other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses while with an inline body block (§4.3.7)" $ do
+    let src =
+          T.unlines
+            [ "rs <- while(",
+              "  predicate = workflows/pred,",
+              "  predicate_args = {},",
+              "  body = {",
+              "    x <- foo/bar() @step",
+              "  },",
+              "  max_iterations = 5",
+              ") @loop"
+            ]
+    case parseB (Pos 1 1) src of
+      Right [SWhile s] ->
+        case whileBody s of
+          WhileBodyInline stmts -> length stmts `shouldBe` 1
+          _ -> expectationFailure "expected inline body"
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "rejects body_args with an inline while body (§4.3.7)" $ do
+    let src =
+          T.unlines
+            [ "_ <- while(",
+              "  predicate = workflows/pred,",
+              "  predicate_args = {},",
+              "  body = { x <- foo/bar() @step },",
+              "  body_args = {},",
+              "  max_iterations = 1",
+              ") @loop"
+            ]
+    parseB (Pos 1 1) src `shouldSatisfy` isLeft
   where
     isLeft = either (const True) (const False)

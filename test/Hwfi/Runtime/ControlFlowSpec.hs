@@ -470,6 +470,42 @@ whileMainMd =
       "```"
     ]
 
+inlineWhileSubs :: Map.Map Text Text
+inlineWhileSubs =
+  Map.fromList
+    [ ("pred.md", predMd),
+      ("go-out.md", goOutMd),
+      ("stop-out.md", stopOutMd)
+    ]
+
+inlineWhileMainMd :: Text
+inlineWhileMainMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs: {}",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - builtin/exec",
+      "  - workflows/pred",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rs <- while(",
+      "  predicate = workflows/pred,",
+      "  predicate_args = { stop = false },",
+      "  body = {",
+      "    r <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo done >> log.txt; echo done\"], stdin = \"\", timeout_ms = 0) @work",
+      "  },",
+      "  max_iterations = 1",
+      ") @loop",
+      "return { got = ${rs[0].stdout} }",
+      "```"
+    ]
+
 foreverMainMd :: Text
 foreverMainMd =
   T.unlines
@@ -872,6 +908,33 @@ spec = do
               []
               [("got", "String")]
       errKinds <$> checkOnlyWithSubs md subs `shouldReturn` []
+
+    it "runs an inline body block and collects List<U> results (§4.3.7)" $
+      runProjectWithSubs inlineWhileMainMd inlineWhileSubs Map.empty $ \rr ws -> do
+        case rrOutcome rr of
+          Left err -> reKind err `shouldBe` KUser
+          Right _ -> expectationFailure "expected max_iterations user error"
+        lineCount (ws </> "log.txt") `shouldReturn` 1
+        loopIters (rrEvents rr) `shouldBe` 2
+
+    it "accepts carry inside an inline while body when the body type is known (§4.3.7)" $ do
+      let md =
+            wrapBodyWithImports
+              ["workflows/pred"]
+              [ "rs <- while(",
+                "  predicate = workflows/pred,",
+                "  predicate_args = { stop = false },",
+                "  body = {",
+                "    r <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo hi\"], stdin = \"\", timeout_ms = 0) @work",
+                "    t <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo ${carry.stdout}\"], stdin = \"\", timeout_ms = 0) @carry",
+                "  },",
+                "  max_iterations = 2",
+                ") @loop",
+                "return { got = \"x\" }"
+              ]
+              []
+              [("got", "String")]
+      errKinds <$> checkOnlyWithSubs md inlineWhileSubs `shouldReturn` []
 
     it "accepts foreach i in range(n) as List<Int> (§13.1.3)" $ do
       let md =

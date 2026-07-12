@@ -185,13 +185,16 @@ resolveRef env pos (RefPath root accs)
       case envCarryType env of
         Just t -> foldAccessors env pos "carry" t accs
         Nothing ->
-          Left
-            [ typeError
-                (envPath env)
-                pos
-                UndeclaredRef
-                "'carry' is not in scope; it is only available in while(...) predicate_args/body_args after the first body iteration (§4.3.4)"
-            ]
+          case Map.lookup "carry" (envRoots env) of
+            Just t -> foldAccessors env pos "carry" t accs
+            Nothing ->
+              Left
+                [ typeError
+                    (envPath env)
+                    pos
+                    UndeclaredRef
+                    "'carry' is not in scope; it is only available in while(...) predicate_args/body_args or an inline body block after the first body iteration (§4.3.4)"
+                ]
   | otherwise =
       case Map.lookup root (envRoots env) of
         Nothing ->

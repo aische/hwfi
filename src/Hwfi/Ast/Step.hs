@@ -17,6 +17,7 @@ module Hwfi.Ast.Step
     IfStmt (..),
     LoopStmt (..),
     WhileStmt (..),
+    WhileBody (..),
     Statement (..),
     statementSpan,
     statementId,
@@ -95,16 +96,32 @@ data LoopStmt = LoopStmt
   }
   deriving stock (Eq, Show)
 
+-- | The @while@ loop body: an external callee (§4.3.1) or an inline block
+-- (§4.3.7). Predicate stays a callee in both forms.
+data WhileBody
+  = -- | @body = workflows/…@ with @body_args@ (§4.3.1).
+    WhileBodyCallee
+      { wbTarget :: Expr,
+        wbArgs :: [Arg]
+      }
+  | -- | @body = { … }@ — statements run in the iteration scope (§4.3.7).
+    WhileBodyInline
+      { wbStmts :: [Statement]
+      }
+  deriving stock (Eq, Show)
+
 -- | A @while(predicate, body)@ predicate/body loop (§4.3, M9). The predicate
 -- and body are static callees (qnames or @${ref}@ values); their argument
 -- records are evaluated before each invocation. After each body iteration,
 -- @${carry}@ holds the previous body result for the next round.
+--
+-- When 'whileBody' is 'WhileBodyInline', @body_args@ is absent and @${carry}@
+-- is in scope inside the block after the first iteration (§4.3.7).
 data WhileStmt = WhileStmt
   { whileBinder :: Binder,
     whilePredicate :: Expr,
     whilePredicateArgs :: [Arg],
-    whileBody :: Expr,
-    whileBodyArgs :: [Arg],
+    whileBody :: WhileBody,
     whileMaxIterations :: Expr,
     whileId :: Ident,
     whileSpan :: Span
@@ -151,4 +168,6 @@ blockStatements = \case
   SReturn _ _ -> []
   SIf s -> ifThen s : maybe [] pure (ifElse s)
   SLoop s -> [loopBody s]
-  SWhile _ -> []
+  SWhile s -> case whileBody s of
+    WhileBodyInline stmts -> [stmts]
+    WhileBodyCallee _ _ -> []

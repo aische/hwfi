@@ -56,6 +56,7 @@ import Hwfi.Ast.Step
     Statement (..),
     StepStmt (..),
     WhileStmt (..),
+    WhileBody (..),
   )
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
@@ -411,7 +412,7 @@ execStmt rt typedSteps q sections scope bindings = \case
   SStep s -> execStep rt typedSteps q sections scope bindings s
   SIf s -> execIf rt typedSteps q sections scope bindings s
   SLoop s -> execLoop rt typedSteps q sections scope bindings s
-  SWhile s -> execWhile rt q sections scope bindings s
+  SWhile s -> execWhile rt typedSteps q sections scope bindings s
   SReturn _ _ -> pure (Left (internalError "unexpected 'return' in statement position"))
 
 -- | Run a control-flow block (an @if@ branch or a loop body) in a child
@@ -549,13 +550,14 @@ whileBodyScope scope sid i = iterScope scope sid i <> "b/"
 -- | Execute a @while@ loop (§4.3, M9).
 execWhile ::
   Runtime ->
+  Map Ident TypedStep ->
   QName ->
   [Section] ->
   Text ->
   Map Ident RValue ->
   WhileStmt ->
   IO (Either RuntimeError (Map Ident RValue, RValue))
-execWhile rt q sections scope bindings s = do
+execWhile rt typedSteps q sections scope bindings s = do
   let stepRef = StepRef q (whileId s)
   ctx <- buildCtx rt q (whileId s)
   let baseEnv = mkEvalEnv rt sections (Map.insert "ctx" ctx bindings)
@@ -597,12 +599,15 @@ execWhile rt q sections scope bindings s = do
                 )
           | otherwise -> do
               bodyRes <-
-                runWhileCallee
+                runWhileBody
                   rt
+                  typedSteps
+                  q
+                  sections
                   (whileBodyScope scope (whileId s) i)
                   env
+                  bindings
                   (whileBody s)
-                  (whileBodyArgs s)
                   mCarry
               case bodyRes of
                 Left e -> pure (Left e)
@@ -625,6 +630,26 @@ execWhile rt q sections scope bindings s = do
             _ <- emit (rtTracer rt) (WhilePred q (whileId s) i cont rsn)
             cacheWhileDecision (rtStore rt) decisionKey cont rsn
             pure (Right decision)
+
+runWhileBody ::
+  Runtime ->
+  Map Ident TypedStep ->
+  QName ->
+  [Section] ->
+  Text ->
+  EvalEnv ->
+  Map Ident RValue ->
+  WhileBody ->
+  Maybe RValue ->
+  IO (Either RuntimeError RValue)
+runWhileBody rt typedSteps q sections scope env bindings wb mCarry =
+  case wb of
+    WhileBodyCallee calleeExpr args ->
+      runWhileCallee rt scope env calleeExpr args mCarry
+    WhileBodyInline stmts -> do
+      let childBindings =
+            maybe bindings (\v -> Map.insert "carry" v bindings) mCarry
+      runBlock rt typedSteps q sections scope childBindings stmts
 
 runWhileCallee ::
   Runtime ->

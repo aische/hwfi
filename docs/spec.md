@@ -458,6 +458,8 @@ should freely choose tools within a round.
 
 #### 4.3.1 Syntax
 
+Callee form (predicate and body are sub-workflows):
+
 ```
 <bind> <- while(
   predicate = <callee>,
@@ -468,11 +470,26 @@ should freely choose tools within a round.
 ) @<id>
 ```
 
+Inline body form (predicate stays a callee; body is a statement block like
+`foreach`):
+
+```
+<bind> <- while(
+  predicate = <callee>,
+  predicate_args = { <field> = <expr>, ... },
+  body = {
+    <statement>*
+  },
+  max_iterations = <expr>
+) @<id>
+```
+
 - `<callee>` is a static qname (`workflows/check`) or a `${ref}` where `ref`
   has type `WorkflowRef<In, Out>` in the enclosing binding environment
   (§5.1).
-- `predicate_args` and `body_args` are **required** records; use `{}` when the
-  callee takes no inputs.
+- `predicate_args` is **required**; use `{}` when the predicate takes no inputs.
+- In the callee form, `body_args` is **required** (use `{}` when the body
+  callee takes no inputs). In the inline form, `body_args` must be omitted.
 - `max_iterations` is a required `Int` expression (static literal or binding);
   it must evaluate to a value `≥ 1` at runtime. Reaching the cap without
   `continue = false` aborts the run with an `Error` of kind `user`
@@ -481,7 +498,7 @@ should freely choose tools within a round.
   loop).
 - The construct requires an explicit `@id` when the binder is `_` (§3.1).
 
-Example:
+Example (callee body):
 
 ```step
 results <- while(
@@ -489,6 +506,20 @@ results <- while(
   predicate_args = { target = ${inputs.target} },
   body = workflows/refine,
   body_args = { target = ${inputs.target} },
+  max_iterations = 20
+) @refine_loop
+return { iterations = ${results} }
+```
+
+Example (inline body):
+
+```step
+results <- while(
+  predicate = workflows/check_done,
+  predicate_args = { target = ${inputs.target} },
+  body = {
+    r <- workflows/refine(target = ${inputs.target}) @round
+  },
   max_iterations = 20
 ) @refine_loop
 return { iterations = ${results} }
@@ -541,10 +572,11 @@ through:
    invocation, so they may reference bindings from earlier steps in the same
    workflow body.
 3. **`carry` — the previous body result.** After iteration `i ≥ 0` completes,
-   the body’s return value is available as `${carry}` in `predicate_args` and
-   `body_args` for iteration `i + 1` only. `${carry}` is **not in scope** for
-   iteration `0`; referencing it there is a static type-check error. The type of
-   `carry` is the body workflow's output type `U` (§4.3.3).
+   the body’s return value is available as `${carry}` in `predicate_args`,
+   `body_args`, and (for inline bodies) inside the body block for iteration
+   `i + 1` only. `${carry}` is **not in scope** for iteration `0`; referencing
+   it there is a static type-check error. The type of `carry` is the body
+   output type `U` (§4.3.3).
 
 There is no implicit threading of predicate outputs into body inputs; wire
 explicit fields in `body_args` if needed.
@@ -566,7 +598,8 @@ while true:
   if not continue: break
   if i >= max_iterations: abort (kind user)
   evaluate body_args (carry in scope iff i > 0)
-  run body at scope P <> w <> "#" <> i <> "/b/"
+  run body at scope P <> w <> "#" <> i <> "/b/
+    -- inline body: run statements in iteration scope with carry bound when i > 0
   bind carry ← body result for next iteration
   i ← i + 1
 emit loop-end (final count = i)
@@ -640,16 +673,21 @@ In addition to §5.6:
    `inputs` record.
 3. The predicate's `outputs` must include `continue: Bool` and
    `reason: String` (structural check).
-4. `${carry}` may appear only in `predicate_args` / `body_args` of a `while`;
-   its type is the body's `outputs` type. It is an error to reference `carry`
-   from any other position.
+4. `${carry}` may appear only in `predicate_args` / `body_args` of a `while`, or
+   inside an inline body block; its type is the body's output type. It is an
+   error to reference `carry` from any other position.
 5. `max_iterations` must have type `Int`.
-6. When the `while` binds a value, the body's `outputs` type must be known and
-   the construct's result type is `List<that type>`.
-7. `predicate` and `body` are **direct callees** for import-graph and Merkle
-   fingerprint purposes (§8.1), same as a step call.
+6. When the `while` binds a value, the body's output type must be known and
+   the construct's result type is `List<that type>`. For inline bodies, the
+   body block must end in a value-producing statement (same rule as `foreach`).
+7. `predicate` is always a direct callee for import-graph and Merkle
+   fingerprint purposes (§8.1). `body` is either a direct callee (with
+   `body_args`) or an inline block whose nested calls contribute to the
+   fingerprint like other control-flow blocks.
 8. Static import cycles through `while` callees are rejected (§5.6.6). Runtime
    unbounded recursion is bounded by `max_iterations`.
+9. Inline `while` bodies must not include `body_args`; callee bodies must
+   include `body_args` (use `{}` when empty).
 
 #### 4.3.8 Relation to `builtin/llm-agent`
 
@@ -1778,7 +1816,18 @@ types from the argument record shapes when `field` is a string literal.
 The expression `range(n)` evaluates to `List<Int>` containing `[0, …, n-1]`
 when `n : Int` and `n ≥ 0`; negative counts are a runtime `eval` error. It
 may appear anywhere a `List<Int>` is expected, e.g. `foreach i in range(3) {
-… }`. Inline `while` bodies remain deferred (§13.1.3).
+… }`.
+
+### 6.8.2 Inline `while` bodies
+
+**Status: implemented (v1.1, task 9.11).**
+
+`while` may use either a callee body (`body = workflows/…`, `body_args = {…}`)
+or an inline statement block (`body = { … }` without `body_args`). The
+predicate remains a callee in both forms. Inline bodies follow the same
+value-producing rules as `foreach` (last step binding, no nested `return`).
+`${carry}` is in scope inside the block from the second iteration onward
+(§4.3.4, §4.3.7).
 
 ## 7. Workspace, project, and sandboxing
 
@@ -2849,10 +2898,10 @@ giant string interpolations or ad-hoc LLM calls:
 **Priority: 3.** Control flow exists (§4.2, §4.3) but common patterns are
 verbose:
 
-- **Inline `while` bodies** — today predicate and body are typically external
-  sub-workflow callees; allow inline block bodies (and optionally inline
-  predicates) where typing and step-key scoping can be made unambiguous.
-  **[deferred]**
+- **Inline `while` bodies** — predicate stays a callee; `body = { … }` runs
+  statements in the iteration scope (optional `${carry}` from iteration 1+).
+  Callee form unchanged. Inline predicates remain deferred.
+  **[implemented, §6.8.2]**
 - **Counted loops** — `range(n)` expression sugar for `foreach`/`par`.
   **[implemented, §6.8.1]**
 
