@@ -1033,7 +1033,8 @@ prompts to handle those paths when needed.
 
 Not available in v1 (see spec §13):
 
-- Workflow-level `try` / recover
+- Workflow-level `try` / recover — **specified** (§4.4); not yet implemented
+- `par(on_error = "collect")` — **specified** (§4.1.1); not yet implemented
 - `Optional<T>` / nullable env
 - Record map/filter/merge helpers (partial: `json-get`, `json-values`, `concat` exist)
 - Step cache does not include workspace file contents

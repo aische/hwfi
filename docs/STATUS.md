@@ -4,24 +4,23 @@ Last updated: 2026-07-12
 
 ## Current focus
 
-**v1.1 backlog** — 9.10 record plumbing, 9.11 loop sugar (`range`, inline
-`while` bodies) shipped; 9.9 (`try`/recover) still needs resume/cache design.
+**v1.1 backlog** — 9.9 (`try`/recover, `par` collect-errors) is **specified**
+(§4.4, §4.1.1) and ready to implement. 9.10–9.11 shipped.
 
 ## Done recently
 
-- **Inline `while` bodies (9.11):** `body = { … }` sugar alongside callee
-  bodies; `${carry}` in inline blocks; parse/check/exec tests.
-- **Record plumbing (9.10):** `builtin/record-merge`, `record-filter`,
-  `record-map` with typed checker support.
-- **Counted loops (9.11):** `range(n)` → `List<Int>` for `foreach`/`par`.
-- **v0.1.0.0 tag (2026-07-10):** first release with tutorials, examples, and
-  `CHANGELOG.md`.
+- **9.9 spec:** `try`/`catch` resume/cache/trace rules (§4.4); `par(on_error =
+  "collect")` envelope semantics (§4.1.1).
+- **Inline `while` bodies (9.11):** `body = { … }` sugar; `${carry}` in inline
+  blocks.
+- **Record plumbing (9.10):** `record-merge` / `record-filter` / `record-map`.
+- **Counted loops (9.11):** `range(n)` → `List<Int>`.
 
 ## Blockers
 
-- **9.9** — workflow `try`/recover and `par` continue-on-failure need spec on
-  step-keys, trace events, and resume replay before coding.
+None for 9.9 implementation.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → 9.9 control-flow error handling, 9.12 cache invalidation UX.
+[TASKS.md](TASKS.md) → implement 9.9 (`try` first, then `par` collect-errors),
+then 9.12 cache invalidation UX.

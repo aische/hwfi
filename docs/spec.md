@@ -141,6 +141,7 @@ _      <- <qname>(<args>) @<id>       -- discard result; id required
 <bind> <- foreach v in <list> { ... } @<id>      -- sequential loop (§4.1)
 <bind> <- par(max = N) v in <list> { ... } @<id> -- parallel loop (§4.1)
 <bind> <- while( predicate = ..., ... ) @<id>    -- predicate/body loop (§4.3)
+<bind> <- try { ... } catch { ... } @<id>         -- error recovery (§4.4)
 ```
 
 Rules:
@@ -252,13 +253,15 @@ grouping. `\n` denotes a line terminator.
 (* --- Step block (contents of a ```step fenced code block) --- *)
 
 StepBlock       = Sep? Statement (Sep+ Statement)* Sep? ;
-Statement       = ReturnStmt | StepStmt | IfStmt | LoopStmt | WhileStmt ;
+Statement       = ReturnStmt | StepStmt | IfStmt | LoopStmt | WhileStmt | TryStmt ;
 StepStmt        = Binder "<-" QName "(" ArgList? ")" StepId? ;
 IfStmt          = Binder "<-" "if" Expr Block ("else" Block)? StepId? ;
 LoopStmt        = Binder "<-" LoopKind Ident "in" Expr Block StepId? ;
 LoopKind        = "foreach" | ParKw ;
-ParKw           = "par" ("(" "max" "=" NumberLit ")")? ;
+ParKw           = "par" ("(" ParOpt ("," ParOpt)* ")")? ;
+ParOpt          = "max" "=" NumberLit | "on_error" "=" StringLit ;
 WhileStmt       = Binder "<-" "while" "(" WhileArgList ")" StepId? ;
+TryStmt         = Binder "<-" "try" Block "catch" Block StepId? ;
 WhileArgList    = WhileArg ("," WhileArg)* ","? ;
 WhileArg        = Ident "=" Expr ;
 Block           = "{" Sep? Statement (Sep+ Statement)* Sep? "}" ;
@@ -329,7 +332,8 @@ Whitespace      = (" " | "\t")+ ;             (* insignificant between
 Additional lexical rules:
 
 - Reserved keywords (cannot be `Ident`): `return`, `true`, `false`,
-  `null`, `_`, `if`, `else`, `foreach`, `par`, `while`, `in`, `max`,
+  `null`, `_`, `if`, `else`, `foreach`, `par`, `while`, `try`, `catch`,
+  `in`, `max`, `on_error`,
   `predicate`, `predicate_args`, `body`, `body_args`, `max_iterations`,
   `carry`.
 - Horizontal whitespace and comments are permitted between any two
@@ -380,10 +384,11 @@ arguments). The two parsers must not conflate them.
 ## 4. Control flow (v1)
 
 - Sequential steps, plus `if`/`else`, `foreach`, `par` (implemented in M8;
-  see §4.1), and `while` (specified in §4.3; implementation milestone M9).
+  see §4.1), `while` (§4.3; milestone M9), and `try`/`catch` (specified in
+  §4.4; v1.1 task 9.9).
 - See §4.2 for scoping rules shared by all control-flow constructs.
-- Errors abort the workflow; the failing step is recorded and the run is
-  resumable from that step.
+- Errors abort the workflow unless caught by `try` (§4.4); the failing step is
+  recorded and the run is resumable from that step.
 
 ### 4.1 `if` / `foreach` / `par`
 
@@ -402,8 +407,9 @@ Control-flow constructs are **value-producing** and use the same
   (side-effect-only loop).
 - `par` runs iterations with **bounded concurrency** (default 4, `par(max = N)`
   overrides), returns results in **input order** regardless of completion order,
-  and aborts on the **lowest-index** failure. The trace writer serialises `emit`
-  so `seq` numbering and on-disk line order stay consistent under concurrency.
+  and by default aborts on the **lowest-index** failure (`on_error = "fail"`,
+  §4.1.1). The trace writer serialises `emit` so `seq` numbering and on-disk
+  line order stay consistent under concurrency.
 - Resume correctness: each step inside a branch/loop is an ordinary cacheable
   step, but its step-key is **iteration/branch-scoped** — the executor threads a
   scope prefix (e.g. `check#2/c`, `mode?then/s`) into the key so dynamically
@@ -416,8 +422,38 @@ Control-flow constructs are **value-producing** and use the same
   holds through loops/branches: a completed iteration's side effect is not
   re-applied on resume.
 - Trace: `loop-start`/`loop-iter`/`loop-end` bracket each loop with its kind
-  (`foreach`/`par`/`while`); `if-branch` records the taken arm; `while-pred`
-  records each predicate decision (§4.3.6).
+  (`foreach`/`par`/`while`); `if-branch` records the taken arm; `try-branch`
+  records the taken `try`/`catch` arm (§4.4.7); `while-pred` records each
+  predicate decision (§4.3.6).
+
+#### 4.1.1 `par` error policy (v1.1)
+
+**Status: specified (v1.1, task 9.9). Not yet implemented.**
+
+Optional `on_error` in `par(...)` controls iteration failure behaviour:
+
+```
+xs <- par(max = N, on_error = "fail") v in ${list} { … } @id    -- default
+xs <- par(max = N, on_error = "collect") v in ${list} { … } @id
+```
+
+| Mode | Behaviour | Result type |
+|------|-----------|-------------|
+| `"fail"` (default) | Abort at lowest-index failure; sibling partial results are discarded from the construct value (current §4.1 behaviour). | `List<U>` |
+| `"collect"` | Run all iterations; failures become per-index error values. | `List<Record<{ ok: Bool, value: U, error: String }>>` |
+
+For `"collect"`:
+
+- On success at index `i`: `{ ok = true, value = <body result>, error = "" }`.
+- On catchable runtime failure at index `i` (same classes as §4.4.4):
+  `{ ok = false, value = <unspecified>, error = <message> }`. Workflows must
+  guard on `ok` before reading `value`. (A future `Optional<T>` may give `value`
+  a proper absent case; §13.)
+- Failed iterations are **not cached**; on resume, only failed indices
+  re-execute. Completed iterations remain cached under `P/loop#i/` scopes
+  (§8.2).
+- `loop-end` `count` is the number of iterations **started**, not the
+  success count.
 
 ### 4.2 Identifier scoping in control-flow blocks
 
@@ -703,6 +739,154 @@ A predicate workflow that *is* an `llm-agent` step returning
 `{ continue, reason }` via a `submit` schema is valid; decision pinning
 (§4.3.5) makes resume deterministic.
 
+### 4.4 `try` / recover
+
+**Status: specified (v1.1, task 9.9). Not yet implemented.**
+
+`try` adds an optional, typed catch boundary at workflow step granularity,
+with the same scoping, tracing, and resume rules as other control-flow
+constructs (§4.1).
+
+`try` is **not** a substitute for:
+
+- branching on `builtin/exec` exit codes (§6.3),
+- `{ ok, error }` recoverable builtins (§6.8),
+- agent-local recoverable tool errors (§6.1.4),
+- `eval-workflow` static failures (§6.4.3).
+
+#### 4.4.1 Syntax
+
+```
+<bind> <- try {
+  <statement>*
+} catch {
+  <statement>*
+} @<id>
+```
+
+- Both arms are brace-delimited statement blocks (same as `if` / `foreach`
+  bodies).
+- The construct requires an explicit `@id` when the binder is `_` (§3.1).
+- `_ <- try { … } catch { … } @id` discards the result (side-effect-only).
+- Recovery is always a block; there is no expression-only `catch`.
+
+Example:
+
+```step
+r <- try {
+  x <- workflows/deploy(version = ${inputs.version}) @deploy
+} catch {
+  x <- workflows/rollback(version = ${inputs.prev}) @rollback
+} @safe_deploy
+return { ok = ${r.ok} }
+```
+
+#### 4.4.2 Typing
+
+In addition to §5.6:
+
+1. Both arms must end in a **value-producing statement** (same rule as
+   `foreach`; no nested `return`).
+2. When the construct binds a name, both arms must have **structurally equal**
+   result types `U`; the construct's type is `U`.
+3. When the binder is `_`, no value constraint is imposed beyond ordinary
+   workflow rules in each arm.
+4. Bindings in the `try` arm do not escape the `catch` arm and vice versa;
+   only the construct's own binder is visible outside.
+5. Nested callees in either arm contribute to import-graph and Merkle
+   fingerprint purposes like other control-flow blocks (§8.1).
+
+#### 4.4.3 Catchable failures
+
+A `try` catches **runtime errors** from steps and sub-workflow calls
+executed inside the `try` arm:
+
+| Error kind | Caught? |
+|------------|---------|
+| `eval` | yes |
+| `user` | yes |
+| `io` / `exec` / provider failures surfaced as runtime errors | yes |
+| `internal` | **no** — propagates and aborts the run (§8.2) |
+
+Static type-check errors are not catchable (the workflow never runs).
+
+There is **no binding** for the caught error in v1; the `catch` arm runs
+with the enclosing environment only. (A future extension may expose
+`${error}`; deferred.)
+
+#### 4.4.4 Execution semantics
+
+For a `try` with static id `t` at scope prefix `P` (§4.1):
+
+```
+emit try-branch (arm = "try")
+run try arm at scope P <> t <> "?try/"
+on success:
+  value ← try arm result
+  goto done
+on catchable runtime error:
+  emit error (§4.4.7)
+  emit try-branch (arm = "catch")
+  run catch arm at scope P <> t <> "?catch/"
+  value ← catch arm result
+done:
+  bind construct result
+```
+
+- Errors in the **`catch` arm** are **not** caught by the enclosing `try`;
+  they abort the workflow normally (§4).
+- Side effects in the `try` arm before the failing step **are retained**
+  (durable-workspace posture, §8.2). `try` does not roll back workspace
+  mutations.
+- The failing step emits an `error` trace event and **does not** emit
+  `step-end` (unchanged from §8.3).
+
+#### 4.4.5 Caching and step-keys
+
+- Steps in the **try arm** use scope prefix `P/t?try/` (parallel to
+  `if?then/`).
+- Steps in the **catch arm** use scope prefix `P/t?catch/`.
+- A **failed step is never cached** (no persisted result under its step-key;
+  §8.2).
+- Completed inner steps in either arm are cached normally under their scoped
+  step-keys.
+- The `try` construct itself is not a separate cacheable step; only its
+  inner steps are keyed.
+
+#### 4.4.6 Resume (normative)
+
+| Prior attempt state | On resume |
+|---------------------|-----------|
+| Try arm in progress, catch not started | Re-run try arm from first uncached step |
+| Try arm failed, catch not started | Re-run try arm (failure is not cached) |
+| Catch arm in progress | Continue catch arm from first uncached step |
+| Construct completed | Skip (cached inner steps; no re-entry) |
+
+Completed steps in either arm are skipped via cache (no duplicate events,
+§8.2). Resume never skips directly to `catch` without re-running the try
+arm when catch did not complete in the prior attempt.
+
+#### 4.4.7 Trace
+
+| Event | When |
+|-------|------|
+| `try-branch` `{ branch: "try" \| "catch" }` | Once when entering each arm |
+| `error` | When a catchable error occurs in the try arm (before catch runs) |
+| `step-start` / `step-end` | Unchanged for inner steps that complete normally |
+
+On resume, cached inner steps emit no new events (§8.2).
+
+#### 4.4.8 Acceptance scenarios (implementation tests)
+
+- **T1:** Try succeeds → catch never runs; result from try arm.
+- **T2:** Try step fails → `error` event + catch runs; result from catch arm.
+- **T3:** Catch fails → run aborts (not caught by same `try`).
+- **T4:** Try partial mutation + failure → catch runs; workspace retains
+  try-arm effects.
+- **T5:** Resume after try failure before catch → re-runs try, not catch.
+- **T6:** Resume mid-catch → continues catch only.
+- **T7:** Resume after full success → no re-execution.
+
 ## 5. Type system (v1)
 
 ### 5.1 Base types
@@ -808,6 +992,11 @@ sensitive value. Rules:
 10. `while` (§4.3): `predicate` and `body` callees, `predicate_args` /
     `body_args`, `max_iterations`, predicate output shape, and `${carry}`
     scoping rules are checked as specified in §4.3.7.
+11. `try` (§4.4): both arms value-producing with equal tail types; nested
+    `return` rejected; catch arm errors not caught by the same construct.
+12. `par(on_error = …)` (§4.1.1): `on_error` must be `"fail"` or
+    `"collect"`; `"collect"` changes the loop result type to the per-index
+    envelope record (§4.1.1).
 
 ### 5.7 Environment access (`ctx.env`)
 
@@ -1328,8 +1517,8 @@ serialised `{ ok, outputs, errors }` record). The agent loop continues;
 this is a **recoverable** outcome (§6.1.4), not a fatal `Error` event on
 the agent step.
 
-Scripted callers branch on `${result.ok}` (or equivalent) without needing
-a workflow-level `try`/recover construct (still deferred, §13).
+Scripted callers branch on `${result.ok}` (or equivalent), or use `try`/`catch`
+once implemented (§4.4).
 
 #### 6.4.4 Caching and fingerprinting
 
@@ -2312,6 +2501,11 @@ TraceEvent =
       seq, at, qname, step_id,
       branch  : "then" | "else" | "none"
     }
+  | TryBranch {
+      tag     : "try-branch",
+      seq, at, qname, step_id,
+      branch  : "try" | "catch"
+    }
   | LoopStart {
       tag     : "loop-start",
       seq, at, qname, step_id,
@@ -2838,11 +3032,10 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
-- Control-flow-driven error handling (`try`/recover); the engine aborts on
-  the first error. The one exception is the agent loop's **localized**
-  recoverable-error boundary (§6.1.4), which turns a bad tool call into a
-  tool message the model can retry; it does not expose a general
-  `try`/recover construct to workflows. Full backlog: §13.1.1.
+- Control-flow error handling — **`try`/recover specified** (§4.4); **`par`
+  collect-errors specified** (§4.1.1); implementation pending (task 9.9).
+  Until then, the engine aborts on the first uncaught error. The agent loop's
+  localized recoverable boundary (§6.1.4) remains the in-step exception.
 - **Author capability backlog (post-v1)** — remaining data plumbing, loop
   sugar, cache-invalidation UX, and `WorkflowRef` patterns. Prioritized
   list: §13.1.
@@ -2860,20 +3053,14 @@ milestone completion.
 - `builtin/exec` already returns non-zero exit as a **value** (§6.3).
 - The agent loop has a **localized** recoverable boundary (§6.1.4), including
   `builtin/eval-workflow` returning `ok = false` (§6.4.3).
-- Scripted workflows have no general `try`/recover: the engine aborts on the
-  first step/sub-workflow/runtime error (§4).
+- Scripted workflows abort on the first uncaught runtime error (§4).
 
-**Deferred design:**
+**Specified (v1.1, task 9.9 — ready to implement):**
 
-- A workflow-level construct (syntax TBD) that catches a failing step or
-  sub-workflow call and substitutes a fallback value or runs a recovery block.
-- **Continue-on-failure for `par`:** v1 aborts at the lowest-index iteration
-  error and discards sibling results (§4.2, executor). Authors may want
-  partial results, per-iteration `{ ok, error }` values, or a configurable
-  fail-fast vs collect-errors mode.
-- **Resume and cache interaction** must be specified before implementation:
-  whether caught errors emit `step-end`, how step-keys treat fallback paths,
-  and whether a resumed run replays the failure or the recovery branch.
+- **`try` / `catch`** — workflow-level catch boundary with typed arms, scoped
+  step-keys, trace events, and resume rules (§4.4).
+- **`par(on_error = "collect")`** — opt-in per-index success/failure envelope
+  instead of fail-fast (§4.1.1). Default `"fail"` preserves current behaviour.
 
 Not a substitute for `eval-workflow`'s `{ ok, errors }` result shape (§6.4);
 that builtin covers recoverable *static* failures on synthesized source.

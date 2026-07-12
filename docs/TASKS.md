@@ -4,8 +4,9 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 ## Now
 
-- [ ] 9.9 Control-flow error handling — `try`/recover; `par` continue-on-failure
-      (blocked: resume/cache semantics in spec §13.1.1)
+- [ ] 9.9 Control-flow error handling — implement per spec §4.4 and §4.1.1:
+      - [ ] `try` / `catch` (parse, check, exec, trace, resume; tests T1–T7)
+      - [ ] `par(on_error = "collect")` (after `try` or in same milestone)
 
 ## Next — v1.1 (post-release)
 
@@ -26,6 +27,8 @@ Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] 9.9 spec — `try`/recover + `par` collect-errors design (§4.4, §4.1.1)
+      (2026-07-12)
 - [x] 9.11 Simpler loop syntax — inline `while` bodies + `range(n)` (2026-07-12)
 - [x] 9.10 Data plumbing (remainder) — `record-merge`/`record-filter`/`record-map`
       (2026-07-12)
