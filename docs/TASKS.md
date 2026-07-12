@@ -2,35 +2,10 @@
 
 Active work only. Move completed sections to `docs/log/archive/` weekly.
 
-## Now — v1.0.0 release (R1)
+## Now
 
-Target: tag **0.1.0.0** with tutorials and two hardened examples (`summarise`,
-`coding/fix`). Engine core (M1–M9, H1, 9.2–9.4) is done.
-
-### P0 — trust before tutorials
-
-- [x] R1.1 Pin/fix agent tool-result cache (D3): cache `valueToJson`, redact
-      trace/events only; `toolModelJson` on resume; test in `AgentSpec`
-- [x] R1.2 Author guide [caching-and-resume.md](caching-and-resume.md)
-- [x] R1.3 Doc sync: `spec.md` (§6.1.2 D3, §6.7, §8.4, §9, §11, §13.1),
-      `tool-use.md` header, `Hwfi.Cli` Haddock
-- [x] R1.4 Root `README.md` (install, `llm-simple` Hackage dep, quick start)
-
-### P1 — ergonomics for tutorials
-
-- [x] R1.5 `builtin/json-get` + `builtin/concat` + `builtin/json-values` (§13.1.2 subset)
-- [x] R1.6 `builtin/log` — `workflow-log` events + `hwfi show`
-- [x] R1.7 `examples/summarise/README.md`
-- [x] R1.8 `while` example (`workflows/tick-stop` in `control-flow`)
-
-### P2 — release surface
-
-- [x] R1.9 Harden tutorial examples: E2E `summarise` + `coding/fix` on clean
-      workspace; DeepSeek via API (`deepseek-v4-flash` in READMEs/catalog)
-- [x] R1.10 Minimal cache UX: `hwfi cache clear` subcommand
-- [x] R1.11 Tutorials: [docs/tutorials/README.md](tutorials/README.md)
-      (hello → check → agent → show/resume); `examples/hello`
-- [ ] R1.12 tag 0.1.0.0 (`CHANGELOG.md` done)
+_No active milestone._ v0.1.0.0 (R1) shipped 2026-07-10. Pick v1.1 items below
+when starting the next cycle.
 
 ## Next — v1.1 (post-release)
 
@@ -54,6 +29,8 @@ Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] R1 v1.0.0 release (P0–P2, tag `v0.1.0.0`) — archived in
+      [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md) (2026-07-12)
 - [x] 9.15.1–9.15.4 Agent skill runtime (§6.7): catalog, `discover-skills`,
       `load-skill`, checkpoint/resume, runtime `tools` list; A45–A50;
       `examples/skills-runtime` (2026-07-09)

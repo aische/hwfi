@@ -4,7 +4,7 @@ Concrete requirements derived from [idea.md](idea.md). This spec pins v1 scope.
 Anything marked **[deferred v1.1]** is intentionally out of scope for v1.
 
 Known gaps between this spec and the current engine are listed in §14 (with
-matching backlog items in [TASKS.md](TASKS.md) → H1).
+matching backlog items in [TASKS.md](TASKS.md) → v1.1).
 
 ## 1. Product summary
 
@@ -13,7 +13,8 @@ A command-line workflow engine, written in Haskell (GHC2021), that:
 1. Loads a workflow project consisting of markdown files and a few JSON files.
 2. Parses and **type-checks** the entire project before executing anything.
 3. Executes the workflow, with access to a designated workspace folder
-   (read/create/modify files) and to LLMs via the local `llm-simple` library.
+   (read/create/modify files) and to LLMs via the `llm-simple` library from
+   Hackage.
 4. Persists execution state and a full trace so runs are **resumable** after
    crash or abort.
 5. Exposes the run's environment (workspace, prior trace, inputs) to every
