@@ -4,13 +4,12 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 ## Now
 
-- [ ] 9.12 Cache invalidation UX (full) — invalidate-from-step policy
+- [ ] 9.14 `WorkflowRef` / `ToolRef` patterns — docs + checker hints
 
 ## Next — v1.1 (post-release)
 
 Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 
-- [ ] 9.14 `WorkflowRef` / `ToolRef` patterns — docs + checker hints
 - [ ] 9.4.4 `builtin/extract-skill` stub writer (A40)
 - [ ] 9.5 `Bytes`-typed file I/O
 - [ ] 9.6 `trace.jsonl` rotation
@@ -24,6 +23,8 @@ Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] 9.12 Cache invalidation UX (full) — `hwfi cache invalidate`,
+      trace step keys, docs (2026-07-12)
 - [x] 9.9 Control-flow error handling — `try`/`catch` + `par(on_error =
       "collect")` per §4.4 / §4.1.1 (2026-07-12)
 - [x] 9.9 spec — `try`/recover + `par` collect-errors design (§4.4, §4.1.1)

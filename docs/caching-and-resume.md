@@ -44,8 +44,24 @@ stores *results*, not file contents.
 **Rule:** treat the workspace as the source of truth for mutations; treat the
 cache as memoization of step *outputs* for unchanged code and inputs.
 
-To force recomputation during development, use `hwfi cache clear <workspace> <run-id>`
-or start a fresh run id.
+To force recomputation during development:
+
+```bash
+# Drop every cached step (full wipe)
+hwfi cache clear <workspace> <run-id>
+
+# Drop from a step onward (finer; §13.1.4)
+hwfi cache invalidate <workspace> <run-id> --from-step workflows/main#read
+hwfi cache invalidate <workspace> <run-id> --step-key <hex-prefix>
+```
+
+`cache invalidate` uses `step_key` / `decision_key` fields recorded in
+`trace.jsonl` (visible in `hwfi show` as a truncated `key=` suffix). Upstream
+cache entries are preserved; only the chosen step and everything after it in
+trace order are removed. Agent intra-step caches are purged when invalidating
+from an agent step onward.
+
+Or start a fresh run id.
 
 ## Agent steps
 
@@ -102,3 +118,16 @@ You **may** need manual busting when:
 - workspace files changed but step inputs and code did not
 - you are re-running tutorial steps against an old run dir
 - you suspect a corrupted `steps/` entry after a crash
+- you want to re-run only a suffix of a long workflow (`hwfi cache invalidate`)
+
+| Situation | Automatic (fingerprints) | Manual |
+|-----------|-------------------------|--------|
+| Edited workflow/tool markdown | Yes — callee fingerprint changes | Not needed |
+| Edited workspace file outside workflow | No — `read-file` args unchanged | `cache invalidate` or `cache clear` |
+| Changed `model-catalog.json` (one-shot LLM) | Yes — catalog fp in step-key | Not needed for agent inner rounds* |
+| Re-run one step onward on same run dir | No | `cache invalidate --from-step …` |
+| Full dev reset | No | `cache clear` or new run id |
+
+\* Agent steps re-execute on resume; intra-step model/tool caches are namespaced
+under the agent `step_key` and are purged by `cache invalidate` when the agent
+step is in the invalidated suffix.

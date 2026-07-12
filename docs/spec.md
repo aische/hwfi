@@ -2792,12 +2792,17 @@ hwfi run     <project-dir> --workspace <dir>
 hwfi resume  <workspace-dir> <run-id>
 hwfi show    <workspace-dir> <run-id>          # pretty-print trace + usage
 hwfi cache clear <workspace-dir> <run-id>      # drop all steps/*.json cache
+hwfi cache invalidate <workspace-dir> <run-id>
+             (--step-key <hex> | --from-step <qname>#<step-id>)
 ```
 
 `hwfi show` prints the run's accumulated `usage` (tokens and `cost_usd`) from
 `run.json` after the trace. `hwfi cache clear` deletes every file under
 `<workspace>/.hwfi/runs/<run-id>/steps/` so the next `hwfi resume` re-executes
-cacheable steps (subset of §13.1.4; does not delete trace or run metadata).
+cacheable steps (§13.1.4). `hwfi cache invalidate` drops only the chosen step
+and later cached results in trace order, leaving upstream `steps/` entries
+intact (§13.1.4). Trace events for cacheable completions carry optional
+`step_key`; `while-pred` events carry `decision_key`.
 
 - `hwfi check` performs parse + type-check only, exits non-zero on any
   error.
@@ -2977,6 +2982,10 @@ A43. `builtin/log` emits a `workflow-log` trace event with redacted `fields`
     and is re-executed on resume (non-cacheable).
 A44. `hwfi cache clear` removes cached step results so a subsequent
     `hwfi resume` re-runs previously cached steps.
+A44a. `hwfi cache invalidate --from-step <qname>#<step-id>` removes cached
+    results from the first matching step onward in trace order, preserving
+    upstream cache entries; `--step-key` accepts a full or prefix key from
+    trace `step_key` / `decision_key` fields.
 A45. `builtin/discover-skills` returns catalog metadata for skills under
     `skills/` filtered by `query`, `kinds`, and `limit`; empty catalog
     yields `ok = true` and `skills = []`.
@@ -3099,18 +3108,17 @@ Merkle `callee-fingerprint` in the step-key (§8.1) changes when any transitive
 callee changes, so resume after an edit does not silently reuse stale step
 files for changed code.
 
-**Partial implementation:** `hwfi cache clear <workspace-dir> <run-id>` drops
-all files under `steps/` for a run so the next resume re-executes every
-cacheable step (§9). Author guide: [caching-and-resume.md](caching-and-resume.md).
+**Implemented:** `hwfi cache clear` drops all files under `steps/` for a run.
+`hwfi cache invalidate` drops cached steps from a given `step_key` or
+`qname#step-id` onward in trace order (finer than `cache clear`), including
+agent intra-step sub-caches when an agent step falls in the suffix. Trace
+events record `step_key` / `decision_key` for this policy. Author guide:
+[caching-and-resume.md](caching-and-resume.md).
 
-**Deferred UX/policy:**
+**Documented policy:**
 
-- **Invalidate from step** — drop cached steps from a given step-key / qname
-  onward without wiping the whole run dir (finer than `cache clear`).
-- Clarify in docs/examples when automatic fingerprint invalidation is
-  sufficient vs when authors must manually bust cache (e.g. edited
-  workspace files that are not part of declaration fingerprints, model
-  catalog changes for agent steps).
+- Automatic Merkle fingerprint invalidation vs manual busting (workspace edits,
+  suffix re-run, full wipe) — see author guide table.
 
 #### 13.1.5 Observability in workflows
 

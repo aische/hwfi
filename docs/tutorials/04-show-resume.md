@@ -119,6 +119,9 @@ You may need manual busting when:
 
 ```bash
 cabal run hwfi -- cache clear /tmp/resume-ws $RUN_ID
+
+# Or invalidate from a specific step onward (keeps upstream cache):
+cabal run hwfi -- cache invalidate /tmp/resume-ws $RUN_ID --from-step workflows/main#edit
 ```
 
 Then `resume` recomputes cleared steps. For a clean slate, use a new workspace

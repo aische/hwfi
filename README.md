@@ -75,6 +75,7 @@ hwfi run <project-dir> --workspace <dir> [--input K=V]... [--entry <qname>]
 hwfi resume <workspace-dir> <run-id>
 hwfi show <workspace-dir> <run-id>
 hwfi cache clear <workspace-dir> <run-id>
+hwfi cache invalidate <workspace-dir> <run-id> --from-step <qname>#<step-id>
 ```
 
 ## Examples

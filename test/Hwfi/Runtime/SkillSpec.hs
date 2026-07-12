@@ -246,15 +246,15 @@ helperQ = qnameFromText "tools/helper"
 agentTrace :: [TraceEvent]
 agentTrace =
   [ ev 0 (RunStart "run-a38" "workflows/fix" (object []) "abc"),
-    ev 1 (StepStart wfQ "agent" (object []) False),
+    ev 1 (StepStart wfQ "agent" (object []) False Nothing),
     ev 2 (AgentRoundStart wfQ "agent" 0),
     ev 3 (AgentToolCall wfQ "agent" 0 0 "tools/read-file" (object ["path" .= ("x.txt" :: String)])),
-    ev 4 (StepStart helperQ "call" (object []) True),
+    ev 4 (StepStart helperQ "call" (object []) True Nothing),
     ev 5 (FileIo helperQ "call" OpRead "x.txt" 3),
-    ev 6 (StepEnd helperQ "call" (object []) 1),
+    ev 6 (StepEnd helperQ "call" (object []) 1 Nothing),
     ev 7 (AgentToolResult wfQ "agent" 0 0 "tools/read-file" (object ["text" .= ("hi" :: String)]) False),
     ev 8 (AgentRoundEnd wfQ "agent" 0 True),
-    ev 9 (StepEnd wfQ "agent" (object []) 42)
+    ev 9 (StepEnd wfQ "agent" (object []) 42 Nothing)
   ]
   where
     ev n = TraceEvent n "2026-07-09T10:00:00.000Z"
@@ -276,8 +276,8 @@ eventQname (TraceEvent _ _ body) = renderQName <$> eventStepQname body
 
 eventStepQname :: EventBody -> Maybe QName
 eventStepQname = \case
-  StepStart q _ _ _ -> Just q
-  StepEnd q _ _ _ -> Just q
+  StepStart q _ _ _ _ -> Just q
+  StepEnd q _ _ _ _ -> Just q
   FileIo q _ _ _ _ -> Just q
   _ -> Nothing
 

@@ -73,7 +73,7 @@ import Hwfi.Compat
 import Hwfi.Project.Manifest (SkillPolicy (..))
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), llmError)
 import Hwfi.Runtime.Gateways (primaryModel)
-import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, deleteCachedResult, lookupCachedResult)
+import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, deleteCachedResult, lookupCachedResult, registerAgentSubCache)
 import Hwfi.Runtime.Schema (recordSchema)
 import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
 import Hwfi.Runtime.StepKey (sha256Hex)
@@ -303,6 +303,7 @@ runModelCall env spec skillState messages roundIx ensureStart = do
               cost <- recordBilledCall (aeUsage env) (primaryModel (asModel spec)) usage
               emitLlmCall env spec messages' resp cost
               cacheStepResult (aeStore env) key (encodeResponse assistant)
+              registerAgentSubCache (aeStore env) (aeStepKey env) key
               pure (Right assistant)
 
 genReq :: AgentSpec -> [AdvertisedTool] -> [Turn] -> GenRequest
@@ -397,7 +398,7 @@ runAdvertisedCall env _spec skillState roundIx callIx ensureStart tc tool
               ensureStart
               emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
               let sid = toolStepId env roundIx callIx
-              void $ emit (aeTracer env) (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) True)
+              void $ emit (aeTracer env) (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) True Nothing)
               dr <- aeDispatch env (atQName tool) sid resolved
               case dr of
                 Left err
@@ -411,9 +412,10 @@ runAdvertisedCall env _spec skillState roundIx callIx ensureStart tc tool
                 Right result -> do
                   let actual = valueToJson result
                       redacted = redactedJson result
-                  void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0)
+                  void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0 Nothing)
                   -- Cache actual values (�8.2.1); redact only in trace/events (D3).
                   cacheStepResult (aeStore env) key actual
+                  registerAgentSubCache (aeStore env) (aeStepKey env) key
                   void $
                     emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
                   pure (CallResult (toolResult tc (canonicalJson redacted)))
@@ -624,6 +626,7 @@ saveAgentCheckpoint env skillState messages nextRound = do
         (map renderQName (assLoadedCallable st))
         (map renderQName (assLoadedInstruction st))
     )
+  registerAgentSubCache (aeStore env) (aeStepKey env) (agentCheckpointKey (aeStepKey env))
 
 loadAgentCheckpoint :: RunStore -> Text -> IO (Maybe AgentCheckpoint)
 loadAgentCheckpoint store stepKey =

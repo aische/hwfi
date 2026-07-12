@@ -65,6 +65,7 @@ library
         Hwfi.Project.Manifest
         Hwfi.Runtime.Agent
         Hwfi.Runtime.Builtins
+        Hwfi.Runtime.CacheInvalidate
         Hwfi.Runtime.Context
         Hwfi.Runtime.Error
         Hwfi.Runtime.Eval
@@ -152,6 +153,7 @@ test-suite hwfi-test
         Hwfi.Parse.TypeSpec
         Hwfi.Project.ManifestSpec
         Hwfi.Runtime.AgentSpec
+        Hwfi.Runtime.CacheInvalidateSpec
         Hwfi.Runtime.ControlFlowSpec
         Hwfi.Runtime.CrossRunTraceSpec
         Hwfi.Runtime.SkillSpec

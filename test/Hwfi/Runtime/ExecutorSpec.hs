@@ -552,7 +552,7 @@ readFileT :: FilePath -> IO Text
 readFileT = TIO.readFile
 
 stepStarts :: Ident -> [TraceEvent] -> Int
-stepStarts sid evs = length [() | TraceEvent _ _ (StepStart _ s _ _) <- evs, s == sid]
+stepStarts sid evs = length [() | TraceEvent _ _ (StepStart _ s _ _ _) <- evs, s == sid]
 
 fileWrites :: Text -> [TraceEvent] -> Int
 fileWrites path evs =

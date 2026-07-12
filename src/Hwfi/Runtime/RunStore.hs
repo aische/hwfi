@@ -38,6 +38,9 @@ module Hwfi.Runtime.RunStore
     lookupCachedResult,
     deleteCachedResult,
     clearRunStepCache,
+    registerAgentSubCache,
+    purgeAgentSubCaches,
+    deleteCachedResults,
     cacheWhileDecision,
     lookupWhileDecision,
     readTraceEvents,
@@ -51,19 +54,23 @@ where
 import Control.Exception (IOException)
 import Control.Monad (when)
 import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.:?), (.=))
+import Data.Aeson.Key qualified as K
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (parseMaybe, withObject)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
 import Data.Functor ((<&>))
-import Data.List (isSuffixOf, sortOn)
+import Data.List (isSuffixOf, nub, sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Ord (Down (..))
+import Data.Vector qualified as V
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
 import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
+import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
 import System.Directory
   ( createDirectoryIfMissing,
@@ -296,6 +303,83 @@ clearRunStepCache store = do
       files <- filter (".json" `isSuffixOf`) <$> listDirectory dir
       mapM_ (removeFile . (dir </>)) files
       pure (length files)
+
+-- | Record an intra-step agent sub-key under its enclosing agent step-key
+-- (§8.2.1, §13.1.4). Used by @hwfi cache invalidate@ to purge nested caches.
+registerAgentSubCache :: RunStore -> Text -> Text -> IO ()
+registerAgentSubCache store agentKey subKey = do
+  reg <- readAgentRegistry store
+  let updated =
+        KM.insertWith
+          mergeKeys
+          (K.fromText agentKey)
+          (subKey : fromMaybe [] (KM.lookup (K.fromText agentKey) reg))
+          reg
+  writeAgentRegistry store updated
+  where
+    mergeKeys old new = nub (new <> old)
+
+-- | Delete every registered intra-step cache entry for an agent step-key,
+-- including its optional checkpoint (§8.2.1).
+purgeAgentSubCaches :: RunStore -> Text -> IO Int
+purgeAgentSubCaches store agentKey = do
+  reg <- readAgentRegistry store
+  let keys = fromMaybe [] (KM.lookup (K.fromText agentKey) reg)
+      allKeys = nub (agentCheckpointKey agentKey : keys)
+  n <- deleteCachedResults store allKeys
+  writeAgentRegistry store (KM.delete (K.fromText agentKey) reg)
+  pure n
+
+-- | Delete a list of cached step results; returns how many files were removed.
+deleteCachedResults :: RunStore -> [Text] -> IO Int
+deleteCachedResults store keys = do
+  deleted <- mapM (deleteIfPresent store) (nub keys)
+  pure (length (filter id deleted))
+  where
+    deleteIfPresent s key = do
+      let path = stepPath s key
+      exists <- doesFileExist path
+      when exists (removeFile path)
+      pure exists
+
+agentCheckpointKey :: Text -> Text
+agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
+
+agentRegistryPath :: RunStore -> FilePath
+agentRegistryPath store = rsStepsDir store </> ".agent-subkeys.json"
+
+readAgentRegistry :: RunStore -> IO (KM.KeyMap [Text])
+readAgentRegistry store = do
+  let path = agentRegistryPath store
+  exists <- doesFileExist path
+  if not exists
+    then pure KM.empty
+    else do
+      result <- eitherDecodeFileStrict' path
+      pure (either (const KM.empty) registryFromJson result)
+
+writeAgentRegistry :: RunStore -> KM.KeyMap [Text] -> IO ()
+writeAgentRegistry store reg =
+  if KM.null reg
+    then do
+      let path = agentRegistryPath store
+      exists <- doesFileExist path
+      when exists (removeFile path)
+    else atomicWrite (agentRegistryPath store) (Aeson.encode (registryToJson reg))
+
+registryToJson :: KM.KeyMap [Text] -> Value
+registryToJson reg =
+  Object (KM.map (Array . V.fromList . map String) reg)
+
+registryFromJson :: Value -> KM.KeyMap [Text]
+registryFromJson = \case
+  Object o ->
+    KM.mapMaybe parseList o
+  _ -> KM.empty
+  where
+    parseList = \case
+      Array a -> Just [t | String t <- V.toList a]
+      _ -> Nothing
 
 -- | Persist a pinned @while@ predicate decision (§4.3.5). Stored under the
 -- same @steps/@ tree as step results, keyed by 'computeWhileDecisionKey'.

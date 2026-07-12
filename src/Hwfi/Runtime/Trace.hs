@@ -36,8 +36,9 @@ where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Data.Aeson (Value (..), encode, object, (.!=), (.:), (.:?), (.=))
+import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Types (Parser, parseMaybe, withObject)
+import Data.Aeson.Types (Pair, Parser, parseMaybe, withObject)
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Text (Text)
@@ -121,10 +122,12 @@ runStatusFromText = \case
 data EventBody
   = -- | @run-start@: run id, entrypoint qname, root inputs (redacted), project hash.
     RunStart Text Text Value Text
-  | -- | @step-start@: qname, step id, resolved args (redacted), cacheable flag.
-    StepStart QName Ident Value Bool
-  | -- | @step-end@: qname, step id, result (redacted), duration in ms.
-    StepEnd QName Ident Value Int
+  | -- | @step-start@: qname, step id, resolved args (redacted), cacheable flag,
+    -- optional content-addressed step-key (§8.1, §13.1.4).
+    StepStart QName Ident Value Bool (Maybe Text)
+  | -- | @step-end@: qname, step id, result (redacted), duration in ms,
+    -- optional step-key when the step is cacheable.
+    StepEnd QName Ident Value Int (Maybe Text)
   | -- | @llm-call@: qname, step id, model, system, prompt, response, tokens in\/out.
     LlmCall QName Ident Text Text Text Text Int Int Double
   | -- | @file-io@: qname, step id, op, workspace-relative path, byte count.
@@ -156,8 +159,9 @@ data EventBody
     LoopIter QName Ident Int
   | -- | @loop-end@ (?13, M8): qname, loop-id, iteration count.
     LoopEnd QName Ident Int
-  | -- | @while-pred@ (?4.3, M9): qname, while-id, iteration, predicate decision.
-    WhilePred QName Ident Int Bool Text
+  | -- | @while-pred@ (?4.3, M9): qname, while-id, iteration, predicate decision,
+    -- optional pinned decision-key (§4.3.5, §13.1.4).
+    WhilePred QName Ident Int Bool Text (Maybe Text)
   | -- | @try-branch@ (?4.4, 9.9): qname, try-id, the arm taken
     -- (@"try"@\/@"catch"@).
     TryBranch QName Ident Text
@@ -195,20 +199,22 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "inputs" .= inputs,
           "project_hash" .= projectHash
         ]
-      StepStart q sid args cacheable ->
+      StepStart q sid args cacheable mStepKey ->
         [ "tag" .= ("step-start" :: Text),
           "qname" .= renderQName q,
           "step_id" .= sid,
           "args" .= args,
           "cacheable" .= cacheable
         ]
-      StepEnd q sid result durMs ->
+          <> maybePairs "step_key" mStepKey
+      StepEnd q sid result durMs mStepKey ->
         [ "tag" .= ("step-end" :: Text),
           "qname" .= renderQName q,
           "step_id" .= sid,
           "result" .= result,
           "duration_ms" .= durMs
         ]
+          <> maybePairs "step_key" mStepKey
       LlmCall q sid model system prompt response tin tout cost ->
         [ "tag" .= ("llm-call" :: Text),
           "qname" .= renderQName q,
@@ -304,7 +310,7 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "step_id" .= sid,
           "count" .= count
         ]
-      WhilePred q sid ix cont reason ->
+      WhilePred q sid ix cont reason mDecisionKey ->
         [ "tag" .= ("while-pred" :: Text),
           "qname" .= renderQName q,
           "step_id" .= sid,
@@ -312,6 +318,7 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "continue" .= cont,
           "reason" .= reason
         ]
+          <> maybePairs "decision_key" mDecisionKey
       TryBranch q sid branch ->
         [ "tag" .= ("try-branch" :: Text),
           "qname" .= renderQName q,
@@ -373,9 +380,9 @@ parseEvent = withObject "TraceEvent" $ \o -> do
       "run-start" ->
         RunStart <$> o .: "run_id" <*> o .: "entrypoint" <*> o .: "inputs" <*> o .: "project_hash"
       "step-start" ->
-        StepStart <$> qn o <*> o .: "step_id" <*> o .: "args" <*> o .: "cacheable"
+        StepStart <$> qn o <*> o .: "step_id" <*> o .: "args" <*> o .: "cacheable" <*> o .:? "step_key"
       "step-end" ->
-        StepEnd <$> qn o <*> o .: "step_id" <*> o .: "result" <*> o .: "duration_ms"
+        StepEnd <$> qn o <*> o .: "step_id" <*> o .: "result" <*> o .: "duration_ms" <*> o .:? "step_key"
       "llm-call" ->
         LlmCall
           <$> qn o
@@ -431,7 +438,7 @@ parseEvent = withObject "TraceEvent" $ \o -> do
       "loop-end" ->
         LoopEnd <$> qn o <*> o .: "step_id" <*> o .: "count"
       "while-pred" ->
-        WhilePred <$> qn o <*> o .: "step_id" <*> o .: "iteration" <*> o .: "continue" <*> o .: "reason"
+        WhilePred <$> qn o <*> o .: "step_id" <*> o .: "iteration" <*> o .: "continue" <*> o .: "reason" <*> o .:? "decision_key"
       "try-branch" ->
         TryBranch <$> qn o <*> o .: "step_id" <*> o .: "branch"
       "workflow-log" ->
@@ -459,10 +466,10 @@ renderEvent (TraceEvent s at body) =
     renderBody = \case
       RunStart runId entry _ ph ->
         "run-start   " <> runId <> "  entry=" <> entry <> "  project=" <> shortHash ph
-      StepStart q sid _ cacheable ->
-        "step-start  " <> step q sid <> (if cacheable then "  [cacheable]" else "  [volatile]")
-      StepEnd q sid _ ms ->
-        "step-end    " <> step q sid <> "  " <> T.pack (show ms) <> "ms"
+      StepStart q sid _ cacheable mStepKey ->
+        "step-start  " <> step q sid <> (if cacheable then "  [cacheable]" else "  [volatile]") <> keySuffix mStepKey
+      StepEnd q sid _ ms mStepKey ->
+        "step-end    " <> step q sid <> "  " <> T.pack (show ms) <> "ms" <> keySuffix mStepKey
       LlmCall q sid model _ _ _ tin tout cost ->
         "llm-call    "
           <> step q sid
@@ -515,7 +522,7 @@ renderEvent (TraceEvent s at body) =
         "loop-iter   " <> step q sid <> "  #" <> T.pack (show ix)
       LoopEnd q sid count ->
         "loop-end    " <> step q sid <> "  count=" <> T.pack (show count)
-      WhilePred q sid ix cont reason ->
+      WhilePred q sid ix cont reason mDecisionKey ->
         "while-pred  "
           <> step q sid
           <> "  #"
@@ -524,6 +531,7 @@ renderEvent (TraceEvent s at body) =
           <> (if cont then "true" else "false")
           <> "  "
           <> reason
+          <> keySuffix mDecisionKey
       TryBranch q sid branch ->
         "try-branch  " <> step q sid <> "  -> " <> branch
       WorkflowLog q sid message fields ->
@@ -540,6 +548,13 @@ renderEvent (TraceEvent s at body) =
     fieldsSuffix Null = ""
     fieldsSuffix (Object km) | KM.null km = ""
     fieldsSuffix _ = "  (+fields)"
+    keySuffix (Just k) = "  key=" <> T.take 12 k
+    keySuffix Nothing = ""
+
+maybePairs :: Key -> Maybe Text -> [Pair]
+maybePairs name = \case
+  Just v -> [name .= v]
+  Nothing -> []
 
 -- | An event accumulator with an optional append-only file sink. Holds the
 -- next @seq@ and the events so far in reverse chronological order. When a sink
@@ -608,8 +623,8 @@ currentSeq (Tracer _ ref _) = fst <$> readIORef ref
 -- any.
 eventStepRef :: EventBody -> Maybe (QName, Ident)
 eventStepRef = \case
-  StepStart q sid _ _ -> Just (q, sid)
-  StepEnd q sid _ _ -> Just (q, sid)
+  StepStart q sid _ _ _ -> Just (q, sid)
+  StepEnd q sid _ _ _ -> Just (q, sid)
   LlmCall q sid _ _ _ _ _ _ _ -> Just (q, sid)
   FileIo q sid _ _ _ -> Just (q, sid)
   Exec q sid _ _ _ _ _ _ -> Just (q, sid)
@@ -622,7 +637,7 @@ eventStepRef = \case
   LoopStart q sid _ _ -> Just (q, sid)
   LoopIter q sid _ -> Just (q, sid)
   LoopEnd q sid _ -> Just (q, sid)
-  WhilePred q sid _ _ _ -> Just (q, sid)
+  WhilePred q sid _ _ _ _ -> Just (q, sid)
   TryBranch q sid _ -> Just (q, sid)
   _ -> Nothing
 
@@ -653,9 +668,9 @@ sliceNested events targetQ targetSid = go False events
       | otherwise =
           go False es
     isTargetStart body = case body of
-      StepStart q sid _ _ -> q == targetQ && sid == targetSid
+      StepStart q sid _ _ _ -> q == targetQ && sid == targetSid
       _ -> False
     isTargetEnd body = case body of
-      StepEnd q sid _ _ -> q == targetQ && sid == targetSid
+      StepEnd q sid _ _ _ -> q == targetQ && sid == targetSid
       ErrorEvent q sid _ _ -> q == targetQ && sid == targetSid
       _ -> False

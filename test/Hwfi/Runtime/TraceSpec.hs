@@ -24,8 +24,8 @@ wf = qnameFromText "workflows/main"
 sampleEvents :: [TraceEvent]
 sampleEvents =
   [ q (RunStart "run-1" "workflows/main" (object ["src" .= ("x" :: String)]) "deadbeef"),
-    q (StepStart wf "c" (object ["path" .= ("in.txt" :: String)]) True),
-    q (StepEnd wf "c" (object ["text" .= ("hi" :: String)]) 42),
+    q (StepStart wf "c" (object ["path" .= ("in.txt" :: String)]) True Nothing),
+    q (StepEnd wf "c" (object ["text" .= ("hi" :: String)]) 42 Nothing),
     q (LlmCall wf "g" "gpt" "sys" "prompt" "response" 10 20 0.0012),
     q (FileIo wf "w" OpWrite "out.txt" 7),
     q (FileIo wf "l" OpList "dir" 0),
@@ -42,7 +42,7 @@ sampleEvents =
     q (LoopEnd wf "loop" 3),
     q (LoopStart wf "fan" "par" (Just 0)),
     q (LoopStart wf "refine" "while" Nothing),
-    q (WhilePred wf "refine" 1 True "needs another pass"),
+    q (WhilePred wf "refine" 1 True "needs another pass" Nothing),
     q (TryBranch wf "safe" "try"),
     q (TryBranch wf "safe" "catch"),
     q (WorkflowLog wf "note" "checkpoint" (object ["n" .= (1 :: Int)])),
@@ -66,6 +66,6 @@ spec = describe "Trace JSON round-trip (§8.3)" $ do
     eventFromJson (String "not an event") `shouldBe` Nothing
 
   it "renders a one-line summary carrying the qname and step id" $ do
-    let line = renderEvent (q (StepStart wf "c" Null True))
+    let line = renderEvent (q (StepStart wf "c" Null True Nothing))
     line `shouldSatisfy` T.isInfixOf "workflows/main#c"
     line `shouldSatisfy` T.isInfixOf "step-start"

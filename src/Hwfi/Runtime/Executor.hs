@@ -154,6 +154,7 @@ import Hwfi.TypedProject
 import System.IO (hClose)
 import UnliftIO.Async (pooledForConcurrentlyN)
 import UnliftIO.Exception (bracket, tryAny)
+import Control.Applicative ((<|>))
 
 -- | Everything the executor threads through a run.
 data Runtime = Runtime
@@ -719,7 +720,7 @@ execWhile rt typedSteps q sections scope bindings s = do
         Right pv -> case extractPredDecision pv of
           Left e -> pure (Left e)
           Right decision@(cont, rsn) -> do
-            _ <- emit (rtTracer rt) (WhilePred q (whileId s) i cont rsn)
+            _ <- emit (rtTracer rt) (WhilePred q (whileId s) i cont rsn (Just decisionKey))
             cacheWhileDecision (rtStore rt) decisionKey cont rsn
             pure (Right decision)
 
@@ -821,24 +822,31 @@ execStep rt typedSteps q sections scope bindings s = do
             if cacheable
               then Just (stepKeyFor rt scope env bindings mts q sid target argMap s)
               else Nothing
+          mAgentKey =
+            if isAgentBuiltin target
+              then Just (stepKeyFor rt scope env bindings mts q sid target argMap s)
+              else Nothing
+          mTraceKey =
+            mKey <|> mAgentKey
       hit <- cacheHit rt resultTy mKey
       case hit of
         Just result -> pure (Right (bindResult (stepBinder s) result bindings, result))
         Nothing -> do
-          _ <- emit (rtTracer rt) (StepStart q sid (redactedJson (VRecord argMap)) cacheable)
+          _ <- emit (rtTracer rt) (StepStart q sid (redactedJson (VRecord argMap)) cacheable mTraceKey)
           start <- getCurrentTime
           dr <-
             if isAgentBuiltin target
-              then -- The agent step is a non-cacheable black box, but its
-              -- intra-step model\/tool cache is namespaced under an
-              -- agent step-key computed the same way (§8.1, §8.2.1).
-                runAgentStep rt bindings stepRef scope target argMap (stepKeyFor rt scope env bindings mts q sid target argMap s)
+              then case mAgentKey of
+                Just agentKey ->
+                  runAgentStep rt bindings stepRef scope target argMap agentKey
+                Nothing ->
+                  failStep rt stepRef (internalError "agent step-key missing")
               else dispatch rt stepRef bindings scope target argMap
           case dr of
             Left e -> Left <$> failWith rt stepRef e
             Right result -> do
               end <- getCurrentTime
-              _ <- emit (rtTracer rt) (StepEnd q sid (redactedJson result) (durationMs start end))
+              _ <- emit (rtTracer rt) (StepEnd q sid (redactedJson result) (durationMs start end) mKey)
               case mKey of
                 Just key -> cacheStepResult (rtStore rt) key (valueToJson result)
                 Nothing -> pure ()

@@ -643,7 +643,7 @@ parPaths3 =
 -- Assertions helpers ---------------------------------------------------------
 
 stepStarts :: Ident -> [TraceEvent] -> Int
-stepStarts sid evs = length [() | TraceEvent _ _ (StepStart _ s _ _) <- evs, s == sid]
+stepStarts sid evs = length [() | TraceEvent _ _ (StepStart _ s _ _ _) <- evs, s == sid]
 
 loopIters :: [TraceEvent] -> Int
 loopIters evs = length [() | TraceEvent _ _ (LoopIter {}) <- evs]
@@ -715,7 +715,7 @@ truncateTraceAfterStepEnd store sid = do
         [ i
           | (i, l) <- zip [0 ..] ls,
             Just ev <- [parseTraceLine l],
-            StepEnd _ s' _ _ <- [teBody ev],
+            StepEnd _ s' _ _ _ <- [teBody ev],
             s' == s
         ]
 

@@ -854,7 +854,20 @@ Pretty-prints the trace and usage summary. Secrets are redacted.
 hwfi cache clear <workspace-dir> <run-id>
 ```
 
-Deletes cached step results so the next resume recomputes cacheable steps.
+Deletes all cached step results so the next resume recomputes every cacheable
+step.
+
+### Invalidate from step
+
+```bash
+hwfi cache invalidate <workspace-dir> <run-id> --from-step workflows/main#read
+hwfi cache invalidate <workspace-dir> <run-id> --step-key <hex-prefix>
+```
+
+Drops cached results from the chosen step **onward in trace order**, leaving
+upstream cache intact. Use when a workspace file changed but workflow code did
+not, or when you want to re-run a suffix without a full wipe. `hwfi show`
+displays a truncated `key=` suffix; the full `step_key` is in `trace.jsonl`.
 
 ---
 
