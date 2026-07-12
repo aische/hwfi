@@ -158,6 +158,9 @@ data EventBody
     LoopEnd QName Ident Int
   | -- | @while-pred@ (?4.3, M9): qname, while-id, iteration, predicate decision.
     WhilePred QName Ident Int Bool Text
+  | -- | @try-branch@ (?4.4, 9.9): qname, try-id, the arm taken
+    -- (@"try"@\/@"catch"@).
+    TryBranch QName Ident Text
   | -- | @workflow-log@ (?13.1.5): qname, step id, message, optional fields (redacted).
     WorkflowLog QName Ident Text Value
   | -- | @skill-discover@ (�6.7.1): qname, step id, query, kinds, limit, result count.
@@ -309,6 +312,12 @@ eventToJson (TraceEvent s at body) = object (common <> bodyPairs)
           "continue" .= cont,
           "reason" .= reason
         ]
+      TryBranch q sid branch ->
+        [ "tag" .= ("try-branch" :: Text),
+          "qname" .= renderQName q,
+          "step_id" .= sid,
+          "branch" .= branch
+        ]
       WorkflowLog q sid message fields ->
         [ "tag" .= ("workflow-log" :: Text),
           "qname" .= renderQName q,
@@ -423,6 +432,8 @@ parseEvent = withObject "TraceEvent" $ \o -> do
         LoopEnd <$> qn o <*> o .: "step_id" <*> o .: "count"
       "while-pred" ->
         WhilePred <$> qn o <*> o .: "step_id" <*> o .: "iteration" <*> o .: "continue" <*> o .: "reason"
+      "try-branch" ->
+        TryBranch <$> qn o <*> o .: "step_id" <*> o .: "branch"
       "workflow-log" ->
         WorkflowLog <$> qn o <*> o .: "step_id" <*> o .: "message" <*> o .: "fields"
       "skill-discover" ->
@@ -513,6 +524,8 @@ renderEvent (TraceEvent s at body) =
           <> (if cont then "true" else "false")
           <> "  "
           <> reason
+      TryBranch q sid branch ->
+        "try-branch  " <> step q sid <> "  -> " <> branch
       WorkflowLog q sid message fields ->
         "workflow-log " <> step q sid <> "  " <> message <> fieldsSuffix fields
       SkillDiscover q sid query _ limit count ->
@@ -610,6 +623,7 @@ eventStepRef = \case
   LoopIter q sid _ -> Just (q, sid)
   LoopEnd q sid _ -> Just (q, sid)
   WhilePred q sid _ _ _ -> Just (q, sid)
+  TryBranch q sid _ -> Just (q, sid)
   _ -> Nothing
 
 -- | Return events belonging to one logical step in trace order (?6.6.2).

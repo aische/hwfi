@@ -12,6 +12,7 @@ module Hwfi.Runtime.Error
     sandboxError,
     llmError,
     userError_,
+    isCatchable,
     internalError,
     renderRuntimeError,
     StepRef (..),
@@ -97,6 +98,11 @@ userError_ = runtimeError KUser
 
 internalError :: Text -> RuntimeError
 internalError = runtimeError KInternal
+
+-- | Whether a runtime error may be caught by @try@ (§4.4.3).
+isCatchable :: ErrorKind -> Bool
+isCatchable KInternal = False
+isCatchable _ = True
 
 -- | Attach a step location to an error that does not already have one. Errors
 -- raised deep in expression evaluation are tagged with the current step by the

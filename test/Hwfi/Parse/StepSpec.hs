@@ -81,8 +81,34 @@ spec = describe "step DSL parser (spec §3.1, §3.4)" $ do
     let src = T.unlines ["rs <- par(max = 4) item in ${inputs.xs} {", "  r <- proc/one(v = ${item})", "} @fan"]
     case parseB (Pos 1 1) src of
       Right [SLoop s] -> do
-        loopKind s `shouldBe` LoopPar (Just 4)
+        loopKind s `shouldBe` LoopPar (ParOpts (Just 4) ParOnErrorFail)
         loopId s `shouldBe` "fan"
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses par(on_error = \"collect\") (§4.1.1)" $ do
+    let src =
+          T.unlines
+            ["rs <- par(on_error = \"collect\") item in ${inputs.xs} {", "  r <- proc/one(v = ${item})", "} @fan"]
+    case parseB (Pos 1 1) src of
+      Right [SLoop s] ->
+        loopKind s `shouldBe` LoopPar (ParOpts Nothing ParOnErrorCollect)
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "parses try/catch (§4.4)" $ do
+    let src =
+          T.unlines
+            [ "x <- try {",
+              "  a <- foo/bar()",
+              "} catch {",
+              "  b <- baz/qux()",
+              "} @safe"
+            ]
+    case parseB (Pos 1 1) src of
+      Right [STry s] -> do
+        tryBinder s `shouldBe` BindName "x"
+        tryId s `shouldBe` "safe"
+        length (tryTry s) `shouldBe` 1
+        length (tryCatch s) `shouldBe` 1
       other -> expectationFailure ("unexpected: " <> show other)
 
   it "requires an explicit @id for a discarding control-flow statement" $

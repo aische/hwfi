@@ -34,8 +34,11 @@ import Hwfi.Ast.Step
     IfStmt (..),
     LoopKind (..),
     LoopStmt (..),
+    ParOnError (..),
+    ParOpts (..),
     Statement (..),
     StepStmt (..),
+    TryStmt (..),
     WhileStmt (..),
     WhileBody (..),
   )
@@ -77,6 +80,7 @@ callTargets = concatMap go
       SIf s -> callTargets (ifThen s) <> maybe [] callTargets (ifElse s)
       SLoop s -> callTargets (loopBody s)
       SWhile s -> staticCallee (whilePredicate s) <> whileBodyTargets (whileBody s)
+      STry s -> callTargets (tryTry s) <> callTargets (tryCatch s)
 
     whileBodyTargets = \case
       WhileBodyCallee e _ -> staticCallee e
@@ -230,6 +234,16 @@ encodeStmt = \case
       <> encodeWhileBody (whileBody s)
       <> " max="
       <> encodeExpr (whileMaxIterations s)
+  STry s ->
+    "try "
+      <> encodeBinder (tryBinder s)
+      <> " @"
+      <> tryId s
+      <> " try{"
+      <> encodeStmts (tryTry s)
+      <> "} catch{"
+      <> encodeStmts (tryCatch s)
+      <> "}"
 
 encodeWhileBody :: WhileBody -> Text
 encodeWhileBody = \case
@@ -243,8 +257,21 @@ encodeStmts = T.intercalate ";" . map encodeStmt
 encodeLoopKind :: LoopKind -> Text
 encodeLoopKind = \case
   LoopSeq -> "seq"
-  LoopPar Nothing -> "par"
-  LoopPar (Just n) -> "par(" <> T.pack (show n) <> ")"
+  LoopPar opts -> encodeParOpts opts
+
+encodeParOpts :: ParOpts -> Text
+encodeParOpts ParOpts {parMax = mMax, parOnError = onErr} =
+  case (mMax, onErr) of
+    (Nothing, ParOnErrorFail) -> "par"
+    _ ->
+      "par("
+        <> T.intercalate ","
+            ( maybe [] (\n -> ["max=" <> T.pack (show n)]) mMax
+                <> case onErr of
+                  ParOnErrorFail -> []
+                  ParOnErrorCollect -> ["on_error=collect"]
+            )
+        <> ")"
 
 encodeBinder :: Binder -> Text
 encodeBinder = \case

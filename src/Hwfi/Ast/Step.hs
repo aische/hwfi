@@ -1,6 +1,6 @@
 -- | The step DSL AST: statements inside @step@ blocks. See spec §3.1, §3.4,
--- and the control-flow constructs (§13, M8; §4.3, M9): @if@\/@else@,
--- @foreach@, @par@, and @while@.
+-- and the control-flow constructs (§13, M8; §4.3, M9; §4.4, 9.9): @if@\/@else@,
+-- @foreach@, @par@, @while@, and @try@\/@catch@.
 --
 -- Every statement other than @return@ shares the @binder \<- rhs \@id@ shape,
 -- where the right-hand side is either a call ('SStep') or a control-flow
@@ -14,8 +14,12 @@ module Hwfi.Ast.Step
     Arg (..),
     StepStmt (..),
     LoopKind (..),
+    ParOpts (..),
+    ParOnError (..),
+    defaultParOpts,
     IfStmt (..),
     LoopStmt (..),
+    TryStmt (..),
     WhileStmt (..),
     WhileBody (..),
     Statement (..),
@@ -58,14 +62,32 @@ data StepStmt = StepStmt
   }
   deriving stock (Eq, Show)
 
+-- | How @par@ handles per-iteration failures (§4.1.1, 9.9).
+data ParOnError
+  = -- | Abort at the lowest-index failure (default §4.1).
+    ParOnErrorFail
+  | -- | Run all iterations; failures become per-index envelope records.
+    ParOnErrorCollect
+  deriving stock (Eq, Show)
+
+-- | Options for a @par@ loop (@par(max = N, on_error = \"…\")@, §4.1.1).
+data ParOpts = ParOpts
+  { parMax :: Maybe Int,
+    parOnError :: ParOnError
+  }
+  deriving stock (Eq, Show)
+
+-- | Default @par@ options: concurrency bound 4, abort on first failure.
+defaultParOpts :: ParOpts
+defaultParOpts = ParOpts Nothing ParOnErrorFail
+
 -- | Whether a @foreach@\/@par@ loop runs its iterations sequentially or
--- concurrently (§13, M8). 'LoopPar' carries an optional bound on the number of
--- iterations run at once (@par(max = N) ...@); 'Nothing' uses the engine
--- default. Result ordering is always the input order regardless of kind, so a
--- loop is deterministic.
+-- concurrently (§13, M8). 'LoopPar' carries @par@ options (§4.1.1). Result
+-- ordering is always the input order regardless of kind, so a loop is
+-- deterministic.
 data LoopKind
   = LoopSeq
-  | LoopPar (Maybe Int)
+  | LoopPar ParOpts
   deriving stock (Eq, Show)
 
 -- | An @if \<cond> { … } else { … }@ conditional statement (§13, M8). The
@@ -128,6 +150,16 @@ data WhileStmt = WhileStmt
   }
   deriving stock (Eq, Show)
 
+-- | A @try { … } catch { … }@ error-recovery statement (§4.4, 9.9).
+data TryStmt = TryStmt
+  { tryBinder :: Binder,
+    tryTry :: [Statement],
+    tryCatch :: [Statement],
+    tryId :: Ident,
+    trySpan :: Span
+  }
+  deriving stock (Eq, Show)
+
 -- | A statement within a @step@ block or a control-flow block.
 data Statement
   = SStep StepStmt
@@ -137,6 +169,7 @@ data Statement
   | SIf IfStmt
   | SLoop LoopStmt
   | SWhile WhileStmt
+  | STry TryStmt
   deriving stock (Eq, Show)
 
 -- | The source span of a statement.
@@ -147,6 +180,7 @@ statementSpan = \case
   SIf s -> ifSpan s
   SLoop s -> loopSpan s
   SWhile s -> whileSpan s
+  STry s -> trySpan s
 
 -- | The static id of a statement, if it has one (@return@ has none). Step ids
 -- and control-flow ids must be unique within each block (§4.2); sibling
@@ -159,6 +193,7 @@ statementId = \case
   SIf s -> Just (ifId s)
   SLoop s -> Just (loopId s)
   SWhile s -> Just (whileId s)
+  STry s -> Just (tryId s)
 
 -- | The immediate child statement blocks of a statement (empty for steps and
 -- returns). Used to walk the control-flow tree in the checker and graph.
@@ -171,3 +206,4 @@ blockStatements = \case
   SWhile s -> case whileBody s of
     WhileBodyInline stmts -> [stmts]
     WhileBodyCallee _ _ -> []
+  STry s -> [tryTry s, tryCatch s]

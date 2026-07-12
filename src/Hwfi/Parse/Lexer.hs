@@ -81,7 +81,7 @@ symbolN = L.symbol scn
 -- control-flow keywords, §13).
 reservedWords :: [Text]
 reservedWords =
-  ["return", "true", "false", "null", "_", "if", "else", "foreach", "par", "while", "in"]
+  ["return", "true", "false", "null", "_", "if", "else", "foreach", "par", "while", "try", "catch", "in"]
 
 -- | Whether a word is reserved.
 isReserved :: Text -> Bool

@@ -30,7 +30,7 @@ import Data.Text qualified as T
 import Hwfi.Ast.Expr (Expr (..), StringPart (..))
 import Hwfi.Ast.Name (QName, qnameFromText, renderQName)
 import Hwfi.Ast.Project
-import Hwfi.Ast.Step (Arg (..), IfStmt (..), LoopStmt (..), Statement (..), StepStmt (..), stepTarget)
+import Hwfi.Ast.Step (Arg (..), IfStmt (..), LoopStmt (..), Statement (..), StepStmt (..), blockStatements, stepTarget)
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Type (TypeExpr)
 import Hwfi.Ast.TypeAlias (TypeAlias (..))
@@ -220,6 +220,7 @@ allStepStmts = concatMap go
       SIf s -> allStepStmts (ifThen s) <> maybe [] allStepStmts (ifElse s)
       SLoop s -> allStepStmts (loopBody s)
       SWhile _ -> []
+      STry s -> concatMap allStepStmts (blockStatements (STry s))
 
 declStatements :: Declaration -> [Statement]
 declStatements = \case

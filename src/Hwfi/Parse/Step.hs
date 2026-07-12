@@ -1,6 +1,6 @@
 -- | Parser for the step DSL: the contents of a @step@ fenced block
 -- (spec §3.1, §3.4) plus the M8 control-flow constructs (§13): @if@\/@else@,
--- @foreach@, @par@, and @while@.
+-- @foreach@, @par@, @while@, and @try@\/@catch@.
 --
 -- Statement-level tokens (binder, @<-@, target qname, @\@id@) are parsed with
 -- the horizontal-only lexer so a newline terminates a statement; argument
@@ -14,6 +14,7 @@ module Hwfi.Parse.Step
 where
 
 import Control.Monad (unless)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Expr (..))
@@ -23,7 +24,7 @@ import Hwfi.Parse.Expr (expr)
 import Hwfi.Parse.Lexer
 import Hwfi.Source (Diagnostic, Pos (..), spanFromTo)
 import Text.Megaparsec hiding (Pos)
-import Text.Megaparsec.Char (eol)
+import Text.Megaparsec.Char (char, eol, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 import Text.Megaparsec.Pos qualified as MP
 
@@ -61,14 +62,14 @@ returnStmt = do
   SReturn fields . spanFromTo start <$> getPos
 
 -- | A binding statement: @binder \<- rhs \@id?@, where the right-hand side is a
--- call ('SStep'), an @if@ ('SIf'), a @foreach@\/@par@ loop ('SLoop'), or a
--- @while@ ('SWhile').
+-- call ('SStep'), an @if@ ('SIf'), a @foreach@\/@par@ loop ('SLoop'), a
+-- @while@ ('SWhile'), or @try@\/@catch@ ('STry').
 bindingStmt :: Parser Statement
 bindingStmt = do
   start <- getPos
   b <- binder
   _ <- symbol "<-"
-  choice [ifRhs start b, loopRhs start b, whileRhs start b, callRhs start b]
+  choice [ifRhs start b, tryRhs start b, loopRhs start b, whileRhs start b, callRhs start b]
 
 -- | A step call right-hand side: @target(args)@.
 callRhs :: Pos -> Binder -> Parser Statement
@@ -94,6 +95,18 @@ ifRhs start b = do
   end <- getPos
   sid <- resolveStepId b mId
   pure (SIf (IfStmt b cond thenBlk mElse sid (spanFromTo start end)))
+
+-- | A @try { … } catch { … }@ right-hand side (§4.4).
+tryRhs :: Pos -> Binder -> Parser Statement
+tryRhs start b = do
+  _ <- keyword "try"
+  tryBlk <- block
+  _ <- keyword "catch"
+  catchBlk <- block
+  mId <- optional stepIdP
+  end <- getPos
+  sid <- resolveStepId b mId
+  pure (STry (TryStmt b tryBlk catchBlk sid (spanFromTo start end)))
 
 -- | A @foreach v in \<list> { … }@ / @par v in \<list> { … }@ right-hand side.
 loopRhs :: Pos -> Binder -> Parser Statement
@@ -169,8 +182,9 @@ parseWhileFields fields = do
     )
     fields
   case fieldVal "body_args" of
-    Just _ | case wb of WhileBodyInline _ -> True; _ -> False ->
-      fail "while(...) inline body must not use body_args (§4.3.7)"
+    Just _
+      | case wb of WhileBodyInline _ -> True; _ -> False ->
+          fail "while(...) inline body must not use body_args (§4.3.7)"
     _ -> pure ()
   pure (predE, predArgs, wb, maxIter)
   where
@@ -194,9 +208,40 @@ parseWhileFields fields = do
 loopKindP :: Parser LoopKind
 loopKindP =
   (LoopSeq <$ keyword "foreach")
-    <|> (LoopPar <$> (keyword "par" *> optional parMax))
-  where
-    parMax = between (symbolN "(") (symbolN ")") (keyword "max" *> symbolN "=" *> intLit)
+    <|> (LoopPar . fromMaybe defaultParOpts <$> (keyword "par" *> optional parOptsP))
+
+parOptsP :: Parser ParOpts
+parOptsP = do
+  fields <- between (symbolN "(") (symbolN ")") (sepEndBy parOptField (symbolN ","))
+  let mMax = listToMaybe [v | ("max", Left v) <- fields]
+      mOnErr = listToMaybe [t | ("on_error", Right t) <- fields]
+  case length [() | (_, Left {}) <- fields] of
+    n | n > 1 -> fail "par(...) has duplicate max (§4.1.1)"
+    _ -> pure ()
+  case length [() | (_, Right {}) <- fields] of
+    n | n > 1 -> fail "par(...) has duplicate on_error (§4.1.1)"
+    _ -> pure ()
+  onErrorMode <-
+    case fromMaybe "fail" mOnErr of
+      "fail" -> pure ParOnErrorFail
+      "collect" -> pure ParOnErrorCollect
+      other ->
+        fail ("par(on_error) must be \"fail\" or \"collect\", not \"" <> T.unpack other <> "\" (§4.1.1)")
+  pure (ParOpts mMax onErrorMode)
+
+parOptField :: Parser (Ident, Either Int Text)
+parOptField = do
+  n <- lexemeN (try (string "on_error" >> pure "on_error") <|> (string "max" >> pure "max"))
+  _ <- symbolN "="
+  val <-
+    case n of
+      "max" -> Left <$> intLit
+      "on_error" -> Right <$> quotedString
+      _ -> fail ("unexpected par(...) argument '" <> T.unpack n <> "' (§4.1.1)")
+  pure (n, val)
+
+quotedString :: Parser Text
+quotedString = lexemeN (between (char '"') (char '"') (takeWhileP Nothing (/= '"')))
 
 -- | A brace-delimited block of statements. Newlines separate statements just
 -- as in the enclosing step block; the block may be empty.

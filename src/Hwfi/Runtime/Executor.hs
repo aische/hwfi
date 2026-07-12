@@ -31,7 +31,7 @@ module Hwfi.Runtime.Executor
 where
 
 import Control.Exception (SomeException, displayException)
-import Control.Monad (join)
+import Control.Monad (join, void, when)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -53,10 +53,13 @@ import Hwfi.Ast.Step
     IfStmt (..),
     LoopKind (..),
     LoopStmt (..),
+    ParOnError (..),
+    ParOpts (..),
     Statement (..),
     StepStmt (..),
-    WhileStmt (..),
+    TryStmt (..),
     WhileBody (..),
+    WhileStmt (..),
   )
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
@@ -91,6 +94,7 @@ import Hwfi.Runtime.Error
     atStep,
     evalError,
     internalError,
+    isCatchable,
     userError_,
   )
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr, resolveRefPath)
@@ -413,6 +417,7 @@ execStmt rt typedSteps q sections scope bindings = \case
   SIf s -> execIf rt typedSteps q sections scope bindings s
   SLoop s -> execLoop rt typedSteps q sections scope bindings s
   SWhile s -> execWhile rt typedSteps q sections scope bindings s
+  STry s -> execTry rt typedSteps q sections scope bindings s
   SReturn _ _ -> pure (Left (internalError "unexpected 'return' in statement position"))
 
 -- | Run a control-flow block (an @if@ branch or a loop body) in a child
@@ -470,6 +475,53 @@ execIf rt typedSteps q sections scope bindings s = do
       r <- runBlock rt typedSteps q sections (ifScope scope (ifId s) branch) bindings blk
       pure (fmap (\v -> (bindResult (ifBinder s) v bindings, v)) r)
 
+-- | Execute a @try@\/@catch@ statement (§4.4). Catchable errors in the try arm
+-- trigger the catch arm; @internal@ errors propagate. Resume uses prior
+-- @try-branch@ events to decide whether to re-run the try arm or continue the
+-- catch arm (§4.4.6).
+execTry ::
+  Runtime ->
+  Map Ident TypedStep ->
+  QName ->
+  [Section] ->
+  Text ->
+  Map Ident RValue ->
+  TryStmt ->
+  IO (Either RuntimeError (Map Ident RValue, RValue))
+execTry rt typedSteps q sections scope bindings s = do
+  resumePhase <-
+    if rtResume rt
+      then do
+        events <- snapshotEvents (rtTracer rt)
+        pure (lookupTryResumePhase q (tryId s) events)
+      else pure TryFresh
+  case resumePhase of
+    TryContinueCatch -> runCatchArm False
+    TryFresh -> do
+      _ <- emit (rtTracer rt) (TryBranch q (tryId s) "try")
+      r <- runBlock rt typedSteps q sections (tryScope scope (tryId s) "try") bindings (tryTry s)
+      case r of
+        Right v -> pure (Right (bindResult (tryBinder s) v bindings, v))
+        Left e
+          | isCatchable (reKind e) -> runCatchArm True
+          | otherwise -> pure (Left e)
+  where
+    runCatchArm emitCatch = do
+      when emitCatch $
+        void (emit (rtTracer rt) (TryBranch q (tryId s) "catch"))
+      r <- runBlock rt typedSteps q sections (tryScope scope (tryId s) "catch") bindings (tryCatch s)
+      case r of
+        Left e -> pure (Left e)
+        Right v -> pure (Right (bindResult (tryBinder s) v bindings, v))
+
+data TryResumePhase = TryFresh | TryContinueCatch
+
+lookupTryResumePhase :: QName -> Ident -> [TraceEvent] -> TryResumePhase
+lookupTryResumePhase q tid events =
+  case [b | TraceEvent _ _ (TryBranch q' tid' b) <- events, q' == q, tid' == tid] of
+    bs | "catch" `elem` bs -> TryContinueCatch
+    _ -> TryFresh
+
 -- | Execute a @foreach@\/@par@ loop (§13). The scrutinee list is evaluated
 -- once; each element runs the body in a child scope binding the loop variable,
 -- with a per-iteration step-key prefix (so a resumed run distinguishes and
@@ -496,7 +548,7 @@ execLoop rt typedSteps q sections scope bindings s = do
       _ <- emit (rtTracer rt) (LoopStart q (loopId s) kindLabel (Just (length xs)))
       res <- case loopKind s of
         LoopSeq -> runSeq xs
-        LoopPar mMax -> runPar mMax xs
+        LoopPar opts -> runPar opts xs
       case res of
         Left e -> pure (Left e)
         Right vs -> do
@@ -525,12 +577,34 @@ execLoop rt typedSteps q sections scope bindings s = do
             Left e -> pure (Left e)
             Right v -> go (i + 1) (v : acc) rest
 
-    runPar mMax xs = do
+    runPar opts xs = case parOnError opts of
+      ParOnErrorFail -> runParFail opts xs
+      ParOnErrorCollect -> runParCollect opts xs
+
+    runParFail ParOpts {parMax = mMax} xs = do
       let n = max 1 (fromMaybe defaultParallelism mMax)
       results <- pooledForConcurrentlyN n (zip [0 ..] xs) (uncurry runIter)
       case lefts results of
         (e : _) -> pure (Left e)
         [] -> pure (Right (rights results))
+
+    runParCollect ParOpts {parMax = mMax} xs = do
+      let n = max 1 (fromMaybe defaultParallelism mMax)
+      results <- pooledForConcurrentlyN n (zip [0 ..] xs) (uncurry runIterCollect)
+      case lefts results of
+        (e : _) -> pure (Left e)
+        [] -> pure (Right (rights results))
+
+    runIterCollect i x =
+      runIter i x >>= \case
+        Right v -> pure (Right (parCollectSuccess v))
+        Left e
+          | isCatchable (reKind e) -> pure (Right (parCollectFailure (reMessage e)))
+          | otherwise -> pure (Left e)
+
+-- | The step-key scope prefix for a @try@ arm (§4.4.5).
+tryScope :: Text -> Ident -> Text -> Text
+tryScope scope sid arm = scope <> sid <> "?" <> arm <> "/"
 
 -- | The step-key scope prefix for a taken @if@ branch (§8.1, §13).
 ifScope :: Text -> Ident -> Text -> Text
@@ -539,6 +613,24 @@ ifScope scope sid branch = scope <> sid <> "?" <> branch <> "/"
 -- | The step-key scope prefix for a loop iteration (§8.1, §13).
 iterScope :: Text -> Ident -> Int -> Text
 iterScope scope sid i = scope <> sid <> "#" <> T.pack (show i) <> "/"
+
+parCollectSuccess :: RValue -> RValue
+parCollectSuccess v =
+  VRecord $
+    Map.fromList
+      [ ("ok", VBool True),
+        ("value", v),
+        ("error", VString "")
+      ]
+
+parCollectFailure :: Text -> RValue
+parCollectFailure msg =
+  VRecord $
+    Map.fromList
+      [ ("ok", VBool False),
+        ("value", VRecord Map.empty),
+        ("error", VString msg)
+      ]
 
 -- | The step-key scope prefix for a @while@ predicate/body invocation (§4.3.5).
 whilePredScope :: Text -> Ident -> Int -> Text

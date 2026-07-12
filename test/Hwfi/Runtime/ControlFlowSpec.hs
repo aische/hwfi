@@ -2,6 +2,9 @@ module Hwfi.Runtime.ControlFlowSpec (spec) where
 
 import Control.Exception (ErrorCall (ErrorCall), throwIO)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.Aeson qualified as Aeson
+import Data.Maybe (listToMaybe)
+import Data.Text.Encoding qualified as TEnc
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -14,8 +17,8 @@ import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), reKind)
 import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
 import Hwfi.Runtime.Gateways (ModelStore)
-import Hwfi.Runtime.RunStore (RunPhase (..), openRunStore, updateRunPhase)
-import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..))
+import Hwfi.Runtime.RunStore (RunPhase (..), RunStore, openRunStore, rsTracePath, updateRunPhase)
+import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), eventFromJson)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
 import Hwfi.TypedProject (TypedProject)
@@ -90,6 +93,7 @@ runProjectWithSubs mainMd subs inputs k =
   withSystemTempDirectory "hwfi-cf-proj" $ \proj ->
     withSystemTempDirectory "hwfi-cf-ws" $ \ws -> do
       writeProjectWithSubs proj mainMd subs
+      TIO.writeFile (ws </> "good.txt") "ok\n"
       tp <- loadChecked proj
       workspace <- newWorkspace ws
       res <- performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
@@ -121,13 +125,13 @@ runThenResumeWithSubsModels mainMd subs inputs models1 models2 k =
       writeProjectWithSubs proj mainMd subs
       tp <- loadChecked proj
       workspace <- newWorkspace ws
-      r1 <- expectRun =<< performRun tp workspace models1 Map.empty proj "run-1" mainQ inputs
+      r1 <- expectRun_ =<< performRun tp workspace models1 Map.empty proj "run-1" mainQ inputs
       Right store <- openRunStore (workspaceRoot workspace) "run-1"
       updateRunPhase store PhaseAborted
-      r2 <- expectRun =<< performResume tp workspace models2 Map.empty "run-1"
+      r2 <- expectRun_ =<< performResume tp workspace models2 Map.empty "run-1"
       k r1 r2 ws
   where
-    expectRun = either (\e -> error ("run failed: " <> T.unpack e)) pure
+    expectRun_ = either (\e -> error ("run failed: " <> T.unpack e)) pure
 
 -- | Run to completion, mark the run resumable (aborted), then resume.
 runThenResume :: Text -> Map.Map Ident RValue -> (RunResult -> RunResult -> FilePath -> IO a) -> IO a
@@ -563,6 +567,79 @@ whileStopMainMd =
 items3 :: Map.Map Ident RValue
 items3 = Map.fromList [("items", VList [VString "a", VString "b", VString "c"])]
 
+-- try/catch fixtures (§4.4, 9.9) ---------------------------------------------
+
+tryOkMd :: Text
+tryOkMd =
+  wrapBody
+    [ "x <- try {",
+      "  a <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo OK\"], stdin = \"\", timeout_ms = 0) @work",
+      "} catch {",
+      "  b <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo CATCH\"], stdin = \"\", timeout_ms = 0) @recover",
+      "} @safe",
+      "return { out = ${x.stdout} }"
+    ]
+    []
+    [("out", "String")]
+
+tryFailMd :: Text
+tryFailMd =
+  wrapBody
+    [ "x <- try {",
+      "  a <- builtin/read-file(path = \"missing.txt\") @fail",
+      "} catch {",
+      "  b <- builtin/read-file(path = \"good.txt\") @recover",
+      "} @safe",
+      "return { out = ${x.text} }"
+    ]
+    []
+    [("out", "String")]
+
+tryCatchFailMd :: Text
+tryCatchFailMd =
+  wrapBody
+    [ "_ <- try {",
+      "  a <- builtin/read-file(path = \"missing1.txt\") @fail",
+      "} catch {",
+      "  c1 <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo catch1 >> log.txt\"], stdin = \"\", timeout_ms = 0) @rc1",
+      "  c2 <- builtin/read-file(path = \"missing2.txt\") @rc2",
+      "} @safe",
+      "return { ok = true }"
+    ]
+    []
+    [("ok", "Bool")]
+
+tryPartialMd :: Text
+tryPartialMd =
+  wrapBody
+    [ "x <- try {",
+      "  _ <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo partial >> log.txt\"], stdin = \"\", timeout_ms = 0) @prep",
+      "  a <- builtin/read-file(path = \"missing.txt\") @fail",
+      "} catch {",
+      "  b <- builtin/read-file(path = \"good.txt\") @recover",
+      "} @safe",
+      "return { out = ${x.text} }"
+    ]
+    []
+    [("out", "String")]
+
+parCollectMd :: Text
+parCollectMd =
+  wrapBody
+    [ "rs <- par(on_error = \"collect\") path in ${inputs.paths} {",
+      "  r <- builtin/read-file(path = ${path}) @read",
+      "} @fan",
+      "return { ok0 = ${rs[0].ok}, ok1 = ${rs[1].ok}, ok2 = ${rs[2].ok} }"
+    ]
+    [("paths", "List<String>")]
+    [("ok0", "Bool"), ("ok1", "Bool"), ("ok2", "Bool")]
+
+parPaths3 :: Map.Map Ident RValue
+parPaths3 =
+  Map.fromList
+    [ ("paths", VList [VString "good.txt", VString "bad.txt", VString "good.txt"])
+    ]
+
 -- Assertions helpers ---------------------------------------------------------
 
 stepStarts :: Ident -> [TraceEvent] -> Int
@@ -575,9 +652,9 @@ loopIters evs = length [() | TraceEvent _ _ (LoopIter {}) <- evs]
 -- that actually re-executed on resume (the resumed trace also carries the
 -- prior attempt's events).
 resumedStepStarts :: Ident -> [TraceEvent] -> Int
-resumedStepStarts sid evs = stepStarts sid afterResume
+resumedStepStarts sid evs = stepStarts sid afterResume_
   where
-    afterResume = drop 1 (dropWhile (not . isResumed) evs)
+    afterResume_ = drop 1 (dropWhile (not . isResumed) evs)
     isResumed (TraceEvent _ _ (Resumed {})) = True
     isResumed _ = False
 
@@ -586,6 +663,87 @@ llmCalls evs = length [() | TraceEvent _ _ (LlmCall {}) <- evs]
 
 lineCount :: FilePath -> IO Int
 lineCount p = length . filter (not . T.null) . T.lines <$> TIO.readFile p
+
+tryBranches :: Ident -> [TraceEvent] -> [Text]
+tryBranches tid evs =
+  [b | TraceEvent _ _ (TryBranch _ tid' b) <- evs, tid' == tid]
+
+afterResume :: [TraceEvent] -> [TraceEvent]
+afterResume evs =
+  case dropWhile (not . isResumed) evs of
+    (_ : rest) -> rest
+    [] -> evs
+  where
+    isResumed (TraceEvent _ _ (Resumed {})) = True
+    isResumed _ = False
+
+errorEvents :: Ident -> [TraceEvent] -> Int
+errorEvents sid evs =
+  length [() | TraceEvent _ _ (ErrorEvent _ s _ _) <- evs, s == sid]
+
+-- | Drop trace lines after the first @error@ for @sid@, simulating a kill
+-- before the catch arm starts (§4.4.6 T5).
+truncateTraceAfterError :: RunStore -> Ident -> IO ()
+truncateTraceAfterError store sid = do
+  contents <- TIO.readFile (rsTracePath store)
+  let lines' = filter (not . T.null) (T.lines contents)
+  case findErrorLine sid lines' of
+    Nothing -> pure ()
+    Just ix -> TIO.writeFile (rsTracePath store) (T.unlines (take (ix + 1) lines'))
+  where
+    findErrorLine s ls =
+      listToMaybe
+        [ i
+          | (i, l) <- zip [0 ..] ls,
+            Just ev <- [parseTraceLine l],
+            ErrorEvent _ s' _ _ <- [teBody ev],
+            s' == s
+        ]
+
+-- | Drop trace lines after @step-end@ for @sid@, simulating a kill mid-catch
+-- (§4.4.6 T6).
+truncateTraceAfterStepEnd :: RunStore -> Ident -> IO ()
+truncateTraceAfterStepEnd store sid = do
+  contents <- TIO.readFile (rsTracePath store)
+  let lines' = filter (not . T.null) (T.lines contents)
+  case findStepEndLine sid lines' of
+    Nothing -> pure ()
+    Just ix -> TIO.writeFile (rsTracePath store) (T.unlines (take (ix + 1) lines'))
+  where
+    findStepEndLine s ls =
+      listToMaybe
+        [ i
+          | (i, l) <- zip [0 ..] ls,
+            Just ev <- [parseTraceLine l],
+            StepEnd _ s' _ _ <- [teBody ev],
+            s' == s
+        ]
+
+parseTraceLine :: Text -> Maybe TraceEvent
+parseTraceLine line = eventFromJson =<< Aeson.decodeStrict (TEnc.encodeUtf8 line)
+
+runAbortAfter ::
+  Text ->
+  Map.Map Ident RValue ->
+  (RunStore -> IO ()) ->
+  (RunResult -> RunResult -> IO a) ->
+  IO a
+runAbortAfter mainMd inputs truncate_ k = do
+  withSystemTempDirectory "hwfi-try-proj" $ \proj ->
+    withSystemTempDirectory "hwfi-try-ws" $ \ws -> do
+      writeProject proj mainMd
+      TIO.writeFile (ws </> "good.txt") "ok\n"
+      tp <- loadChecked proj
+      workspace <- newWorkspace ws
+      r1 <- expectRun =<< performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
+      Right store <- openRunStore (workspaceRoot workspace) "run-1"
+      truncate_ store
+      updateRunPhase store PhaseAborted
+      r2 <- expectRun =<< performResume tp workspace Map.empty Map.empty "run-1"
+      k r1 r2
+
+expectRun :: Either Text RunResult -> IO RunResult
+expectRun = either (\e -> error ("run failed: " <> T.unpack e)) pure
 
 -- Fake LLM gateways (A32) ----------------------------------------------------
 
@@ -946,6 +1104,74 @@ spec = do
               []
               [("got", "String")]
       errKinds <$> checkOnly md `shouldReturn` []
+
+  describe "try/catch (§4.4, 9.9)" $ do
+    it "T1: try succeeds and catch never runs" $
+      runProject tryOkMd Map.empty $ \rr _ -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("out", VString "OK\n")]))
+        tryBranches "safe" (rrEvents rr) `shouldBe` ["try"]
+        stepStarts "recover" (rrEvents rr) `shouldBe` 0
+
+    it "T2: try step fails, emits error, and catch runs" $
+      runProject tryFailMd Map.empty $ \rr _ -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("out", VString "ok\n")]))
+        tryBranches "safe" (rrEvents rr) `shouldBe` ["try", "catch"]
+        errorEvents "fail" (rrEvents rr) `shouldBe` 1
+        stepStarts "recover" (rrEvents rr) `shouldBe` 1
+
+    it "T3: catch failure aborts the run (not caught by the same try)" $
+      runProject tryCatchFailMd Map.empty $ \rr _ -> do
+        case rrOutcome rr of
+          Left err -> reKind err `shouldSatisfy` (/= KInternal)
+          Right _ -> expectationFailure "expected catch arm failure"
+        tryBranches "safe" (rrEvents rr) `shouldBe` ["try", "catch"]
+        errorEvents "fail" (rrEvents rr) `shouldBe` 1
+        errorEvents "rc2" (rrEvents rr) `shouldBe` 1
+
+    it "T4: try partial mutation is retained when catch runs" $
+      runProject tryPartialMd Map.empty $ \rr ws -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("out", VString "ok\n")]))
+        lineCount (ws </> "log.txt") `shouldReturn` 1
+        TIO.readFile (ws </> "log.txt") >>= (`shouldSatisfy` T.isInfixOf "partial")
+
+    it "T5: resume after try failure before catch re-runs try, not catch" $
+      runAbortAfter tryFailMd Map.empty (`truncateTraceAfterError` "fail") $ \_r1 r2 -> do
+        "try" `elem` tryBranches "safe" (afterResume (rrEvents r2)) `shouldBe` True
+        resumedStepStarts "fail" (rrEvents r2) `shouldBe` 1
+
+    it "T6: resume mid-catch continues catch only" $
+      runAbortAfter tryCatchFailMd Map.empty (`truncateTraceAfterStepEnd` "rc1") $ \_r1 r2 -> do
+        resumedStepStarts "fail" (rrEvents r2) `shouldBe` 0
+        resumedStepStarts "prep" (rrEvents r2) `shouldBe` 0
+        resumedStepStarts "rc1" (rrEvents r2) `shouldBe` 0
+        resumedStepStarts "rc2" (rrEvents r2) `shouldBe` 1
+
+    it "T7: resume after full success does not re-execute" $
+      runThenResume tryOkMd Map.empty $ \_ r2 _ -> do
+        resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
+        resumedStepStarts "recover" (rrEvents r2) `shouldBe` 0
+
+  describe "par(on_error = collect) (§4.1.1, 9.9)" $ do
+    it "runs all iterations and wraps failures in envelope records" $
+      withSystemTempDirectory "hwfi-par-collect" $ \ws ->
+        withSystemTempDirectory "hwfi-par-collect-proj" $ \proj -> do
+          writeProject proj parCollectMd
+          TIO.writeFile (ws </> "good.txt") "ok\n"
+          tp <- loadChecked proj
+          workspace <- newWorkspace ws
+          rr <- expectRun =<< performRun tp workspace Map.empty Map.empty proj "run-1" mainQ parPaths3
+          rrOutcome rr
+            `shouldBe` Right
+              ( VRecord
+                  ( Map.fromList
+                      [ ("ok0", VBool True),
+                        ("ok1", VBool False),
+                        ("ok2", VBool True)
+                      ]
+                  )
+              )
+          loopIters (rrEvents rr) `shouldBe` 3
+          errorEvents "read" (rrEvents rr) `shouldBe` 1
 
 -- | Assemble a @main.md@ with extra import lines and body lines.
 wrapBodyWithImports :: [Text] -> [Text] -> [(Text, Text)] -> [(Text, Text)] -> Text

@@ -142,6 +142,7 @@ duplicateIdErrors path statements =
       SWhile s -> case whileBody s of
         WhileBodyInline stmts -> duplicateIdErrors path stmts
         WhileBodyCallee _ _ -> []
+      STry s -> duplicateIdErrors path (tryTry s) <> duplicateIdErrors path (tryCatch s)
       _ -> []
 
     dupInBlock stmts = go [] idPositions
@@ -174,6 +175,7 @@ checkStmt ctx path sections st = \case
   SIf s -> checkIf ctx path sections st s
   SLoop s -> checkLoop ctx path sections st s
   SWhile s -> checkWhile ctx path sections st s
+  STry s -> checkTry ctx path sections st s
   SReturn _ sp ->
     st
       { bsErrors =
@@ -282,6 +284,59 @@ checkIf ctx path sections st s =
 
     (roots', bound', bindErrs) = bindResult path pos (ifBinder s) resultType st
 
+-- | Per-index envelope type for @par(on_error = "collect")@ (§4.1.1).
+parCollectElemTy :: Type -> Type
+parCollectElemTy t =
+  TyRecord [("ok", TyBool), ("value", t), ("error", TyString)]
+
+-- | Check a @try@\/@catch@ statement (§4.4). Both arms must be present; a
+-- value-binding construct requires structurally equal tail types in each arm.
+checkTry :: CheckCtx -> FilePath -> [Section] -> BodyState -> TryStmt -> BodyState
+checkTry ctx path sections st s =
+  st
+    { bsErrors = bsErrors st <> tryErrs <> catchErrs <> branchErrs <> bindErrs,
+      bsSteps = trySteps <> catchSteps <> bsSteps st,
+      bsRoots = roots',
+      bsBound = bound',
+      bsLastResult = resultType
+    }
+  where
+    pos = spanStart (trySpan s)
+
+    (tryErrs, trySteps, tryTail) = checkChild ctx path sections st Map.empty [] (tryTry s)
+    (catchErrs, catchSteps, catchTail) = checkChild ctx path sections st Map.empty [] (tryCatch s)
+
+    (resultType, branchErrs) = case tryBinder s of
+      BindDiscard -> (Nothing, [])
+      BindName _ -> case (tryTail, catchTail) of
+        (Just t1, Just t2)
+          | structEq t1 t2 -> (Just t1, [])
+          | otherwise ->
+              ( Nothing,
+                [ typeError
+                    path
+                    pos
+                    TypeMismatch
+                    ( "the 'try' and 'catch' arms yield different types: 'try' is "
+                        <> renderType t1
+                        <> ", 'catch' is "
+                        <> renderType t2
+                        <> " (§4.4)"
+                    )
+                ]
+              )
+        _ ->
+          ( Nothing,
+            [ typeError
+                path
+                pos
+                ReturnRule
+                "each arm of a value-binding 'try' must end in a value-producing statement (§4.4)"
+            ]
+          )
+
+    (roots', bound', bindErrs) = bindResult path pos (tryBinder s) resultType st
+
 -- | Check a @foreach@\/@par@ loop (§13). The iterated expression must be a
 -- @List<T>@; the loop variable is bound to @T@ inside the body. The loop's
 -- value is @List<U>@ where @U@ is the body's tail type (map semantics); a
@@ -330,9 +385,11 @@ checkLoop ctx path sections st s =
 
     (resultType, resErrs) = case loopBinder s of
       BindDiscard -> (Nothing, [])
-      BindName _ -> case bodyTail of
-        Just t -> (Just (TyList t), [])
-        Nothing ->
+      BindName _ -> case (bodyTail, loopKind s) of
+        (Just t, LoopPar ParOpts {parOnError = ParOnErrorCollect}) ->
+          (Just (TyList (parCollectElemTy t)), [])
+        (Just t, _) -> (Just (TyList t), [])
+        (Nothing, _) ->
           ( Nothing,
             [ typeError
                 path

@@ -428,7 +428,7 @@ Control-flow constructs are **value-producing** and use the same
 
 #### 4.1.1 `par` error policy (v1.1)
 
-**Status: specified (v1.1, task 9.9). Not yet implemented.**
+**Status: implemented (v1.1, task 9.9).**
 
 Optional `on_error` in `par(...)` controls iteration failure behaviour:
 
@@ -741,7 +741,7 @@ A predicate workflow that *is* an `llm-agent` step returning
 
 ### 4.4 `try` / recover
 
-**Status: specified (v1.1, task 9.9). Not yet implemented.**
+**Status: implemented (v1.1, task 9.9).**
 
 `try` adds an optional, typed catch boundary at workflow step granularity,
 with the same scoping, tracing, and resume rules as other control-flow
@@ -3033,7 +3033,7 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
 - Control-flow error handling — **`try`/recover specified** (§4.4); **`par`
-  collect-errors specified** (§4.1.1); implementation pending (task 9.9).
+  collect-errors implemented** (§4.1.1, task 9.9).
   Until then, the engine aborts on the first uncaught error. The agent loop's
   localized recoverable boundary (§6.1.4) remains the in-step exception.
 - **Author capability backlog (post-v1)** — remaining data plumbing, loop
@@ -3055,7 +3055,7 @@ milestone completion.
   `builtin/eval-workflow` returning `ok = false` (§6.4.3).
 - Scripted workflows abort on the first uncaught runtime error (§4).
 
-**Specified (v1.1, task 9.9 — ready to implement):**
+**Implemented (v1.1, task 9.9):**
 
 - **`try` / `catch`** — workflow-level catch boundary with typed arms, scoped
   step-keys, trace events, and resume rules (§4.4).
