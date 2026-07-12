@@ -4,7 +4,7 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 ## Now
 
-- [ ] 9.14 `WorkflowRef` / `ToolRef` patterns — docs + checker hints
+_(empty — pick from Next)_
 
 ## Next — v1.1 (post-release)
 
@@ -23,6 +23,7 @@ Deferred from v1; spec §13.1 and [code-issues.md](code-issues.md).
 _Move items here temporarily, then archive to
 `docs/log/archive/tasks-YYYY-MM.md`._
 
+- [x] 9.14 `WorkflowRef` / `ToolRef` patterns — docs + checker hints (2026-07-12)
 - [x] 9.12 Cache invalidation UX (full) — `hwfi cache invalidate`,
       trace step keys, docs (2026-07-12)
 - [x] 9.9 Control-flow error handling — `try`/`catch` + `par(on_error =

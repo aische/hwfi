@@ -14,6 +14,7 @@
 --      'TypedProject'.
 module Hwfi.Check
   ( checkProject,
+    checkProjectWithMeta,
     renderCheckErrors,
     renderCheckWarnings,
   )
@@ -36,9 +37,9 @@ import Hwfi.Ast.Type (TypeExpr)
 import Hwfi.Ast.TypeAlias (TypeAlias (..))
 import Hwfi.Ast.Workflow (Signature (..), Workflow (..), emptySignature)
 import Hwfi.Check.Alias (resolveAliasDefs, resolveSigTypeExpr)
-import Hwfi.Check.Builtins (Callee (..), execQName, introspectQName, isBuiltin, lookupBuiltin)
+import Hwfi.Check.Builtins (Callee (..), builtinCallees, execQName, introspectQName, isBuiltin, lookupBuiltin)
 import Hwfi.Check.Decl (CheckCtx (..), checkDeclBody)
-import Hwfi.Check.Error (TypeError, TypeErrorKind (..), renderCheckWarnings, renderTypeErrors, typeError)
+import Hwfi.Check.Error (CheckWarning (..), TypeError, TypeErrorKind (..), renderCheckWarnings, renderTypeErrors, typeError)
 import Hwfi.Check.Graph (computeFingerprints, detectImportCycles, directCallees, lookupCalleeFingerprint, projectCallees)
 import Hwfi.Project.Manifest (ExecPolicy (..), ProjectManifest (..))
 import Hwfi.SkillCatalog (buildSkillCatalog)
@@ -47,11 +48,17 @@ import Hwfi.Type (Type (..), isSecretEnvName)
 import Hwfi.TypedProject
 
 -- | Type-check a parsed project. Returns all accumulated errors, or the
--- checked project.
+-- checked project. Warnings are available via 'checkProjectWithMeta' even when
+-- this returns 'Left'.
 checkProject :: Project -> Either [TypeError] TypedProject
-checkProject proj
-  | not (null allErrs) = Left allErrs
-  | otherwise = Right typed
+checkProject proj = case checkProjectWithMeta proj of
+  ([], _, Just tp) -> Right tp
+  (errs, _, _) -> Left errs
+
+-- | Type-check a project, returning errors, warnings, and the typed project
+-- (only when checking succeeded).
+checkProjectWithMeta :: Project -> ([TypeError], [CheckWarning], Maybe TypedProject)
+checkProjectWithMeta proj = (allErrs, bodyWarnings, if null allErrs then Just typed else Nothing)
   where
     decls = projDecls proj
     manifest = projManifest proj
@@ -235,6 +242,7 @@ mkCtx :: Map QName Declaration -> Map QName ResolvedSignature -> ProjectManifest
 mkCtx decls sigMap manifest reaches =
   CheckCtx
     { ccCallee = \q -> Map.lookup q calleeMap <|> lookupBuiltin q,
+      ccAllQnames = Map.keys calleeMap <> Map.keys builtinCallees,
       ccRefType = \q -> Map.lookup q refMap <|> builtinRefType q,
       ccEnvRecord = envRecordType manifest,
       ccReachesIntrospect = reaches

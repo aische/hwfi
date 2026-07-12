@@ -31,6 +31,7 @@ import Hwfi.Ast.Workflow (Section, Workflow (..))
 import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, isRecordPlumbingBuiltin, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, recordFilterQName, recordMapQName, recordMergeQName, traceSliceQName)
 import Hwfi.Check.Error (CheckWarning (..), TypeError, TypeErrorKind (..), checkWarning, typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
+import Hwfi.Check.RefHints (bareCallTargetHints, refArgWarnings, toolsListElemHint)
 import Hwfi.Runtime.Schema (ineligibilityReasons)
 import Hwfi.Source (Pos (..), Span (..))
 import Hwfi.Type
@@ -40,6 +41,8 @@ import Hwfi.TypedProject (ResolvedSignature (..))
 data CheckCtx = CheckCtx
   { -- | Resolve a declared/builtin call target to its signature.
     ccCallee :: QName -> Maybe Callee,
+    -- | Every declared and builtin callable qname (for ref-pattern hints).
+    ccAllQnames :: [QName],
     -- | Resolve a bare qname value to its @ToolRef@/@WorkflowRef@ type.
     ccRefType :: QName -> Maybe Type,
     -- | The @ctx.env@ record type (§5.7).
@@ -479,10 +482,13 @@ checkWhile ctx path sections st s =
 -- | Resolve a @while@ callee expression (@qname@ or @${ref}@) to a 'Callee'.
 resolveExprTarget :: CheckCtx -> Env -> FilePath -> Pos -> Expr -> (Maybe Callee, [TypeError])
 resolveExprTarget ctx env path pos = \case
-  EQName q -> resolveTarget ctx env path pos q
+  EQName q ->
+    let (c, errs, _) = resolveTarget ctx env path pos q
+     in (c, errs)
   ERef (RefPath root [])
     | root `elem` Map.keys (envRoots env) ->
-        resolveTarget ctx env path pos (qnameFromText root)
+        let (c, errs, _) = resolveTarget ctx env path pos (qnameFromText root)
+         in (c, errs)
   _ ->
     ( Nothing,
       [ typeError
@@ -560,7 +566,7 @@ checkStep :: CheckCtx -> FilePath -> [Section] -> BodyState -> StepStmt -> BodyS
 checkStep ctx path sections st s =
   st
     { bsErrors = bsErrors st <> targetErrs <> argErrs <> bindErrs,
-      bsWarnings = bsWarnings st <> argWarnings,
+      bsWarnings = bsWarnings st <> targetWarnings <> argWarnings,
       bsSteps = (s, cacheable, fromMaybe TyJson resultType) : bsSteps st,
       bsRoots = roots',
       bsBound = bound',
@@ -572,7 +578,8 @@ checkStep ctx path sections st s =
     target = stepTarget s
 
     -- Resolve the call target to a callee signature.
-    (mCallee, targetErrs) = resolveTarget ctx env path pos target
+    (mCallee, targetErrs, targetWarnings) =
+      resolveTarget ctx env path pos target
 
     (argErrs, argWarnings, resultType)
       -- Agent builtins take a heterogeneous @tools@ list and need bespoke
@@ -584,7 +591,7 @@ checkStep ctx path sections st s =
           Nothing -> ([], [], Nothing)
           Just callee ->
             ( checkArgs env callee (stepArgs s),
-              [],
+              refArgWarnings (ccRefType ctx) path env callee (stepArgs s),
               Just (TyRecord (calleeOutputs callee))
             )
 
@@ -594,7 +601,7 @@ checkStep ctx path sections st s =
     (roots', bound', bindErrs) = bindResult path pos (stepBinder s) resultType st
 
 resolveTarget ::
-  CheckCtx -> Env -> FilePath -> Pos -> QName -> (Maybe Callee, [TypeError])
+  CheckCtx -> Env -> FilePath -> Pos -> QName -> (Maybe Callee, [TypeError], [CheckWarning])
 resolveTarget ctx env path pos target
   | isBareQName target =
       -- A bare target must be a first-class ToolRef/WorkflowRef value in scope.
@@ -613,7 +620,8 @@ resolveTarget ctx env path pos target
                     <> renderType other
                     <> ")"
                 )
-            ]
+            ],
+            []
           )
         Nothing ->
           ( Nothing,
@@ -622,10 +630,11 @@ resolveTarget ctx env path pos target
                 pos
                 UndeclaredTarget
                 ("call target '" <> renderQName target <> "' is not in scope")
-            ]
+            ],
+            bareCallTargetHints (ccAllQnames ctx) (ccCallee ctx) path pos target env
           )
   | otherwise = case ccCallee ctx target of
-      Just c -> (Just c, [])
+      Just c -> (Just c, [], [])
       Nothing ->
         ( Nothing,
           [ typeError
@@ -633,12 +642,13 @@ resolveTarget ctx env path pos target
               pos
               UndeclaredTarget
               ("call target '" <> renderQName target <> "' does not resolve to a workflow, tool, or builtin")
-          ]
+          ],
+          []
         )
   where
     refCallee inTy outTy =
       case (recordFields inTy, recordFields outTy) of
-        (Just ins, Just outs) -> (Just (Callee ins outs), [])
+        (Just ins, Just outs) -> (Just (Callee ins outs), [], [])
         _ ->
           ( Nothing,
             [ typeError
@@ -646,7 +656,8 @@ resolveTarget ctx env path pos target
                 pos
                 UndeclaredTarget
                 ("ref target '" <> renderQName target <> "' does not have record input/output types")
-            ]
+            ],
+            []
           )
 
 -- Record plumbing (§13.1.2) --------------------------------------------------
@@ -926,9 +937,12 @@ checkAgentCall ctx env path pos target args =
 -- | Validate the agent @tools@ argument (§6.1.1, §6.1.6 phase 2).
 checkToolsExpr :: CheckCtx -> Env -> FilePath -> Pos -> Expr -> ([TypeError], [CheckWarning])
 checkToolsExpr ctx env path pos expr =
-  case staticQNameList expr of
-    Just qnames ->
-      (concatMap (checkToolElem ctx path pos . EQName) qnames, [])
+  case staticExprList expr of
+    Just elems ->
+      let results = map (checkToolElem ctx path pos) elems
+       in ( concatMap fst results,
+            concatMap snd results
+          )
     Nothing ->
       case inferExpr env pos expr of
         Left errs -> (errs, [])
@@ -953,33 +967,38 @@ checkToolsExpr ctx env path pos expr =
             []
           )
 
--- | When @tools@ is a list literal of bare qnames, return them for static
--- eligibility checking.
-staticQNameList :: Expr -> Maybe [QName]
-staticQNameList (EList es) = traverse extractQName es
-  where
-    extractQName (EQName q) = Just q
-    extractQName _ = Nothing
-staticQNameList _ = Nothing
+-- | When @tools@ is a list literal, return its elements for static checking.
+staticExprList :: Expr -> Maybe [Expr]
+staticExprList (EList es) = Just es
+staticExprList _ = Nothing
 
 -- | Check one element of the @tools@ list: it must be a bare tool\/workflow
 -- name resolving to an agent-eligible callee.
-checkToolElem :: CheckCtx -> FilePath -> Pos -> Expr -> [TypeError]
+checkToolElem :: CheckCtx -> FilePath -> Pos -> Expr -> ([TypeError], [CheckWarning])
 checkToolElem ctx path pos = \case
   EQName q
-    | q == discoverSkillsQName || q == loadSkillQName -> []
+    | q == discoverSkillsQName || q == loadSkillQName -> ([], [])
     | isAgentBuiltin q ->
-        [err ("'" <> renderQName q <> "' is an agent builtin and cannot be advertised as a tool")]
+        ([err ("'" <> renderQName q <> "' is an agent builtin and cannot be advertised as a tool")], [])
     | q == introspectQName || ccReachesIntrospect ctx q ->
-        [err ("advertised tool '" <> renderQName q <> "' (transitively) calls builtin/introspect, which must not be reachable by the model (§6.1.5)")]
+        ( [err ("advertised tool '" <> renderQName q <> "' (transitively) calls builtin/introspect, which must not be reachable by the model (§6.1.5)")],
+          []
+        )
     | otherwise -> case ccCallee ctx q of
         Nothing ->
-          [err ("advertised tool '" <> renderQName q <> "' does not resolve to a workflow, tool, or builtin")]
+          ( [err ("advertised tool '" <> renderQName q <> "' does not resolve to a workflow, tool, or builtin")],
+            []
+          )
         Just callee ->
-          [ err ("advertised tool '" <> renderQName q <> "' is not agent-eligible: " <> reason)
-            | reason <- ineligibilityReasons (calleeInputs callee)
-          ]
-  _ -> [err "each advertised tool must be a bare tool/workflow name (§6.1.1)"]
+          ( [ err ("advertised tool '" <> renderQName q <> "' is not agent-eligible: " <> reason)
+              | reason <- ineligibilityReasons (calleeInputs callee)
+            ],
+            []
+          )
+  e ->
+    ( [err "each advertised tool must be a bare tool/workflow name (§6.1.1)"],
+      maybeToList (toolsListElemHint path pos e)
+    )
   where
     err = typeError path pos ArgMismatch
 

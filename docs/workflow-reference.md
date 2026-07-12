@@ -261,7 +261,7 @@ Multiple `step` blocks and prose interleave in source order. Execution follows
 | `FileRef` | Path relative to workspace |
 | `List<T>` | Homogeneous list |
 | `Record<{ f: T, ... }>` | Struct — **types use `:`** in frontmatter |
-| `WorkflowRef<In, Out>`, `ToolRef<In, Out>` | First-class callable refs (agent `tools` lists; not dynamic step targets — see [Agent steps](#agent-steps)) |
+| `WorkflowRef<In, Out>`, `ToolRef<In, Out>` | First-class callable refs — agent `tools`, workflow inputs, bound step targets; see [workflow-refs.md](workflow-refs.md) |
 | `Secret<T>` | Redacted in traces; not model-supplied; see [Secrets](#secrets-and-ctxenv) |
 | `Context`, `Trace`, `TraceEvent` | Ambient / introspection |
 
@@ -551,10 +551,11 @@ tools = [ builtin/read-file, tools/search, workflows/extract ]
 Sub-workflows run like tools: nested executor step, nested trace, result fed
 back to the model as JSON. Same eligibility rules apply.
 
-**Limitation:** `ToolRef` / `WorkflowRef` values work in agent `tools` lists,
-but cannot be used as dynamic step call targets in the DSL — a bare `<qname>(...)`
-only resolves against top-level binds (`inputs`, `ctx`, prior step results).
-Higher-order invocation via bound refs is not available in v1.
+**Limitation:** Step call targets are qnames (or a bare bind name holding a
+ref), not arbitrary expressions — `${inputs.handler}(...)` is not valid syntax.
+Refs arriving via `inputs` must be forwarded as argument values, invoked through
+agent tool lists, or chosen with static qnames in `if` branches. See
+[workflow-refs.md](workflow-refs.md).
 
 ### Recoverable vs fatal errors inside agents
 
@@ -1069,4 +1070,5 @@ Not available in v1 (see spec §13):
 | [examples/research/README.md](../examples/research/README.md) | Full feature tour + typed agent |
 | [examples/ship/README.md](../examples/ship/README.md) | Full orchestration (**experimental**) |
 | [examples/skills-runtime/README.md](../examples/skills-runtime/README.md) | Skill discover/load |
-| [examples/control-flow/README.md](../examples/control-flow/README.md) | Control flow |
+| [workflow-refs.md](workflow-refs.md) | `ToolRef` / `WorkflowRef` patterns and checker hints |
+| [examples/workflow-refs/README.md](../examples/workflow-refs/README.md) | Ref patterns without LLM |

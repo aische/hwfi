@@ -4,14 +4,14 @@ Last updated: 2026-07-12
 
 ## Current focus
 
-**v1.1 backlog** — 9.14 WorkflowRef patterns is next. 9.12 shipped.
+**v1.1 backlog** — next items in [TASKS.md](TASKS.md). 9.14 shipped.
 
 ## Done recently
 
-- **9.12 cache invalidation UX:** `hwfi cache invalidate` (`--from-step`,
-  `--step-key`); trace `step_key` / `decision_key`; agent sub-key registry;
-  author docs table (automatic vs manual busting); A44a; CacheInvalidateSpec.
-- **9.9–9.11:** control-flow error handling, record plumbing, inline `while`.
+- **9.14 WorkflowRef patterns:** [workflow-refs.md](workflow-refs.md), checker hints
+  (`Hwfi.Check.RefHints`), `checkProjectWithMeta` preserves warnings on failure,
+  `examples/workflow-refs`, ref-hints fixtures.
+- **9.12 cache invalidation UX:** `hwfi cache invalidate`, trace step keys, docs.
 
 ## Blockers
 
@@ -19,4 +19,4 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → 9.14 WorkflowRef / `ToolRef` patterns.
+[TASKS.md](TASKS.md) → v1.1 post-release backlog (9.4.4, 9.5, …).

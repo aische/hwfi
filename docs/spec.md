@@ -3132,15 +3132,19 @@ for authoring and debugging:
 
 #### 13.1.6 Dynamic dispatch ergonomics (`WorkflowRef` / `ToolRef`)
 
-**Priority: 6.** First-class refs (§5.1) and fingerprint-aware step-keys
-(§8.1) support dynamic dispatch; patterns are under-documented:
+**Implemented (2026-07-12, task 9.14).** Author guide:
+[workflow-refs.md](workflow-refs.md); checker hints for common ref mistakes;
+example [`examples/workflow-refs`](../examples/workflow-refs).
 
-- **Examples** showing refs passed as inputs, refs collected into lists for
-  `builtin/llm-agent` `tools`, and conditional dispatch via `if` on ref
-  values.
-- Optional **checker hints** or lint for common mistakes (e.g. ref passed
-  where a qname call was intended).
-- Cross-link from §6.1 (agent tools), §6.4 (`eval-workflow` vs existing
+First-class refs (§5.1) and fingerprint-aware step-keys (§8.1) support
+dynamic dispatch. Documentation covers:
+
+- Refs passed as inputs, refs collected into lists for `builtin/llm-agent`
+  `tools`, and conditional dispatch via `if` on flags (static qnames per
+  branch).
+- Checker hints for common mistakes (bare qname vs step call, static tools
+  list syntax).
+- Cross-links from §6.1 (agent tools), §6.4 (`eval-workflow` vs existing
   declarations), and §6.7 (dynamic skill loading).
 
 #### 13.1.7 Agent skill runtime (discover / load)

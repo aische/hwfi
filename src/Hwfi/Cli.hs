@@ -29,6 +29,7 @@ module Hwfi.Cli
 where
 
 import Control.Exception (IOException, try)
+import Control.Monad (unless)
 import Data.Aeson (Value (..), eitherDecodeFileStrict', encode)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -42,7 +43,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
-import Hwfi.Check (checkProject, renderCheckErrors, renderCheckWarnings)
+import Hwfi.Check (checkProject, checkProjectWithMeta, renderCheckErrors, renderCheckWarnings)
 import Hwfi.Check.Error (CheckWarning)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (ProjectManifest (..), validateEnvPresence)
@@ -276,12 +277,15 @@ runCheck opts = do
     Right proj -> do
       ecat <- loadCatalog dir
       let catMsgs = either (\e -> [renderCatalogError e]) (const []) ecat
-      case checkProject proj of
-        Left errs -> reportAndFail dir (renderCheckErrors errs) catMsgs
-        Right tp
-          | null catMsgs && null (tpWarnings tp) -> pure ()
+      let (checkErrs, checkWarns, mtp) = checkProjectWithMeta proj
+      case mtp of
+        Nothing -> do
+          unless (null checkWarns) $ printCheckWarnings dir checkWarns
+          reportAndFail dir (renderCheckErrors checkErrs) catMsgs
+        Just _tp
+          | null catMsgs && null checkWarns -> pure ()
           | null catMsgs ->
-              printCheckWarnings dir (tpWarnings tp)
+              printCheckWarnings dir checkWarns
           | otherwise -> reportAndFail dir [] catMsgs
 
 -- | Print check warnings to stderr (spec §6.1.6 phase 2).

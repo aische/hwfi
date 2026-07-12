@@ -3,10 +3,10 @@ module Hwfi.CheckSpec (spec) where
 import Data.Either (isRight)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
-import Data.Text (pack)
+import Data.Text (Text, isInfixOf, pack)
 import Hwfi.Ast.Name (qnameFromText)
-import Hwfi.Check (checkProject)
-import Hwfi.Check.Error (TypeError (..), TypeErrorKind (..))
+import Hwfi.Check (checkProject, checkProjectWithMeta)
+import Hwfi.Check.Error (CheckWarning (..), TypeError (..), TypeErrorKind (..))
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Type (Type (..))
 import Hwfi.TypedProject
@@ -17,6 +17,14 @@ checkFixture :: FilePath -> IO (Either [TypeError] TypedProject)
 checkFixture name = do
   eproj <- loadProject ("test/fixtures/check/" <> name)
   either (\ds -> error ("fixture failed to parse: " <> show ds)) (pure . checkProject) eproj
+
+checkFixtureWarnings :: FilePath -> IO [Text]
+checkFixtureWarnings name = do
+  eproj <- loadProject ("test/fixtures/check/" <> name)
+  either
+    (\ds -> error ("fixture failed to parse: " <> show ds))
+    (pure . (\p -> let (_, ws, _) = checkProjectWithMeta p in map warnMessage ws))
+    eproj
 
 errKinds :: Either [TypeError] TypedProject -> [TypeErrorKind]
 errKinds = either (map errKind) (const [])
@@ -125,6 +133,19 @@ spec = do
       case res of
         Right tp -> length (tpWarnings tp) `shouldBe` 1
         Left errs -> expectationFailure (show errs)
+
+  describe "checkProject — ToolRef/WorkflowRef hints (§13.1.6)" $ do
+    it "hints when a bare step target omits the namespace" $ do
+      warns <- checkFixtureWarnings "ref-hints-bare-target"
+      warns `shouldSatisfy` any (isInfixOf "tools/search")
+
+    it "hints when a bare qname is passed as a non-ref argument" $ do
+      warns <- checkFixtureWarnings "ref-hints-bare-arg"
+      warns `shouldSatisfy` any (isInfixOf "ToolRef/WorkflowRef value")
+
+    it "hints when a static tools list uses ${...} instead of bare qnames" $ do
+      warns <- checkFixtureWarnings "ref-hints-tools-ref"
+      warns `shouldSatisfy` any (isInfixOf "static agent tools list")
 
   describe "checkProject — exec policy (§7.5, A24)" $ do
     it "accepts a builtin/exec call whose literal program is allowlisted" $ do

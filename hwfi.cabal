@@ -51,6 +51,7 @@ library
         Hwfi.Check.Error
         Hwfi.Check.Expr
         Hwfi.Check.Graph
+        Hwfi.Check.RefHints
         Hwfi.Cli
         Hwfi.Compat
         Hwfi.Parse.Expr

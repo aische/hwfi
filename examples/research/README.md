@@ -89,12 +89,9 @@ cabal run hwfi -- run examples/research \
   --input schema=@examples/research/schema.json
 ```
 
-> **Note on first-class refs.** `ToolRef`/`WorkflowRef` types exist in v1
-> (§5.1) but, as currently implemented, cannot be *invoked* as a call target:
-> a bare call target only resolves against top-level roots (`inputs`, `ctx`,
-> prior binds), and every step bind is a record, so a ref value can never end
-> up bound as a callable name. This example therefore does not demonstrate
-> higher-order invocation; it is a genuine engine limitation, not an omission.
+> **Note on first-class refs.** See [docs/workflow-refs.md](../../docs/workflow-refs.md)
+> for supported patterns. Step targets cannot be `${inputs.handler}(...)`;
+> use static qnames, agent tool lists, or `if` branches instead.
 
 ## Prerequisites
 
