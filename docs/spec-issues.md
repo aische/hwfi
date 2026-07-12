@@ -1,6 +1,6 @@
 # Spec review notes — reconciliation status
 
-Original review predates M1–M9 and H1. Updated 2026-07-09.
+Original review predates M1–M9 and H1. Updated 2026-07-12.
 
 ## Resolved
 
@@ -14,19 +14,15 @@ Original review predates M1–M9 and H1. Updated 2026-07-09.
 | 6 | `ctx.trace` on resume | §8.3.5: preload persisted `trace.jsonl`; test A15. |
 | 7 | Eval errors | `KEval` / `"eval"` kind in runtime (§8.3.2). |
 | 8 | Agent skill runtime (§6.7) | `discover-skills`, `load-skill`, catalog, checkpoint/resume; tests A45–A50; `examples/skills-runtime`. |
+| 9 | Control-flow error handling (9.9) | `try`/`catch` (§4.4) and `par(on_error = "collect")` (§4.1.1) implemented. |
+| 10 | Author capability backlog (9.9–9.14) | Data plumbing, loop sugar, cache invalidation UX, `WorkflowRef` patterns — see spec §13.1 and [workflow-refs.md](workflow-refs.md). |
 
 ## Still accurate (by design or deferred)
 
 - **Implicit returns** — uncommon; tools return `{ text }` while workflows declare `{ summary }`; explicit `return` is the norm.
 - **YAML `:` vs DSL `=`** — intentional (spec §3.4 note).
 - **No `Optional<T>`** — deferred v1.1 (spec §13).
-- **No workflow-level `try`/recover** — specified §4.4; implementation pending
-  (task 9.9). Agent loop has localized recoverable errors (§6.1.4);
-  `eval-workflow` parse/check failures use `{ ok, errors }` (§6.4).
-- **Author capability backlog** — record ops, loop sugar, finer cache
-  invalidation, `WorkflowRef` patterns: spec §13.1, tasks 9.9–9.14.
-  **Partially addressed in R1:** `json-get`, `json-values`, `concat`, `builtin/log`,
-  `hwfi cache clear`, usage/cost (§8.4), D3 agent cache semantics (§6.1.2).
+- **Higher-order step calls** — `${inputs.handler}(...)` is not a step target; see [workflow-refs.md](workflow-refs.md) for supported ref patterns.
 
 ## Implementation gaps (not spec gaps)
 

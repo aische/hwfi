@@ -17,7 +17,7 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 - LLM steps (`llm-generate`, `llm-chat`, `llm-gen-object`) and agent loops
   (`llm-agent`, `llm-agent-object`)
 - Sandboxed file I/O, mutation tools, and allowlisted `exec`
-- Control flow: `if`/`else`, `foreach`, `par`, `while`
+- Control flow: `if`/`else`, `foreach`, `par`, `while`, `try`/`catch`
 - Content-addressed step cache and `hwfi resume`
 - Cross-run trace reading and skill extraction (Mode A)
 - Agent skill discovery and loading (`discover-skills`, `load-skill`) — §6.7
@@ -102,6 +102,7 @@ Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
 |---------|---------|
 | [`examples/control-flow`](examples/control-flow) | `if` / `foreach` / `par` / `while` |
 | [`examples/research`](examples/research) | Full feature matrix |
+| [`examples/workflow-refs`](examples/workflow-refs) | `ToolRef` / `WorkflowRef` patterns (no LLM) |
 | [`examples/skills`](examples/skills) | Trace → skill extraction |
 | [`examples/skills-runtime`](examples/skills-runtime) | Discover/load skills in an agent loop |
 
@@ -117,19 +118,22 @@ Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
 - [docs/tutorials/README.md](docs/tutorials/README.md) — learning path (hello → check → agent → show/resume)
 - [docs/workflow-reference.md](docs/workflow-reference.md) — author reference (write and run workflows)
 - [docs/spec.md](docs/spec.md) — normative specification
+- [docs/workflow-refs.md](docs/workflow-refs.md) — `ToolRef` / `WorkflowRef` patterns
 - [docs/caching-and-resume.md](docs/caching-and-resume.md) — cache semantics for authors
 - [CHANGELOG.md](CHANGELOG.md) — release history
 - [docs/TASKS.md](docs/TASKS.md) — active backlog
 - [docs/STATUS.md](docs/STATUS.md) — current focus
 
-## v1 limitations
+## Remaining limitations
 
-See spec §13 for the v1.1 backlog. Notable gaps:
+See spec §13 and [docs/TASKS.md](docs/TASKS.md). Notable gaps:
 
-- No workflow-level `try`/recover (agent tool errors are recoverable)
 - No `Optional<T>` — whitelisted env vars are required at startup
-- `ToolRef`/`WorkflowRef` dynamic invocation patterns are limited
+- `Bytes`-typed file I/O and `trace.jsonl` rotation (v1.1 backlog)
 - Step cache keys do not include workspace file contents
+
+For `ToolRef`/`WorkflowRef` patterns and scoping rules, see
+[docs/workflow-refs.md](docs/workflow-refs.md).
 
 ## License
 

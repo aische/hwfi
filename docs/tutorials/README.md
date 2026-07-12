@@ -20,6 +20,7 @@ for detail.
 | [`examples/summarise`](../../examples/summarise) | LLM pipeline (`read` → `llm-generate` → `write`); live E2E in `cabal test` with API key |
 | [`examples/control-flow`](../../examples/control-flow) | `if` / `foreach` / `par` / `while` |
 | [`examples/research`](../../examples/research) | Full feature tour |
+| [`examples/workflow-refs`](../../examples/workflow-refs) | `ToolRef` / `WorkflowRef` patterns (no LLM) |
 | [`examples/skills-runtime`](../../examples/skills-runtime) | Discover/load skills in an agent loop |
 | [`examples/ship`](../../examples/ship) | Plan → build → review orchestration (**experimental**) |
 

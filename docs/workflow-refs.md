@@ -116,7 +116,7 @@ answer <- if ${inputs.useSearch} {
 ```
 
 Each branch may also build a different agent toolbox before calling
-`builtin/llm-agent` (see `examples/workflow-refs/workflows/conditional-agent`).
+`builtin/llm-agent` (see `examples/workflow-refs/workflows/conditional-route`).
 
 ### Runtime list assembly
 

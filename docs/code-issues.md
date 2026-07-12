@@ -13,8 +13,8 @@ complete** (threaded RTS, symlink containment, model-catalog step-key
 invalidation, sub-workflow scope threading, deliberate crash path).
 
 Remaining work is **perf polish** (quadratic `ctx.trace` rebuild, directory walk),
-**agent redaction semantics** (D3), minor nits, and optional property tests —
-not correctness blockers for the gap list discussed in chat.
+minor nits, and optional property tests — not correctness blockers for the gap
+list discussed in chat.
 
 ## 2. Critical issues — fixed (H1)
 
@@ -93,4 +93,3 @@ H1-critical branches now have regression coverage (see
 [h1-verification.md](h1-verification.md)). Still desirable:
 
 - QuickCheck: `canonicalJson`, step-key stability, glob, trace round-trip
-- Explicit test for D3 agent redaction semantics (if behaviour is pinned)

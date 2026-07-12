@@ -384,8 +384,8 @@ arguments). The two parsers must not conflate them.
 ## 4. Control flow (v1)
 
 - Sequential steps, plus `if`/`else`, `foreach`, `par` (implemented in M8;
-  see §4.1), `while` (§4.3; milestone M9), and `try`/`catch` (specified in
-  §4.4; v1.1 task 9.9).
+  see §4.1), `while` (§4.3; milestone M9), and `try`/`catch` (§4.4;
+  implemented v1.1 task 9.9).
 - See §4.2 for scoping rules shared by all control-flow constructs.
 - Errors abort the workflow unless caught by `try` (§4.4); the failing step is
   recorded and the run is resumable from that step.
@@ -3041,19 +3041,13 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
-- Control-flow error handling — **`try`/recover specified** (§4.4); **`par`
-  collect-errors implemented** (§4.1.1, task 9.9).
-  Until then, the engine aborts on the first uncaught error. The agent loop's
-  localized recoverable boundary (§6.1.4) remains the in-step exception.
-- **Author capability backlog (post-v1)** — remaining data plumbing, loop
-  sugar, cache-invalidation UX, and `WorkflowRef` patterns. Prioritized
-  list: §13.1.
+- **Author capability backlog (post-v1)** — §13.1 items 9.9–9.14 are
+  **implemented**; remaining v1.1 work is listed in [TASKS.md](TASKS.md).
 
 ### 13.1 Author capability backlog (post-v1)
 
-Items surfaced by author-facing review (2026-07). Rough priority order for
-v1.1+; tracked in [TASKS.md](TASKS.md) as 9.9–9.14. None of these block v1
-milestone completion.
+Items surfaced by author-facing review (2026-07). Tasks 9.9–9.14 shipped
+2026-07-12; open v1.1 items remain in [TASKS.md](TASKS.md).
 
 #### 13.1.1 Control-flow error handling (`try`/recover)
 

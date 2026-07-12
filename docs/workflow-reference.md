@@ -633,11 +633,37 @@ checks <- par(max = 4) path in ${inputs.scripts} {
 ```
 
 - Results are in **input order**, not completion order.
-- Aborts on the **lowest-index** failure.
+- Default `on_error = "fail"`: aborts on the **lowest-index** failure.
+- `on_error = "collect"`: run all iterations; each index yields
+  `{ ok, value, error }` — guard on `ok` before reading `value`.
+
+```step
+results <- par(on_error = "collect") path in ${inputs.paths} {
+  c <- builtin/exec(program = "sh", args = ["-n", ${path}], stdin = "", timeout_ms = 0)
+} @check
+```
+
+### `try` / `catch`
+
+Catch **catchable** runtime errors (not `internal`) inside a typed boundary:
+
+```step
+out <- try {
+  r <- tools/might-fail(x = ${inputs.x}) @attempt
+} catch {
+  r <- tools/fallback(x = ${inputs.x}) @recover
+} @safe
+```
+
+- Both arms must yield the same result type.
+- Failed try-arm steps are not cached; resume re-runs the try arm unless the
+  catch arm already completed (see [caching-and-resume.md](caching-and-resume.md)).
+- Trace emits `try-branch` for the taken arm.
 
 ### `while`
 
-Predicate/body loop with separate sub-workflows:
+Predicate/body loop. The **predicate** is always a callee workflow; the **body**
+may be a callee (`body` + `body_args`) or an inline block (`body = { … }`).
 
 ```step
 results <- while(
@@ -647,6 +673,14 @@ results <- while(
   body_args = { target = ${inputs.target} },
   max_iterations = 20
 ) @refine_loop
+```
+
+**Counted loops** — `range(n)` yields `[0, …, n-1]` for `foreach` / `par`:
+
+```step
+_ <- foreach i in range(3) {
+  _ <- builtin/log(message = ${i}, level = "info")
+} @tick
 ```
 
 **Predicate outputs** must include `continue: Bool` and `reason: String`.
@@ -1043,16 +1077,20 @@ prompts to handle those paths when needed.
 
 ---
 
-## v1 limitations
+## Remaining limitations
 
-Not available in v1 (see spec §13):
+See spec §13 and [TASKS.md](TASKS.md) for the open v1.1 backlog:
 
-- Workflow-level `try` / recover — **specified** (§4.4); not yet implemented
-- `par(on_error = "collect")` — **specified** (§4.1.1); not yet implemented
-- `Optional<T>` / nullable env
-- Record map/filter/merge helpers (partial: `json-get`, `json-values`, `concat` exist)
+- `Optional<T>` / nullable env (whitelisted env vars are required at startup)
+- `Bytes`-typed file I/O; `trace.jsonl` rotation
+- `builtin/extract-skill` Mode B stub writer (A40)
+- OS-level `exec` isolation beyond allowlist + empty env
 - Step cache does not include workspace file contents
 - No arbitrary HTTP builtin (only LLM provider calls + allowlisted `exec`)
+
+**Shipped in v1.1:** `try`/`catch`, `par(on_error = "collect")`, record
+merge/filter/map, `range(n)`, inline `while` bodies, cache invalidation UX,
+`WorkflowRef`/`ToolRef` patterns — see [workflow-refs.md](workflow-refs.md).
 
 ---
 
