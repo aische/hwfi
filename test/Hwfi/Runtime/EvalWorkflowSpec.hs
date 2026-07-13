@@ -86,7 +86,7 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
           (Map.fromList [("src", VString illTypedWorkflowSource)])
       case result of
         Left msg -> expectationFailure ("run failed: " <> T.unpack msg)
-        Right (RunResult (Right (VRecord outs)) _) ->
+        Right (RunResult (Right (VRecord outs)) _ _) ->
           Map.lookup "got_ok" outs `shouldBe` Just (VBool False)
         _ -> expectationFailure "expected successful run"
 
@@ -104,7 +104,7 @@ spec = describe "builtin/eval-workflow (§6.4)" $ do
           (Map.fromList [("src", VString goodWorkflowSource)])
       case result of
         Left msg -> expectationFailure ("run failed: " <> T.unpack msg)
-        Right (RunResult (Right (VRecord outs)) _) ->
+        Right (RunResult (Right (VRecord outs)) _ _) ->
           Map.lookup "succeeded" outs `shouldBe` Just (VBool True)
         _ -> expectationFailure "expected successful run"
 

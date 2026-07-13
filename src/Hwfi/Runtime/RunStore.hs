@@ -48,6 +48,9 @@ module Hwfi.Runtime.RunStore
     readRunTrace,
     openTraceAppend,
     withWorkspaceLock,
+    writeMachineSnapshot,
+    readMachineSnapshot,
+    hasMachineSnapshot,
   )
 where
 
@@ -69,6 +72,8 @@ import Data.Vector qualified as V
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
+import Hwfi.Runtime.Machine (Machine)
+import Hwfi.Runtime.MachineSnapshot (decodeMachine, encodeMachine)
 import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
 import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
@@ -491,6 +496,33 @@ openTraceAppend store = do
   h <- openFile (rsTracePath store) AppendMode
   hSetBuffering h LineBuffering
   pure h
+
+-- Machine snapshot (v2 runtime) ----------------------------------------------
+
+machineSnapshotPath :: RunStore -> FilePath
+machineSnapshotPath store = rsRunDir store </> "machine.json"
+
+-- | Whether a v2 machine snapshot exists for this run.
+hasMachineSnapshot :: RunStore -> IO Bool
+hasMachineSnapshot store = doesFileExist (machineSnapshotPath store)
+
+-- | Persist the authoritative machine snapshot for resume (v2 runtime).
+writeMachineSnapshot :: RunStore -> Machine -> IO ()
+writeMachineSnapshot store machine =
+  atomicWrite (machineSnapshotPath store) (Aeson.encode (encodeMachine machine))
+
+-- | Load the persisted machine snapshot; 'Nothing' when absent or malformed.
+readMachineSnapshot :: RunStore -> IO (Maybe Machine)
+readMachineSnapshot store = do
+  exists <- doesFileExist (machineSnapshotPath store)
+  if not exists
+    then pure Nothing
+    else do
+      result <- eitherDecodeFileStrict' (machineSnapshotPath store)
+      pure $
+        case result of
+          Left _ -> Nothing
+          Right v -> either (const Nothing) Just (decodeMachine v)
 
 -- Workspace lock -------------------------------------------------------------
 

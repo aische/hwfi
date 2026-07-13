@@ -5,6 +5,7 @@ module Hwfi.Runtime.StepEnv
     ConfirmPolicy (..),
     StepOutcome (..),
     newStepEnv,
+    newRunStepEnv,
   )
 where
 
@@ -19,7 +20,7 @@ import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord)
 import Hwfi.Runtime.Error (RuntimeError)
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.Machine (Machine)
-import Hwfi.Runtime.RunStore (createRunStore)
+import Hwfi.Runtime.RunStore (RunStore, createRunStore)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (Tracer, newTracer)
 import Hwfi.Runtime.Usage (UsageSeam, newUsageSeam)
@@ -100,5 +101,33 @@ newStepEnv tp ws envVars runId entrypoint = do
         seRunWorkflow = Nothing,
         seParBranchIndex = Nothing,
         seConfirmPolicy = ConfirmAuto,
+        seConfirmApprovals = approvals
+      }
+
+-- | Build a production step environment for CLI runs (persistent tracer).
+newRunStepEnv ::
+  TypedProject ->
+  Workspace ->
+  ModelStore ->
+  Map Text Text ->
+  RunStore ->
+  Tracer ->
+  UsageSeam ->
+  RunInfo ->
+  ConfirmPolicy ->
+  IO StepEnv
+newRunStepEnv tp ws models envVars _store tracer usage runInfo confirmPolicy = do
+  approvals <- newIORef Set.empty
+  pure
+    StepEnv
+      { seProject = tp,
+        seWorkspace = ws,
+        seModels = models,
+        seTracer = tracer,
+        seUsage = usage,
+        seRunInfo = runInfo,
+        seRunWorkflow = Nothing,
+        seParBranchIndex = Nothing,
+        seConfirmPolicy = confirmPolicy,
         seConfirmApprovals = approvals
       }

@@ -1,10 +1,12 @@
 -- | v2 runtime transition driver (cursor + frames).
 --
--- Executes one machine transition per 'stepMachine' call. The legacy executor
--- remains the default until M4 cutover (see @docs/execution-model.md@).
+-- Executes one machine transition per 'stepMachine' call. CLI @run@ /
+-- @continue@ / @step@ use this driver via 'Hwfi.Runtime.MachineRun' (M4).
 module Hwfi.Runtime.StepDriver
   ( StepOutcome (..),
     stepMachine,
+    stepParWave,
+    isParWave,
     pauseMachine,
     runMachine,
     approveConfirm,

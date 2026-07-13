@@ -4,19 +4,24 @@
 --
 -- @
 -- hwfi check   \<project-dir>
--- hwfi run     \<project-dir> --workspace \<dir> ...
--- hwfi resume  \<workspace-dir> \<run-id>
+-- hwfi run      \<project-dir> --workspace \<dir> ...
+-- hwfi continue \<workspace-dir> \<run-id> [--approve]
+-- hwfi step     \<workspace-dir> \<run-id> [--approve]
+-- hwfi resume   \<workspace-dir> \<run-id>   (alias for continue)
 -- hwfi show    \<workspace-dir> \<run-id>
 -- hwfi cache clear \<workspace-dir> \<run-id>
 -- hwfi cache invalidate \<workspace-dir> \<run-id> (--step-key \<hex> | --from-step \<qname>#\<step-id>)
 -- @
 --
 -- @hwfi check@ parses and type-checks the project (spec §9, §7.3, A1/A2).
--- @run@, @resume@, @show@, @cache clear@, and @cache invalidate@ are fully implemented.
+-- @run@, @continue@, @step@, @resume@ (alias), @show@, @cache clear@, and
+-- @cache invalidate@ are fully implemented.
 module Hwfi.Cli
   ( Command (..),
     CheckOpts (..),
     RunOpts (..),
+    ContinueOpts (..),
+    StepOpts (..),
     ResumeOpts (..),
     ShowOpts (..),
     InputArg (..),
@@ -48,7 +53,12 @@ import Hwfi.Check.Error (CheckWarning)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (ProjectManifest (..), validateEnvPresence)
 import Hwfi.Runtime.Error (renderRuntimeError)
-import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
+import Hwfi.Runtime.MachineRun
+  ( RunResult (..),
+    performContinueToEnd,
+    performRun,
+    performStep,
+  )
 import Hwfi.Runtime.Gateways (buildGateways, buildModelStore)
 import Hwfi.Runtime.KeyStore (loadKeyStore)
 import Hwfi.Runtime.ModelCatalog
@@ -92,6 +102,8 @@ import System.Random (randomRIO)
 data Command
   = Check CheckOpts
   | Run RunOpts
+  | Continue ContinueOpts
+  | Step StepOpts
   | Resume ResumeOpts
   | Show ShowOpts
   | CacheClear CacheClearOpts
@@ -115,7 +127,21 @@ data RunOpts = RunOpts
   }
   deriving stock (Eq, Show)
 
--- | @hwfi resume \<workspace-dir> \<run-id>@.
+-- | @hwfi continue \<workspace-dir> \<run-id>@ (v2 runtime).
+data ContinueOpts = ContinueOpts
+  { continueWorkspace :: FilePath,
+    continueRunId :: Text,
+    continueApprove :: Bool
+  }
+  deriving stock (Eq, Show)
+
+-- | @hwfi step \<workspace-dir> \<run-id>@ — one step-batch (v2 runtime).
+newtype StepOpts = StepOpts
+  { stepContinue :: ContinueOpts
+  }
+  deriving stock (Eq, Show)
+
+-- | @hwfi resume \<workspace-dir> \<run-id>@ (alias for @continue@).
 data ResumeOpts = ResumeOpts
   { workspaceDir :: FilePath,
     runId :: Text
@@ -178,7 +204,9 @@ commandParser =
   hsubparser
     ( command "check" (info (Check <$> checkOpts) (progDesc "Parse and type-check a project"))
         <> command "run" (info (Run <$> runOpts) (progDesc "Run a workflow project"))
-        <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume an interrupted run"))
+        <> command "continue" (info (Continue <$> continueOpts) (progDesc "Continue a v2 run from its machine snapshot"))
+        <> command "step" (info (Step <$> stepOpts) (progDesc "Advance a v2 run until the next halt point"))
+        <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume an interrupted run (alias for continue)"))
         <> command "show" (info (Show <$> showOpts) (progDesc "Pretty-print a run's trace"))
         <> command
           "cache"
@@ -216,6 +244,16 @@ resumeOpts =
   ResumeOpts
     <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run")
     <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to resume"))
+
+continueOpts :: Parser ContinueOpts
+continueOpts =
+  ContinueOpts
+    <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run")
+    <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to continue"))
+    <*> switch (long "approve" <> help "Approve the active exec confirm gate before stepping")
+
+stepOpts :: Parser StepOpts
+stepOpts = StepOpts <$> continueOpts
 
 showOpts :: Parser ShowOpts
 showOpts =
@@ -259,6 +297,8 @@ dispatch :: Command -> IO ()
 dispatch = \case
   Check opts -> runCheck opts
   Run opts -> runRun opts
+  Continue opts -> runContinue opts
+  Step opts -> runStep opts
   Resume opts -> runResume opts
   Show opts -> runShow opts
   CacheClear opts -> runCacheClear opts
@@ -366,33 +406,58 @@ runChecked opts dir tp catalog = do
 entrypointInputs :: QName -> TypedProject -> Maybe [(Ident, Type)]
 entrypointInputs entry tp = rsigInputs . tdSignature <$> lookupTyped entry tp
 
--- | Print the outcome of a run/resume and exit. Orchestration failures (lock
+-- | Print the outcome of a run/continue and exit. Orchestration failures (lock
 -- busy, non-resumable, etc.) and workflow errors both exit non-zero.
 finishRun :: Either Text RunResult -> IO ()
 finishRun = \case
   Left orchErr -> failMsgs ["error: " <> orchErr]
-  Right result -> case rrOutcome result of
-    Left err -> failMsgs [renderRuntimeError err]
-    Right outputs -> TIO.putStrLn (jsonText (redactedJson outputs))
+  Right result
+    | rrHalted result ->
+        TIO.putStrLn ("run halted (status: " <> haltStatus result <> ")")
+    | otherwise ->
+        case rrOutcome result of
+          Left err -> failMsgs [renderRuntimeError err]
+          Right outputs -> TIO.putStrLn (jsonText (redactedJson outputs))
+  where
+    haltStatus r = case rrOutcome r of
+      Left _ -> "paused"
+      Right _ -> "completed"
 
--- | Run @hwfi resume@ (spec §8.2, §9): parse and type-check the project again
--- (so a code edit invalidates dependent step keys, A13), rebuild gateways and
--- the model store, then resume the persisted run — skipping cacheable steps
--- with a stored result and re-executing the rest.
-runResume :: ResumeOpts -> IO ()
-runResume opts = do
-  workspace <- newWorkspace opts.workspaceDir
-  eStore <- openRunStore (workspaceRoot workspace) opts.runId
+-- | Run @hwfi continue@ (v2 runtime): reload machine snapshot and drive.
+runContinue :: ContinueOpts -> IO ()
+runContinue opts =
+  runContinueMode opts False
+
+-- | Run @hwfi step@ — one step-batch until halt.
+runStep :: StepOpts -> IO ()
+runStep opts =
+  runContinueMode opts.stepContinue True
+
+runContinueMode :: ContinueOpts -> Bool -> IO ()
+runContinueMode opts stepBatch = do
+  workspace <- newWorkspace opts.continueWorkspace
+  eStore <- openRunStore (workspaceRoot workspace) opts.continueRunId
   case eStore of
     Left e -> failMsgs ["error: " <> e]
     Right store -> do
       eMeta <- readRunMeta store
       case eMeta of
         Left e -> failMsgs ["error: " <> e]
-        Right meta -> resumeChecked workspace meta
+        Right meta -> continueChecked workspace meta opts.continueApprove stepBatch
 
-resumeChecked :: Workspace -> RunMeta -> IO ()
-resumeChecked workspace meta = do
+-- | Run @hwfi resume@ (alias for @continue@, v2 runtime).
+runResume :: ResumeOpts -> IO ()
+runResume opts =
+  runContinueMode
+    ContinueOpts
+      { continueWorkspace = opts.workspaceDir,
+        continueRunId = opts.runId,
+        continueApprove = False
+      }
+    False
+
+continueChecked :: Workspace -> RunMeta -> Bool -> Bool -> IO ()
+continueChecked workspace meta approve stepBatch = do
   let dir = T.unpack meta.rmProjectDir
   eproj <- loadProject dir
   case eproj of
@@ -413,7 +478,10 @@ resumeChecked workspace meta = do
                 Right envVars -> case buildModelStore (buildGateways keyStore) catalog of
                   Left ce -> failMsgs [renderCatalogError ce]
                   Right models -> do
-                    outcome <- performResume tp workspace models envVars meta.rmRunId
+                    outcome <-
+                      if stepBatch
+                        then performStep tp workspace models envVars meta.rmRunId approve
+                        else performContinueToEnd tp workspace models envVars meta.rmRunId approve
                     finishRun outcome
   where
     catMsgsOf = either (\e -> [renderCatalogError e]) (const [])

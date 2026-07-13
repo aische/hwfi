@@ -28,6 +28,7 @@ module Hwfi.Runtime.Executor
     runWorkflow,
     projectContentHash,
     defaultParallelism,
+    reconstructInputs,
   )
 where
 
@@ -175,7 +176,9 @@ data Runtime = Runtime
 -- | The outcome of a run plus the events it produced (for @hwfi show@\/tests).
 data RunResult = RunResult
   { rrOutcome :: Either RuntimeError RValue,
-    rrEvents :: [TraceEvent]
+    rrEvents :: [TraceEvent],
+    -- | 'True' when the machine stopped at an explicit halt point (v2 @step@).
+    rrHalted :: Bool
   }
 
 -- Orchestration --------------------------------------------------------------
@@ -301,7 +304,7 @@ finish rt store outcome = do
   _ <- emit (rtTracer rt) (RunEnd (riRunId (rtRunInfo rt)) (either (const Aborted) (const Completed) outcome))
   updateRunPhase store (either (const PhaseAborted) (const PhaseCompleted) outcome)
   events <- snapshotEvents (rtTracer rt)
-  pure (RunResult outcome events)
+  pure (RunResult outcome events False)
 
 -- | Handle an unexpected synchronous exception: record an @internal@ error,
 -- emit @run-end@ with @crashed@, set @run.json@ phase, and surface the fault as
@@ -314,7 +317,7 @@ finishCrash rt store entry exc = do
   _ <- emit (rtTracer rt) (RunEnd runId Crashed)
   updateRunPhase store PhaseCrashed
   events <- snapshotEvents (rtTracer rt)
-  pure (RunResult (Left (internalError msg)) events)
+  pure (RunResult (Left (internalError msg)) events False)
 
 mkRuntime :: TypedProject -> Workspace -> ModelStore -> RunStore -> Tracer -> RunInfo -> UsageSeam -> Bool -> Runtime
 mkRuntime tp ws models store tracer ri usage resume =

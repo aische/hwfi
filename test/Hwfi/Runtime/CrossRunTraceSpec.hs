@@ -80,7 +80,7 @@ spec = describe "cross-run trace reading (§6.5)" $ do
           Map.empty
       case result of
         Left msg -> expectationFailure ("run failed: " <> T.unpack msg)
-        Right (RunResult (Right (VRecord outs)) _) -> do
+        Right (RunResult (Right (VRecord outs)) _ _) -> do
           Map.lookup "current" outs `shouldBe` Just (VString "run-a36")
           Map.lookup "newest_prior" outs `shouldBe` Just (VString "run-new")
           Map.lookup "oldest_prior" outs `shouldBe` Just (VString "run-old")
@@ -100,7 +100,7 @@ spec = describe "cross-run trace reading (§6.5)" $ do
           Map.empty
       case result of
         Left msg -> expectationFailure ("run failed: " <> T.unpack msg)
-        Right (RunResult (Right (VRecord outs)) _) -> do
+        Right (RunResult (Right (VRecord outs)) _ _) -> do
           Map.lookup "got_ok" outs `shouldBe` Just (VBool False)
           case Map.lookup "err" outs of
             Just (VString err) -> "no run" `T.isInfixOf` err `shouldBe` True
@@ -121,7 +121,7 @@ spec = describe "cross-run trace reading (§6.5)" $ do
           Map.empty
       case result of
         Left msg -> expectationFailure ("run failed: " <> T.unpack msg)
-        Right (RunResult (Right (VRecord outs)) evs) -> do
+        Right (RunResult (Right (VRecord outs)) evs _) -> do
           Map.lookup "got_ok" outs `shouldBe` Just (VBool True)
           length [() | TraceEvent _ _ (FileIo _ _ OpRead p _) <- evs, "run-current" `T.isInfixOf` p]
             `shouldSatisfy` (> 0)

@@ -75,6 +75,7 @@ library
         Hwfi.Runtime.Executor
         Hwfi.Runtime.Machine
         Hwfi.Runtime.MachineAgent
+        Hwfi.Runtime.MachineRun
         Hwfi.Runtime.MachinePar
         Hwfi.Runtime.MachinePath
         Hwfi.Runtime.MachineSnapshot
@@ -170,6 +171,7 @@ test-suite hwfi-test
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec
         Hwfi.Runtime.ExecutorSpec
+        Hwfi.Runtime.MachineRunSpec
         Hwfi.Runtime.MachineSpec
         Hwfi.Runtime.GatewaysSpec
         Hwfi.Runtime.GlobSpec

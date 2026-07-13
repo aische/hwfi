@@ -6,7 +6,6 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 Design: [execution-model.md](execution-model.md).
 
-- [ ] **M4** CLI `step` / `continue`; replace `performResume`; cut over default runtime
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend
 - [ ] **M6** Drop step-key cache path; rewrite spec §8 and caching docs
 
@@ -24,18 +23,19 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **M4 (2026-07-13):** CLI `step` / `continue` (+ `resume` alias); v2 default
+  runtime via `MachineRun` — `machine.json` snapshot persistence, project-hash
+  staleness gate, `performContinueToEnd` / `performStep`; legacy
+  `Executor.performResume` replaced on CLI path.
 - **M3 (2026-07-13):** Real `par` + cooperative confirm + per-branch snapshots —
-  `MachinePar`, `CurParPool`, `FrPar` scheduler/drain/confirm; `StepEnv` confirm
-  policy; `MachinePath` nested block paths; `MachineSpec` par e2e/resume/confirm.
-- **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine` — `MachineAgent` drives one
-  transition per call (model or tool); agent reducible state in snapshot; v2 path
-  does not consult intra-step sub-key cache; `seRunWorkflow` seam; `MachineSpec`
-  agent e2e + mid-agent snapshot resume.
-- **M1 (2026-07-13):** Sequential `stepMachine` — dispatch, builtins, sub-workflows,
-  control flow (`if`, `foreach`, `while`, `try`); `StepEnv`, `runMachine`; `FrForeach`,
-  `FrSeq.fsBindings`; `MachineSpec` file-only e2e.
-- **M0 (2026-07-13):** `Machine`, `MachinePath`, `MachineSnapshot`, `StepDriver` stub;
-  `MachineSpec` (snapshot round-trip, path navigation, first-step transition).
+  `MachinePar`, `CurParPool`, `FrPar` scheduler/drain/confirm; `MachineSpec` par
+  e2e/resume/confirm.
+- **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine` — `MachineAgent`;
+  snapshot resume; `seRunWorkflow` seam; `MachineSpec` agent e2e.
+- **M1 (2026-07-13):** Sequential `stepMachine` — dispatch, builtins,
+  sub-workflows, control flow; `StepEnv`, `runMachine`; `MachineSpec` file-only e2e.
+- **M0 (2026-07-13):** `Machine`, `MachinePath`, `MachineSnapshot`, `StepDriver`
+  stub; `MachineSpec` snapshot round-trip.
 
 Completed v1.1 author-capability items (9.9–9.14) and earlier milestones are
 archived in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).

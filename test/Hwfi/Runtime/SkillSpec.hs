@@ -130,7 +130,7 @@ spec = describe "skills and trace-slice (§6.6)" $ do
           (Map.singleton "name" (VString "Ada"))
       case result of
         Left msg -> expectationFailure ("run failed: " <> T.unpack msg)
-        Right (RunResult (Right (VRecord outs)) _) ->
+        Right (RunResult (Right (VRecord outs)) _ _) ->
           Map.lookup "greeting" outs `shouldBe` Just (VString "Hi Ada")
         _ -> expectationFailure "expected successful run"
 
