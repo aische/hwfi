@@ -22,7 +22,9 @@ module Hwfi.Runtime.Machine
     ParJoinState (..),
     ParSlot (..),
     ParPoolPhase (..),
+    ForeachFrame (..),
     WhileFrame (..),
+    WhilePhase (..),
     TryFrame (..),
     TryPhase (..),
     -- * Machine
@@ -37,10 +39,11 @@ where
 
 import Data.Aeson (Value)
 import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Hwfi.Ast.Name (Ident, QName)
 import Hwfi.Ast.Step (Binder, ParOnError, StepStmt)
-import Hwfi.Runtime.Value (RValue)
+import Hwfi.Runtime.Value (RValue (..))
 import LLM.Core.Types (ToolCall, ToolResult, Turn)
 
 -- | Top-level run status for the v2 machine.
@@ -156,10 +159,13 @@ data Frame
     FrSeq
       { fsScope :: Text,
         fsResumePath :: StmtPath,
-        fsBinder :: Maybe Binder
+        fsBinder :: Maybe Binder,
+        fsBindings :: Bindings
       }
   | -- | Join parallel loop branches (real concurrency).
     FrPar ParJoinState
+  | -- | Sequential @foreach@ loop continuation.
+    FrForeach ForeachFrame
   | -- | @while@ loop continuation.
     FrWhile WhileFrame
   | -- | @try@/@catch@ boundary.
@@ -198,6 +204,20 @@ data ParPoolPhase
   | ParPausedConfirm
   deriving stock (Eq, Show)
 
+-- | State for a sequential @foreach@ loop.
+data ForeachFrame = ForeachFrame
+  { ffLoopId :: Ident,
+    ffScope :: Text,
+    ffBinder :: Binder,
+    ffVar :: Ident,
+    ffItems :: [RValue],
+    ffIndex :: Int,
+    ffAcc :: [RValue],
+    ffResumePath :: StmtPath,
+    ffBodyEntry :: StmtPath
+  }
+  deriving stock (Eq, Show)
+
 data WhileFrame = WhileFrame
   { wfLoopId :: Ident,
     wfScope :: Text,
@@ -205,15 +225,28 @@ data WhileFrame = WhileFrame
     wfIteration :: Int,
     wfMaxIterations :: Int,
     wfAcc :: [RValue],
-    wfCarry :: Maybe RValue
+    wfCarry :: Maybe RValue,
+    wfResumePath :: StmtPath,
+    wfWhilePath :: StmtPath,
+    wfPhase :: WhilePhase
   }
+  deriving stock (Eq, Show)
+
+-- | Which phase of a @while@ iteration is active.
+data WhilePhase
+  = -- | Evaluating the predicate callee.
+    WhileRunPred
+  | -- | Running the body callee or inline block.
+    WhileRunBody
   deriving stock (Eq, Show)
 
 data TryFrame = TryFrame
   { tfLoopId :: Ident,
     tfScope :: Text,
     tfBinder :: Binder,
-    tfPhase :: TryPhase
+    tfPhase :: TryPhase,
+    tfResumePath :: StmtPath,
+    tfTryPath :: StmtPath
   }
   deriving stock (Eq, Show)
 
@@ -262,7 +295,7 @@ initialMachine scope projectHash q inputs =
       mPath = StmtPath q [PathSegment 0 Nothing],
       mCurrent = CurReady,
       mFrames = [],
-      mBindings = inputs,
+      mBindings = Map.singleton "inputs" (VRecord inputs),
       mLastResult = Nothing,
       mError = Nothing
     }

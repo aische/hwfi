@@ -237,14 +237,16 @@ parsePending = withObject "pending" $ \o ->
 
 encodeFrame :: Frame -> Value
 encodeFrame = \case
-  FrSeq {fsScope, fsResumePath, fsBinder} ->
+  FrSeq {fsScope, fsResumePath, fsBinder, fsBindings} ->
     object
       [ "tag" .= ("seq" :: Text),
         "scope" .= fsScope,
         "resume_path" .= encodePath fsResumePath,
-        "binder" .= fmap encodeBinder fsBinder
+        "binder" .= fmap encodeBinder fsBinder,
+        "bindings" .= encodeBindings fsBindings
       ]
   FrPar pjs -> object ["tag" .= ("par" :: Text), "par" .= encodePar pjs]
+  FrForeach ff -> object ["tag" .= ("foreach" :: Text), "foreach" .= encodeForeach ff]
   FrWhile wf -> object ["tag" .= ("while" :: Text), "while" .= encodeWhile wf]
   FrTry tf -> object ["tag" .= ("try" :: Text), "try" .= encodeTry tf]
 
@@ -254,7 +256,9 @@ parseFrame = withObject "frame" $ \o -> do
   case tag of
     "seq" ->
       FrSeq <$> o .: "scope" <*> (o .: "resume_path" >>= parsePath) <*> (o .:? "binder" >>= traverse parseBinderText)
+        <*> (o .:? "bindings" >>= maybe (pure Map.empty) parseBindings)
     "par" -> FrPar <$> (o .: "par" >>= parsePar)
+    "foreach" -> FrForeach <$> (o .: "foreach" >>= parseForeach)
     "while" -> FrWhile <$> (o .: "while" >>= parseWhile)
     "try" -> FrTry <$> (o .: "try" >>= parseTry)
     _ -> fail ("unknown frame tag: " <> T.unpack tag)
@@ -369,7 +373,10 @@ encodeWhile wf =
       "iteration" .= wfIteration wf,
       "max_iterations" .= wfMaxIterations wf,
       "acc" .= map valueToJson (wfAcc wf),
-      "carry" .= fmap valueToJson (wfCarry wf)
+      "carry" .= fmap valueToJson (wfCarry wf),
+      "resume_path" .= encodePath (wfResumePath wf),
+      "while_path" .= encodePath (wfWhilePath wf),
+      "phase" .= encodeWhilePhase (wfPhase wf)
     ]
 
 parseWhile :: Value -> Parser WhileFrame
@@ -380,6 +387,50 @@ parseWhile = withObject "while" $ \o -> do
     <*> o .: "max_iterations"
     <*> pure acc
     <*> pure carry
+    <*> (o .: "resume_path" >>= parsePath)
+    <*> (o .: "while_path" >>= parsePath)
+    <*> (o .: "phase" >>= parseWhilePhaseText)
+
+encodeWhilePhase :: WhilePhase -> Text
+encodeWhilePhase = \case
+  WhileRunPred -> "pred"
+  WhileRunBody -> "body"
+
+parseWhilePhaseText :: Text -> Parser WhilePhase
+parseWhilePhaseText t = case decodeWhilePhaseText t of
+  Left e -> fail (T.unpack e)
+  Right p -> pure p
+
+decodeWhilePhaseText :: Text -> Either Text WhilePhase
+decodeWhilePhaseText = \case
+  "pred" -> Right WhileRunPred
+  "body" -> Right WhileRunBody
+  t -> Left ("unknown while phase: " <> t)
+
+encodeForeach :: ForeachFrame -> Value
+encodeForeach ff =
+  object
+    [ "loop_id" .= ffLoopId ff,
+      "scope" .= ffScope ff,
+      "binder" .= encodeBinder (ffBinder ff),
+      "var" .= ffVar ff,
+      "items" .= map valueToJson (ffItems ff),
+      "index" .= ffIndex ff,
+      "acc" .= map valueToJson (ffAcc ff),
+      "resume_path" .= encodePath (ffResumePath ff),
+      "body_entry" .= encodePath (ffBodyEntry ff)
+    ]
+
+parseForeach :: Value -> Parser ForeachFrame
+parseForeach = withObject "foreach" $ \o -> do
+  items <- traverse parseRValue =<< o .: "items"
+  acc <- traverse parseRValue =<< o .: "acc"
+  ForeachFrame <$> o .: "loop_id" <*> o .: "scope" <*> (o .: "binder" >>= parseBinderText) <*> o .: "var"
+    <*> pure items
+    <*> o .: "index"
+    <*> pure acc
+    <*> (o .: "resume_path" >>= parsePath)
+    <*> (o .: "body_entry" >>= parsePath)
 
 encodeTry :: TryFrame -> Value
 encodeTry tf =
@@ -387,12 +438,16 @@ encodeTry tf =
     [ "loop_id" .= tfLoopId tf,
       "scope" .= tfScope tf,
       "binder" .= encodeBinder (tfBinder tf),
-      "phase" .= encodeTryPhase (tfPhase tf)
+      "phase" .= encodeTryPhase (tfPhase tf),
+      "resume_path" .= encodePath (tfResumePath tf),
+      "try_path" .= encodePath (tfTryPath tf)
     ]
 
 parseTry :: Value -> Parser TryFrame
 parseTry = withObject "try" $ \o ->
   TryFrame <$> o .: "loop_id" <*> o .: "scope" <*> (o .: "binder" >>= parseBinderText) <*> (o .: "phase" >>= parseTryPhaseText)
+    <*> (o .: "resume_path" >>= parsePath)
+    <*> (o .: "try_path" >>= parsePath)
 
 encodeTryPhase :: TryPhase -> Text
 encodeTryPhase = \case

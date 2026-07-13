@@ -4,6 +4,7 @@ module Hwfi.Runtime.MachinePath
     resolveStmtPath,
     statementAt,
     advancePath,
+    enterChildBlock,
     initialStmtPath,
     declStatements,
   )
@@ -103,3 +104,8 @@ advancePath (StmtPath q segs) =
     (PathSegment i m) : rest ->
       StmtPath q (reverse rest ++ [PathSegment (i + 1) m])
     [] -> StmtPath q [PathSegment 1 Nothing]
+
+-- | Enter the first statement of a child block under the statement at @idx@.
+enterChildBlock :: StmtPath -> Int -> BlockKind -> StmtPath
+enterChildBlock (StmtPath q segs) idx bk =
+  StmtPath q (segs ++ [PathSegment idx (Just bk), PathSegment 0 Nothing])

@@ -6,7 +6,6 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 Design: [execution-model.md](execution-model.md).
 
-- [ ] **M1** Sequential `stepMachine` (statements, builtins, sub-workflows)
 - [ ] **M2** Agent `Current` states; remove agent sub-key replay dependency
 - [ ] **M3** Real `par` + cooperative confirm + per-branch snapshots
 - [ ] **M4** CLI `step` / `continue`; replace `performResume`; cut over default runtime
@@ -27,6 +26,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **M1 (2026-07-13):** Sequential `stepMachine` — dispatch, builtins, sub-workflows,
+  control flow (`if`, `foreach`, `while`, `try`); `StepEnv`, `runMachine`; `FrForeach`,
+  `FrSeq.fsBindings`; `MachineSpec` file-only e2e.
 - **M0 (2026-07-13):** `Machine`, `MachinePath`, `MachineSnapshot`, `StepDriver` stub;
   `MachineSpec` (snapshot round-trip, path navigation, first-step transition).
 

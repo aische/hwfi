@@ -77,6 +77,7 @@ library
         Hwfi.Runtime.MachinePath
         Hwfi.Runtime.MachineSnapshot
         Hwfi.Runtime.StepDriver
+        Hwfi.Runtime.StepEnv
         Hwfi.Runtime.Gateways
         Hwfi.Runtime.Glob
         Hwfi.Runtime.KeyStore
