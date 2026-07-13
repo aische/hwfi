@@ -73,6 +73,10 @@ library
         Hwfi.Runtime.EvalWorkflow
         Hwfi.Runtime.Exec
         Hwfi.Runtime.Executor
+        Hwfi.Runtime.Machine
+        Hwfi.Runtime.MachinePath
+        Hwfi.Runtime.MachineSnapshot
+        Hwfi.Runtime.StepDriver
         Hwfi.Runtime.Gateways
         Hwfi.Runtime.Glob
         Hwfi.Runtime.KeyStore
@@ -163,6 +167,7 @@ test-suite hwfi-test
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec
         Hwfi.Runtime.ExecutorSpec
+        Hwfi.Runtime.MachineSpec
         Hwfi.Runtime.GatewaysSpec
         Hwfi.Runtime.GlobSpec
         Hwfi.Runtime.KeyStoreSpec

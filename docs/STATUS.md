@@ -1,19 +1,20 @@
 # Status
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 ## Current focus
 
-**v1.1 backlog (remaining)** — §13 deferred items and perf polish in
-[TASKS.md](TASKS.md). Author-capability tranche 9.9–9.14 is complete.
+**v2 runtime (cursor + frames)** — explicit pause/step, snapshot resume, real
+`par` with cooperative confirm. Design: [execution-model.md](execution-model.md);
+tasks in [TASKS.md](TASKS.md) § v2.
+
+Legacy v1.1 cache-as-resume runtime remains default until M4 cutover.
 
 ## Done recently
 
-- **9.14 WorkflowRef patterns:** [workflow-refs.md](workflow-refs.md), checker hints
-  (`Hwfi.Check.RefHints`), `checkProjectWithMeta`, `examples/workflow-refs`.
-- **9.12 cache invalidation UX:** `hwfi cache invalidate`, trace step keys, docs.
-- **9.9–9.11:** `try`/`catch`, `par(on_error = "collect")`, record ops, `range(n)`,
-  inline `while` bodies.
+- **Execution model spec** — [execution-model.md](execution-model.md): transition
+  unit, `Machine`/`FrPar`, confirm policy, migration phases M0–M6.
+- **M0 done** — `Machine`, `MachinePath`, `MachineSnapshot`, `StepDriver` stub; `MachineSpec` (6 tests).
 
 ## Blockers
 
@@ -21,5 +22,4 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → 9.4.4 (`extract-skill` stub), 9.5 (`Bytes` I/O), 9.6 trace
-rotation, 9.1 OS-level `exec` isolation, D1/D2 perf, `Optional<T>`.
+[TASKS.md](TASKS.md) → **M1** sequential `stepMachine`. v1.1 backlog paused until v2 M4.
