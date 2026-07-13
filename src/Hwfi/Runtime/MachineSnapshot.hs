@@ -17,7 +17,7 @@ import Data.Aeson
     (.:?),
     (.=),
   )
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (Parser, parseEither, (.!=))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict (Map)
@@ -29,10 +29,10 @@ import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Ast.Step (Binder (..), ParOnError (..), StepStmt (..))
 import Hwfi.Ast.Step qualified as Step
 import Hwfi.Runtime.Machine
-import Hwfi.Runtime.Value (RValue, coerceFromJson, valueToJson)
+import Hwfi.Runtime.Value (RValue (..), RefKind (..), coerceFromJson, valueToJson)
 import Hwfi.Source (Pos (..), singletonSpan)
 import Hwfi.Type (Type (TyJson))
-import LLM.Core.Types (Turn)
+import LLM.Core.Types (ToolCall, ToolResult, Turn)
 
 encodeMachine :: Machine -> Value
 encodeMachine m =
@@ -204,9 +204,12 @@ encodeAgent ag =
           [ "qname" .= renderQName (srQName (agStepRef ag)),
             "step_id" .= srStepId (agStepRef ag)
           ],
+      "binder" .= encodeBinder (agBinder ag),
+      "target" .= renderQName (agTarget ag),
       "round" .= agRound ag,
       "submit_required" .= agSubmitRequired ag,
-      "pending" .= encodePending (agPending ag)
+      "pending" .= encodePending (agPending ag),
+      "tool_round" .= fmap encodeToolRound (agToolRound ag)
     ]
 
 parseAgent :: Value -> Parser AgentState
@@ -214,26 +217,103 @@ parseAgent = withObject "agent" $ \o -> do
   ref <- o .: "step_ref"
   qnText <- withObject "step_ref" (\r -> r .: "qname") ref
   sid <- withObject "step_ref" (\r -> r .: "step_id") ref
-  AgentState (StepRef (qnameFromText qnText) sid)
-    <$> (o .: "pending" >>= parsePending)
-    <*> o .: "round"
-    <*> o .: "submit_required"
+  binder <- o .:? "binder" >>= \case
+    Just b -> parseBinderField b
+    Nothing -> pure BindDiscard
+  target <- qnameFromText <$> o .:? "target" .!= "builtin/llm-agent"
+  pending <- o .: "pending" >>= parsePending
+  roundIx <- o .: "round"
+  submitReq <- o .: "submit_required"
+  toolRound <- o .:? "tool_round" >>= traverse parseToolRound
+  pure
+    AgentState
+      { agStepRef = StepRef (qnameFromText qnText) sid,
+        agBinder = binder,
+        agTarget = target,
+        agPending = pending,
+        agRound = roundIx,
+        agSubmitRequired = submitReq,
+        agToolRound = toolRound
+      }
+
+parseBinderField :: Text -> Parser Binder
+parseBinderField = \case
+  "_" -> pure BindDiscard
+  n -> pure (BindName n)
 
 encodePending :: PendingAgent -> Value
 encodePending pa =
   object
     [ "system" .= paSystem pa,
       "prompt" .= paPrompt pa,
+      "model" .= paModelName pa,
+      "max_rounds" .= paMaxRounds pa,
+      "initial_tools" .= initialToolQnames (paInitialTools pa),
+      "submit_schema" .= paSubmitSchema pa,
       "history" .= toJSON (paHistory pa),
       "tool_rounds" .= toJSON (paToolRounds pa),
       "active_tool_ids" .= paActiveToolIds pa,
-      "loaded_instruction_ids" .= paLoadedInstructionIds pa
+      "loaded_instruction_ids" .= paLoadedInstructionIds pa,
+      "instruction_chars" .= paInstructionChars pa,
+      "pending_injections" .= paPendingInjections pa
     ]
 
 parsePending :: Value -> Parser PendingAgent
-parsePending = withObject "pending" $ \o ->
-  PendingAgent <$> o .: "system" <*> o .: "prompt" <*> o .: "history" <*> o .: "tool_rounds" <*> o .: "active_tool_ids"
-    <*> o .: "loaded_instruction_ids"
+parsePending = withObject "pending" $ \o -> do
+  system <- o .: "system"
+  prompt <- o .: "prompt"
+  modelName <- o .:? "model" .!= "fast"
+  maxRounds <- o .:? "max_rounds" .!= 4
+  initialTools <-
+    o .:? "initial_tools" >>= \case
+      Nothing -> pure []
+      Just v -> parseInitialTools v
+  submitSchema <- o .:? "submit_schema"
+  history <- o .: "history"
+  toolRounds <- o .:? "tool_rounds" .!= []
+  activeIds <- o .:? "active_tool_ids" .!= []
+  loadedIds <- o .:? "loaded_instruction_ids" .!= []
+  instrChars <- o .:? "instruction_chars" .!= 0
+  pendingInj <- o .:? "pending_injections" .!= []
+  pure
+    PendingAgent
+      { paSystem = system,
+        paPrompt = prompt,
+        paModelName = modelName,
+        paMaxRounds = maxRounds,
+        paInitialTools = initialTools,
+        paSubmitSchema = submitSchema,
+        paHistory = history,
+        paToolRounds = toolRounds,
+        paActiveToolIds = activeIds,
+        paLoadedInstructionIds = loadedIds,
+        paInstructionChars = instrChars,
+        paPendingInjections = pendingInj
+      }
+
+encodeToolRound :: ToolRound -> Value
+encodeToolRound tr =
+  object
+    [ "assistant" .= toJSON (trAssistant tr),
+      "pending" .= toJSON (trPending tr),
+      "completed" .= toJSON (trCompleted tr),
+      "active" .= fmap toJSON (trActive tr)
+    ]
+
+parseToolRound :: Value -> Parser ToolRound
+parseToolRound = withObject "tool_round" $ \o ->
+  ToolRound <$> o .: "assistant" <*> o .: "pending" <*> o .: "completed" <*> o .:? "active"
+
+initialToolQnames :: [RValue] -> Value
+initialToolQnames tools =
+  Array (V.fromList [String (renderQName q) | VRef _ q <- tools])
+
+parseInitialTools :: Value -> Parser [RValue]
+parseInitialTools = withArray "initial_tools" $ \a ->
+  traverse parseToolQname (V.toList a)
+  where
+    parseToolQname (String qn) = pure (VRef RTool (qnameFromText qn))
+    parseToolQname v = fail ("initial_tools entry is not a qname string: " <> show v)
 
 encodeFrame :: Frame -> Value
 encodeFrame = \case

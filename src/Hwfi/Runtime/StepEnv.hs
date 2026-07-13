@@ -1,6 +1,7 @@
 -- | Runtime seams for the v2 step driver (M1+).
 module Hwfi.Runtime.StepEnv
   ( StepEnv (..),
+    RunWorkflowSeam,
     newStepEnv,
   )
 where
@@ -8,14 +9,21 @@ where
 import Data.Aeson (Value (..), object)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Hwfi.Ast.Name (Ident, QName)
 import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord)
+import Hwfi.Runtime.Error (RuntimeError)
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.RunStore (createRunStore)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (Tracer, newTracer)
 import Hwfi.Runtime.Usage (UsageSeam, newUsageSeam)
+import Hwfi.Runtime.Value (RValue)
 import Hwfi.Runtime.Workspace (Workspace, workspaceRoot)
 import Hwfi.TypedProject (TypedProject)
+
+-- | Run a nested workflow to completion (agent tool dispatch, eval-workflow).
+type RunWorkflowSeam =
+  QName -> Text -> Map Ident RValue -> IO (Either RuntimeError RValue)
 
 -- | Effectful dependencies for 'Hwfi.Runtime.StepDriver.stepMachine'.
 data StepEnv = StepEnv
@@ -24,7 +32,8 @@ data StepEnv = StepEnv
     seModels :: ModelStore,
     seRunInfo :: RunInfo,
     seTracer :: Tracer,
-    seUsage :: UsageSeam
+    seUsage :: UsageSeam,
+    seRunWorkflow :: Maybe RunWorkflowSeam
   }
 
 -- | Build a minimal step environment for tests and local stepping.
@@ -56,5 +65,6 @@ newStepEnv tp ws envVars runId entrypoint = do
               riEntrypoint = entrypoint,
               riRootInputs = object [],
               riEnvFields = buildEnvRecord envVars
-            }
+            },
+        seRunWorkflow = Nothing
       }

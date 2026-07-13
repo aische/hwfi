@@ -35,6 +35,9 @@ module Hwfi.Runtime.Agent
     advertisedToolDef,
     submitToolDef,
     submitToolName,
+    coerceArgs,
+    isSubmit,
+    validateSubmit,
   )
 where
 

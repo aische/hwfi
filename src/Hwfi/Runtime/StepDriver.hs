@@ -10,6 +10,7 @@ module Hwfi.Runtime.StepDriver
   )
 where
 
+import Control.Monad (void)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.IORef (readIORef)
@@ -52,6 +53,7 @@ import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr)
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..))
 import Hwfi.Runtime.Executor (projectContentHash)
 import Hwfi.Runtime.Machine
+import Hwfi.Runtime.MachineAgent (initAgentState, stepAgent)
 import Hwfi.Runtime.MachinePath
   ( StmtContext (..),
     advancePath,
@@ -60,8 +62,8 @@ import Hwfi.Runtime.MachinePath
     resolveStmtPath,
   )
 import Hwfi.Runtime.RunUsage (runUsageToJson)
-import Hwfi.Runtime.StepEnv (StepEnv (..))
-import Hwfi.Runtime.Trace (snapshotEvents, snapshotJson)
+import Hwfi.Runtime.StepEnv (RunWorkflowSeam, StepEnv (..))
+import Hwfi.Runtime.Trace (EventBody (..), emit, snapshotEvents, snapshotJson)
 import Hwfi.Runtime.Usage (usRef)
 import Hwfi.Runtime.Value (RValue (..), RefKind (..), redactedJson)
 import Hwfi.Runtime.Workspace (workspaceRoot)
@@ -80,11 +82,25 @@ data StepOutcome
 -- | Execute one transition when status is 'MsRunning' or finish draining.
 stepMachine :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepMachine env machine = case mStatus machine of
-  MsRunning -> stepRunning env machine
+  MsRunning -> stepRunning (wireWorkflowSeam env) machine
   MsDraining -> stepDraining machine
   MsPaused _ -> pure (Right (StepHalted machine))
   MsCompleted -> pure (Right (StepHalted machine))
   MsFailed -> pure (Right (StepHalted machine))
+
+wireWorkflowSeam :: StepEnv -> StepEnv
+wireWorkflowSeam env =
+  case seRunWorkflow env of
+    Just _ -> env
+    Nothing -> env {seRunWorkflow = Just (runWorkflowSeam env)}
+
+runWorkflowSeam :: StepEnv -> RunWorkflowSeam
+runWorkflowSeam env q scope inputs = do
+  let m0 = initialMachine scope (projectContentHash (seProject env)) q inputs
+  runMachine (wireWorkflowSeam env) m0 >>= \case
+    Left err -> pure (Left err)
+    Right (RunCompleted v) -> pure (Right v)
+    Right _ -> pure (Left (internalError "nested workflow did not complete"))
 
 -- | Run until 'RunCompleted', 'StepHalted', or an error.
 runMachine :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
@@ -115,7 +131,7 @@ stepRunning env machine =
   case mCurrent machine of
     CurReady -> stepFromReady env machine
     CurDispatch step -> stepDispatch env machine step
-    CurAgent _ -> pure (Left (internalStub "agent transitions not implemented (M2)"))
+    CurAgent ag -> stepAgentTransition env machine ag
     CurAwaitConfirm c ->
       pure (Right (StepHalted machine {mStatus = MsPaused (PauseAwaitingConfirm c)}))
 
@@ -146,8 +162,52 @@ stepDispatch env machine step = do
     Right argPairs -> do
       let argMap = Map.fromList argPairs
       if isAgentBuiltin target
-        then pure (Left (internalStub "agent transitions not implemented (M2)"))
+        then enterAgent env machine stepRef target (stepBinder step) argMap
         else dispatchCall env machine stepRef argMap target (stepBinder step)
+
+enterAgent ::
+  StepEnv ->
+  Machine ->
+  Err.StepRef ->
+  QName ->
+  Binder ->
+  Map Ident RValue ->
+  IO (Either RuntimeError StepOutcome)
+enterAgent env machine stepRef target binder argMap =
+  let mRef = StepRef (Err.srQName stepRef) (Err.srStepId stepRef)
+   in case initAgentState env mRef binder target argMap of
+    Left e -> pure (Left (atStep stepRef e))
+    Right ag -> do
+      void $
+        emit
+          (seTracer env)
+          ( StepStart
+              (Err.srQName stepRef)
+              (Err.srStepId stepRef)
+              (redactedJson (VRecord argMap))
+              False
+              Nothing
+          )
+      pure . Right . Stepped $
+        machine {mCurrent = CurAgent ag}
+
+stepAgentTransition :: StepEnv -> Machine -> AgentState -> IO (Either RuntimeError StepOutcome)
+stepAgentTransition env machine ag =
+  stepAgent env machine ag >>= \case
+    Left e -> pure (Left e)
+    Right (Just result, m') -> do
+      void $
+        emit
+          (seTracer env)
+          ( StepEnd
+              (srQName (agStepRef ag))
+              (srStepId (agStepRef ag))
+              (redactedJson result)
+              0
+              Nothing
+          )
+      completeStep m' (agBinder ag) result
+    Right (Nothing, m') -> pure (Right (Stepped m'))
 
 dispatchCall ::
   StepEnv ->

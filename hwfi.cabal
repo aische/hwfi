@@ -74,6 +74,7 @@ library
         Hwfi.Runtime.Exec
         Hwfi.Runtime.Executor
         Hwfi.Runtime.Machine
+        Hwfi.Runtime.MachineAgent
         Hwfi.Runtime.MachinePath
         Hwfi.Runtime.MachineSnapshot
         Hwfi.Runtime.StepDriver

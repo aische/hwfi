@@ -6,7 +6,6 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 Design: [execution-model.md](execution-model.md).
 
-- [ ] **M2** Agent `Current` states; remove agent sub-key replay dependency
 - [ ] **M3** Real `par` + cooperative confirm + per-branch snapshots
 - [ ] **M4** CLI `step` / `continue`; replace `performResume`; cut over default runtime
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend
@@ -26,6 +25,10 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine` — `MachineAgent` drives one
+  transition per call (model or tool); agent reducible state in snapshot; v2 path
+  does not consult intra-step sub-key cache; `seRunWorkflow` seam; `MachineSpec`
+  agent e2e + mid-agent snapshot resume.
 - **M1 (2026-07-13):** Sequential `stepMachine` — dispatch, builtins, sub-workflows,
   control flow (`if`, `foreach`, `while`, `try`); `StepEnv`, `runMachine`; `FrForeach`,
   `FrSeq.fsBindings`; `MachineSpec` file-only e2e.

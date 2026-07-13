@@ -128,19 +128,28 @@ data Current
 -- | Agent loop reducible state (mirrors @llm-workflow@ @Pending@ + round index).
 data AgentState = AgentState
   { agStepRef :: StepRef,
+    agBinder :: Binder,
+    agTarget :: QName,
     agPending :: PendingAgent,
     agRound :: Int,
-    agSubmitRequired :: Bool
+    agSubmitRequired :: Bool,
+    agToolRound :: Maybe ToolRound
   }
   deriving stock (Eq, Show)
 
 data PendingAgent = PendingAgent
   { paSystem :: Text,
     paPrompt :: Text,
+    paModelName :: Text,
+    paMaxRounds :: Int,
+    paInitialTools :: [RValue],
+    paSubmitSchema :: Maybe Value,
     paHistory :: [Turn],
     paToolRounds :: [Turn],
     paActiveToolIds :: [Text],
-    paLoadedInstructionIds :: [Text]
+    paLoadedInstructionIds :: [Text],
+    paInstructionChars :: Int,
+    paPendingInjections :: [Text]
   }
   deriving stock (Eq, Show)
 
