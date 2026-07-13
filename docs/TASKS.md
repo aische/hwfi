@@ -6,7 +6,6 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 Design: [execution-model.md](execution-model.md).
 
-- [ ] **M3** Real `par` + cooperative confirm + per-branch snapshots
 - [ ] **M4** CLI `step` / `continue`; replace `performResume`; cut over default runtime
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend
 - [ ] **M6** Drop step-key cache path; rewrite spec §8 and caching docs
@@ -25,6 +24,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **M3 (2026-07-13):** Real `par` + cooperative confirm + per-branch snapshots —
+  `MachinePar`, `CurParPool`, `FrPar` scheduler/drain/confirm; `StepEnv` confirm
+  policy; `MachinePath` nested block paths; `MachineSpec` par e2e/resume/confirm.
 - **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine` — `MachineAgent` drives one
   transition per call (model or tool); agent reducible state in snapshot; v2 path
   does not consult intra-step sub-key cache; `seRunWorkflow` seam; `MachineSpec`

@@ -123,6 +123,8 @@ data Current
     CurAgent AgentState
   | -- | Blocked on user confirmation before proceeding.
     CurAwaitConfirm ConfirmRequest
+  | -- | Driving an active @par@ pool ('FrPar' on the frame stack).
+    CurParPool
   deriving stock (Eq, Show)
 
 -- | Agent loop reducible state (mirrors @llm-workflow@ @Pending@ + round index).
@@ -193,7 +195,10 @@ data ParJoinState = ParJoinState
     pjsActive :: Map Int BranchMachine,
     pjsNextIndex :: Int,
     pjsPhase :: ParPoolPhase,
-    pjsConfirmQueue :: [ConfirmRequest]
+    pjsConfirmQueue :: [ConfirmRequest],
+    pjsLoopPath :: StmtPath,
+    pjsResumePath :: StmtPath,
+    pjsParentBindings :: Bindings
   }
   deriving stock (Eq, Show)
 

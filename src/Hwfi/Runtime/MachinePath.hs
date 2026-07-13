@@ -68,11 +68,16 @@ go :: [Statement] -> [PathSegment] -> Either Text StmtContext
 go stmts [PathSegment idx Nothing] = do
   stmt <- statementAt stmts idx
   pure (StmtContext stmts idx stmt)
+go stmts (PathSegment idx Nothing : PathSegment _ (Just bk) : rest) = do
+  stmt <- statementAt stmts idx
+  child <- childBlock stmt bk
+  go child rest
 go stmts (PathSegment idx (Just bk) : rest) = do
   stmt <- statementAt stmts idx
   child <- childBlock stmt bk
   go child rest
 go _ [] = Left "path missing terminal segment"
+go _ (PathSegment _ Nothing : _) = Left "path has Nothing segment before end"
 
 -- | Map a block kind to the child statement list of a control-flow statement.
 childBlock :: Statement -> BlockKind -> Either Text [Statement]

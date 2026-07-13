@@ -7,20 +7,22 @@ module Hwfi.Runtime.StepDriver
     stepMachine,
     pauseMachine,
     runMachine,
+    approveConfirm,
   )
 where
 
-import Control.Monad (void)
+import Control.Monad (foldM, void, when)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as K
-import Data.IORef (readIORef)
+import Data.IORef (modifyIORef', readIORef)
+import Data.Set qualified as Set
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Expr (..), RefPath (..))
-import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameSegments, renderQName)
+import Hwfi.Ast.Name (Ident, QName, isBareQName, qnameFromText, qnameSegments, renderQName)
 import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
   ( Arg (..),
@@ -28,6 +30,8 @@ import Hwfi.Ast.Step
     IfStmt (..),
     LoopKind (..),
     LoopStmt (..),
+    ParOnError (..),
+    ParOpts (..),
     Statement (..),
     StepStmt (..),
     TryStmt (..),
@@ -54,6 +58,21 @@ import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..))
 import Hwfi.Runtime.Executor (projectContentHash)
 import Hwfi.Runtime.Machine
 import Hwfi.Runtime.MachineAgent (initAgentState, stepAgent)
+import Hwfi.Runtime.MachinePar
+  ( absorbBranchConfirm,
+    absorbBranchDone,
+    absorbBranchFailed,
+    absorbBranchStep,
+    allBranchesAwaitingConfirm,
+    allSlotsTerminal,
+    approveParConfirm,
+    branchEnv,
+    canSpawnBranch,
+    finishParValues,
+    isParDriving,
+    spawnBranch,
+    startPar,
+  )
 import Hwfi.Runtime.MachinePath
   ( StmtContext (..),
     advancePath,
@@ -62,31 +81,34 @@ import Hwfi.Runtime.MachinePath
     resolveStmtPath,
   )
 import Hwfi.Runtime.RunUsage (runUsageToJson)
-import Hwfi.Runtime.StepEnv (RunWorkflowSeam, StepEnv (..))
+import Hwfi.Runtime.StepEnv (ConfirmPolicy (..), RunWorkflowSeam, StepEnv (..), StepOutcome (..))
+import UnliftIO.Async (pooledForConcurrentlyN)
 import Hwfi.Runtime.Trace (EventBody (..), emit, snapshotEvents, snapshotJson)
 import Hwfi.Runtime.Usage (usRef)
-import Hwfi.Runtime.Value (RValue (..), RefKind (..), redactedJson)
+import Hwfi.Runtime.Value (RValue (..), RefKind (..), redactedJson, valueToJson)
 import Hwfi.Runtime.Workspace (workspaceRoot)
 import Hwfi.TypedProject (TypedDecl (..), TypedProject (..), TypedStep (..), lookupTyped, tpManifest, tpSkillCatalog)
-
--- | Result of a single machine transition.
-data StepOutcome
-  = -- | Machine advanced; may still be 'MsRunning'.
-    Stepped Machine
-  | -- | Entry workflow finished.
-    RunCompleted RValue
-  | -- | Machine is paused or failed; no transition applied.
-    StepHalted Machine
-  deriving stock (Eq, Show)
 
 -- | Execute one transition when status is 'MsRunning' or finish draining.
 stepMachine :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepMachine env machine = case mStatus machine of
-  MsRunning -> stepRunning (wireWorkflowSeam env) machine
-  MsDraining -> stepDraining machine
+  MsRunning
+    | isParDriving machine -> stepParPool env machine
+    | otherwise -> stepRunning (wireWorkflowSeam env) machine
+  MsDraining -> stepDraining env machine
   MsPaused _ -> pure (Right (StepHalted machine))
   MsCompleted -> pure (Right (StepHalted machine))
   MsFailed -> pure (Right (StepHalted machine))
+
+-- | Approve the active confirm gate and resume a paused @par@ pool.
+approveConfirm :: StepEnv -> Machine -> IO Machine
+approveConfirm env machine =
+  case mStatus machine of
+    MsPaused (PauseAwaitingConfirm c) -> do
+      let idx = fromMaybe (-1) (crBranchIndex c)
+      modifyIORef' (seConfirmApprovals env) (Set.insert (idx, crStepId c))
+      pure (approveParConfirm machine)
+    _ -> pure machine
 
 wireWorkflowSeam :: StepEnv -> StepEnv
 wireWorkflowSeam env =
@@ -106,10 +128,22 @@ runWorkflowSeam env q scope inputs = do
 runMachine :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 runMachine env machine = loop machine
   where
-    loop m = stepMachine env m >>= \case
+    loop m
+      | isParWave m = stepParWave env m >>= continue
+      | otherwise = stepMachine env m >>= continue
+    continue = \case
       Left err -> pure (Left err)
       Right (Stepped m') -> loop m'
       Right done -> pure (Right done)
+
+isParWave :: Machine -> Bool
+isParWave m =
+  case (mFrames m, mCurrent m, mStatus m) of
+    (FrPar pjs : _, CurParPool, MsRunning)
+      | pjsPhase pjs `elem` [ParScheduling, ParDraining]
+      , not (Map.null (pjsActive pjs)) ->
+          True
+    _ -> False
 
 -- | Mark the machine explicitly paused after the last completed transition.
 pauseMachine :: Machine -> Machine
@@ -121,10 +155,11 @@ pauseMachine m =
         s -> s
     }
 
-stepDraining :: Machine -> IO (Either RuntimeError StepOutcome)
-stepDraining machine =
-  -- M3: finish in-flight par branches, then move to paused confirm.
-  pure (Right (StepHalted machine))
+stepDraining :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
+stepDraining env machine =
+  case mFrames machine of
+    FrPar pjs : rest -> stepParPool_ env machine pjs rest
+    _ -> pure (Right (StepHalted machine))
 
 stepRunning :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepRunning env machine =
@@ -132,13 +167,26 @@ stepRunning env machine =
     CurReady -> stepFromReady env machine
     CurDispatch step -> stepDispatch env machine step
     CurAgent ag -> stepAgentTransition env machine ag
+    CurParPool -> stepParPool env machine
     CurAwaitConfirm c ->
-      pure (Right (StepHalted machine {mStatus = MsPaused (PauseAwaitingConfirm c)}))
+      case seParBranchIndex env of
+        Just idx -> do
+          approved <- readIORef (seConfirmApprovals env)
+          if Set.member (idx, crStepId c) approved
+            then resumeApprovedConfirm env machine
+            else pure (Right (Stepped machine))
+        Nothing ->
+          pure (Right (StepHalted machine {mStatus = MsPaused (PauseAwaitingConfirm c)}))
 
 stepFromReady :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepFromReady env machine =
   case resolveStmtPath (seProject env) (mPath machine) of
-    Left "statement index out of range" -> endOfBlock env machine (fromMaybe (VRecord mempty) (mLastResult machine))
+    Left "statement index out of range" ->
+      case seParBranchIndex env of
+        Just _ ->
+          pure . Right . RunCompleted $
+            fromMaybe (VRecord mempty) (mLastResult machine)
+        Nothing -> endOfBlock env machine (fromMaybe (VRecord mempty) (mLastResult machine))
     Left err -> pure (Left (internalStub err))
     Right ctx -> case scStmt ctx of
       SReturn args _ -> finishReturn env machine args
@@ -221,11 +269,12 @@ dispatchCall env machine stepRef argMap target binder =
   case resolveDispatchTarget machine target of
     Left e -> pure (Left (atStep stepRef e))
     Right realTarget
-      | isBuiltin realTarget -> do
-          r <- runBuiltin (builtinEnv env stepRef (mBindings machine) (mScope machine)) realTarget argMap
-          case r of
-            Left e -> handleStepError env machine (atStep stepRef e)
-            Right result -> completeStep machine binder result
+      | isBuiltin realTarget, realTarget == qnameFromText "builtin/exec" ->
+          needsExecConfirm env stepRef >>= \case
+            True -> enterExecConfirm env machine stepRef realTarget binder argMap
+            False -> runBuiltinDispatch env machine stepRef argMap realTarget binder
+      | isBuiltin realTarget ->
+          runBuiltinDispatch env machine stepRef argMap realTarget binder
       | otherwise ->
           case lookupTyped realTarget (seProject env) of
             Nothing -> pure (Left (atStep stepRef (internalError ("cannot dispatch to " <> renderQName realTarget))))
@@ -233,6 +282,20 @@ dispatchCall env machine stepRef argMap target binder =
               | not (isExecutable (tdDeclaration td)) ->
                   pure (Left (atStep stepRef (internalError (renderQName realTarget <> " is not executable"))))
               | otherwise -> enterSubWorkflow env machine binder realTarget argMap
+
+runBuiltinDispatch ::
+  StepEnv ->
+  Machine ->
+  Err.StepRef ->
+  Map Ident RValue ->
+  QName ->
+  Binder ->
+  IO (Either RuntimeError StepOutcome)
+runBuiltinDispatch env machine stepRef argMap realTarget binder = do
+  r <- runBuiltin (builtinEnv env stepRef (mBindings machine) (mScope machine)) realTarget argMap
+  case r of
+    Left e -> handleStepError env machine (atStep stepRef e)
+    Right result -> completeStep machine binder result
 
 resolveDispatchTarget :: Machine -> QName -> Either RuntimeError QName
 resolveDispatchTarget machine target
@@ -311,7 +374,6 @@ endOfBlock env machine result =
     FrForeach ff : rest -> continueForeach machine ff rest result
     FrWhile wf : rest -> continueWhile env machine wf rest result
     FrTry tf : rest -> continueTry machine tf rest result
-    FrPar _ : _ -> pure (Left (internalStub "par frame completion not implemented (M3)"))
 
 continueForeach :: Machine -> ForeachFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
 continueForeach machine ff rest result = do
@@ -437,7 +499,15 @@ enterIfBranch machine ctx s bk = do
 startLoop :: StepEnv -> Machine -> StmtContext -> LoopStmt -> IO (Either RuntimeError StepOutcome)
 startLoop env machine ctx s =
   case loopKind s of
-    LoopPar _ -> pure (Left (internalStub "par not implemented (M3)"))
+    LoopPar opts -> do
+      let q = spQName (mPath machine)
+      sections <- workflowSections env q
+      ctxR <- buildCtx env q (loopId s)
+      let envEval = mkEvalEnv env sections (Map.insert "ctx" ctxR (mBindings machine))
+      case evalExpr envEval (loopList s) of
+        Left e -> pure (Left e)
+        Right (VList xs) -> startPar env machine ctx s opts xs
+        Right _ -> pure (Left (evalError "'par' expected a list to iterate over"))
     LoopSeq -> do
       let q = spQName (mPath machine)
       sections <- workflowSections env q
@@ -733,6 +803,239 @@ whilePredScope scope sid i = iterScope scope sid i <> "p/"
 
 whileBodyScope :: Text -> Ident -> Int -> Text
 whileBodyScope scope sid i = iterScope scope sid i <> "b/"
+
+-- Par pool (M3) --------------------------------------------------------------
+
+stepParPool :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
+stepParPool env machine =
+  case mFrames machine of
+    FrPar pjs : rest -> stepParPool_ env machine pjs rest
+    _ -> pure (Left (internalError "stepParPool without FrPar frame"))
+
+stepParWave :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
+stepParWave env machine =
+  case mFrames machine of
+    FrPar pjs : rest
+      | Map.null (pjsActive pjs) ->
+          stepParPool_ env machine pjs rest
+      | otherwise -> do
+          let pairs = Map.toList (pjsActive pjs)
+          outcomes <-
+            pooledForConcurrentlyN (pjsMaxConcurrency pjs) pairs $ \(idx, bm) ->
+              stepMachine (branchEnv env idx) (unBranch bm)
+          foldM (absorbWaveOutcome env rest) (Right (machine, pjs)) (zip pairs outcomes) >>= \case
+            Left err -> pure (Left err)
+            Right (m', pjs') -> stepParPool_ env m' pjs' rest
+    _ -> pure (Left (internalError "stepParWave without FrPar frame"))
+
+absorbWaveOutcome ::
+  StepEnv ->
+  [Frame] ->
+  Either RuntimeError (Machine, ParJoinState) ->
+  ((Int, BranchMachine), Either RuntimeError StepOutcome) ->
+  IO (Either RuntimeError (Machine, ParJoinState))
+absorbWaveOutcome env rest acc ((idx, _), outcome) =
+  case acc of
+    Left err -> pure (Left err)
+    Right (machine, pjs) ->
+      case outcome of
+        Left err ->
+          case pjsOnError pjs of
+            ParOnErrorFail -> pure (Left err)
+            ParOnErrorCollect ->
+              pure (Right (machine, absorbBranchFailed pjs idx (reMessage err)))
+        Right so ->
+          case applyBranchOutcome machine pjs rest idx so of
+            Left err -> pure (Left err)
+            Right (m', pjs') -> pure (Right (m', pjs'))
+
+stepParPool_ :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+stepParPool_ env machine pjs rest =
+  let m' = machine {mFrames = FrPar pjs : rest}
+   in case pjsPhase pjs of
+        ParPausedConfirm ->
+          case pjsConfirmQueue pjs of
+            (c : _) -> pauseParConfirm env m' pjs rest
+            [] -> finishParJoin env m' pjs rest
+        ParDraining -> drainPar env m' pjs rest
+        ParScheduling -> schedulePar env m' pjs rest
+
+schedulePar :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+schedulePar env machine pjs rest
+  | canSpawnBranch pjs = spawnAndStep env machine pjs rest
+  | not (Map.null (pjsActive pjs)) = stepLowestBranch env machine pjs rest
+  | allSlotsTerminal (pjsSlots pjs) = finishParJoin env machine pjs rest
+  | otherwise = pure (Right (Stepped machine))
+
+spawnAndStep :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+spawnAndStep env machine pjs rest =
+  case spawnBranch env machine pjs of
+    Left err -> pure (Left err)
+    Right (m', pjs', _idx, _bm) ->
+      pure . Right . Stepped $ m' {mFrames = FrPar pjs' : rest}
+
+drainPar :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+drainPar env machine pjs rest
+  | not (Map.null (pjsActive pjs)) =
+      if allBranchesAwaitingConfirm pjs
+        then pauseParConfirm env machine pjs rest
+        else stepLowestBranch env machine pjs rest
+  | otherwise =
+      case pjsConfirmQueue pjs of
+        (c : _) -> pauseParConfirm env machine pjs rest
+        [] -> finishParJoin env machine pjs rest
+
+pauseParConfirm :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+pauseParConfirm env machine pjs rest =
+  case pjsConfirmQueue pjs of
+    (c : _) -> do
+      case seConfirmPolicy env of
+        ConfirmAuto -> do
+          mApproved <- approveConfirm env (machine {mStatus = MsPaused (PauseAwaitingConfirm c)})
+          stepParPool_ env mApproved (parFrameFrom mApproved) (drop 1 (mFrames mApproved))
+        ConfirmHold ->
+          pure . Right . StepHalted $
+            machine
+              { mFrames = FrPar (pjs {pjsPhase = ParPausedConfirm}) : rest,
+                mStatus = MsPaused (PauseAwaitingConfirm c)
+              }
+    [] -> finishParJoin env machine pjs rest
+
+stepLowestBranch :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+stepLowestBranch env machine pjs rest =
+  case Map.minViewWithKey (pjsActive pjs) of
+    Nothing -> schedulePar env machine pjs rest
+    Just ((idx, bm), _) ->
+      stepMachine (branchEnv env idx) (unBranch bm) >>= \case
+        Left err -> absorbParBranchFailure env machine pjs rest idx err
+        Right so -> absorbParBranchStepOutcome env machine pjs rest idx so
+
+absorbParBranchFailure ::
+  StepEnv ->
+  Machine ->
+  ParJoinState ->
+  [Frame] ->
+  Int ->
+  RuntimeError ->
+  IO (Either RuntimeError StepOutcome)
+absorbParBranchFailure _env machine pjs rest idx err =
+  case pjsOnError pjs of
+    ParOnErrorFail -> pure (Left err)
+    ParOnErrorCollect ->
+      let pjs' = absorbBranchFailed pjs idx (reMessage err)
+       in pure . Right . Stepped $ machine {mFrames = FrPar pjs' : rest}
+
+absorbParBranchStepOutcome ::
+  StepEnv ->
+  Machine ->
+  ParJoinState ->
+  [Frame] ->
+  Int ->
+  StepOutcome ->
+  IO (Either RuntimeError StepOutcome)
+absorbParBranchStepOutcome _env machine pjs rest idx so =
+  case applyBranchOutcome machine pjs rest idx so of
+    Left err -> pure (Left err)
+    Right (m', _) -> pure (Right (Stepped m'))
+
+applyBranchOutcome ::
+  Machine ->
+  ParJoinState ->
+  [Frame] ->
+  Int ->
+  StepOutcome ->
+  Either RuntimeError (Machine, ParJoinState)
+applyBranchOutcome machine pjs rest idx so =
+  let withPjs pjs' status = machine {mFrames = FrPar pjs' : rest, mStatus = status}
+   in case so of
+        RunCompleted v ->
+          let pjs' = absorbBranchDone pjs idx v
+           in Right (withPjs pjs' MsRunning, pjs')
+        Stepped branch ->
+          case mCurrent branch of
+            CurAwaitConfirm c ->
+              let pjs' = absorbBranchConfirm pjs idx branch c
+               in Right (withPjs pjs' MsDraining, pjs')
+            _ ->
+              let pjs' = absorbBranchStep pjs idx branch
+               in Right (withPjs pjs' (mStatus machine), pjs')
+        StepHalted branch ->
+          let pjs' = absorbBranchStep pjs idx branch
+           in Right (withPjs pjs' (mStatus machine), pjs')
+
+finishParJoin :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)
+finishParJoin env machine pjs rest =
+  case finishParValues (pjsOnError pjs) (pjsSlots pjs) of
+    Left err ->
+      pure . Right . StepHalted $
+        machine {mStatus = MsFailed, mError = Just err, mFrames = rest}
+    Right vs -> do
+      let q = spQName (pjsLoopPath pjs)
+      void $
+        emit
+          (seTracer env)
+          (LoopEnd q (pjsLoopId pjs) (length vs))
+      let v = VList vs
+      pure . Right . Stepped $
+        machine
+          { mFrames = rest,
+            mScope = pjsScope pjs,
+            mPath = pjsResumePath pjs,
+            mBindings = bindResult (pjsBinder pjs) v (pjsParentBindings pjs),
+            mLastResult = Just v,
+            mCurrent = CurReady
+          }
+
+parFrameFrom :: Machine -> ParJoinState
+parFrameFrom m = case mFrames m of
+  FrPar pjs : _ -> pjs
+  _ -> error "parFrameFrom: missing FrPar"
+
+needsExecConfirm :: StepEnv -> Err.StepRef -> IO Bool
+needsExecConfirm env stepRef =
+  case seParBranchIndex env of
+    Nothing -> pure False
+    Just idx -> do
+      approved <- readIORef (seConfirmApprovals env)
+      pure $
+        seConfirmPolicy env == ConfirmHold
+          && not (Set.member (idx, Err.srStepId stepRef) approved)
+
+enterExecConfirm ::
+  StepEnv ->
+  Machine ->
+  Err.StepRef ->
+  QName ->
+  Binder ->
+  Map Ident RValue ->
+  IO (Either RuntimeError StepOutcome)
+enterExecConfirm _env machine stepRef target _binder argMap = do
+  let idx = fromMaybe 0 (seParBranchIndex _env)
+      confirm =
+        ConfirmRequest
+          { crBranchIndex = Just idx,
+            crQName = target,
+            crStepId = Err.srStepId stepRef,
+            crTitle = "Run " <> renderQName target <> "?",
+            crDetail =
+              object
+                [ "program" .= case Map.lookup "program" argMap of
+                    Just (VString t) -> t
+                    _ -> "",
+                  "args" .= [valueToJson v | (_, v) <- Map.toList argMap]
+                ]
+          }
+  pure . Right . Stepped $
+    machine {mCurrent = CurAwaitConfirm confirm}
+
+resumeApprovedConfirm :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
+resumeApprovedConfirm env machine =
+  case resolveStmtPath (seProject env) (mPath machine) of
+    Left err -> pure (Left (internalStub err))
+    Right ctx ->
+      case scStmt ctx of
+        SStep step -> stepDispatch env (machine {mCurrent = CurDispatch step}) step
+        _ -> pure (Left (internalError "confirm resume path is not a step statement"))
 
 -- Helpers --------------------------------------------------------------------
 

@@ -27,6 +27,7 @@ module Hwfi.Runtime.Executor
     performResume,
     runWorkflow,
     projectContentHash,
+    defaultParallelism,
   )
 where
 

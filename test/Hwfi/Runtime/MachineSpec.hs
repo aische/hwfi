@@ -13,13 +13,17 @@ import Hwfi.Runtime.Agent (sanitizeToolName)
 import Hwfi.Runtime.Executor (projectContentHash)
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.Machine
+import Hwfi.Runtime.MachinePar (allSlotsTerminal)
 import Hwfi.Runtime.MachinePath (StmtContext (..), advancePath, initialStmtPath, resolveStmtPath)
 import Hwfi.Runtime.MachineSnapshot (decodeMachine, encodeMachine)
-import Hwfi.Runtime.StepDriver (StepOutcome (..), pauseMachine, runMachine, stepMachine)
-import Hwfi.Runtime.StepEnv (StepEnv (..), newStepEnv)
+import Hwfi.Runtime.StepDriver (approveConfirm, pauseMachine, runMachine, stepMachine)
+import Hwfi.Runtime.StepEnv (ConfirmPolicy (..), StepEnv (..), StepOutcome (..), newStepEnv)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace)
 import Hwfi.TypedProject (TypedProject)
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
+import Data.Text.IO qualified as TIO
 import LLM.Core.Types
   ( ChatRequest (..),
     ChatResponse (..),
@@ -73,7 +77,10 @@ spec = do
                 pjsActive = Map.singleton 1 (mkBranch branch),
                 pjsNextIndex = 2,
                 pjsPhase = ParDraining,
-                pjsConfirmQueue = [confirm]
+                pjsConfirmQueue = [confirm],
+                pjsLoopPath = StmtPath (qnameFromText "workflows/main") [PathSegment 0 Nothing],
+                pjsResumePath = StmtPath (qnameFromText "workflows/main") [PathSegment 1 Nothing],
+                pjsParentBindings = Map.empty
               }
           agent =
             AgentState
@@ -215,8 +222,199 @@ spec = do
                 Map.lookup "answer" outs `shouldBe` Just (VString "cached answer")
               Right other -> expectationFailure ("unexpected outcome: " <> show other)
 
+  describe "StepDriver par (M3)" $ do
+    it "runs par(max = 2) in input order" $
+      withSystemTempDirectory "hwfi-m3-par" $ \proj ->
+        withSystemTempDirectory "hwfi-m3-par-ws" $ \ws -> do
+          writeParProject proj parEchoMd
+          createDirectoryIfMissing True ws
+          writeFile (ws </> "log.txt") ""
+          tp <- loadChecked proj
+          workspace <- newWorkspace ws
+          env <- newStepEnv tp workspace Map.empty "m3-par" "workflows/main"
+          let m0 =
+                initialMachine
+                  ""
+                  (projectContentHash tp)
+                  (qnameFromText "workflows/main")
+                  (Map.singleton "items" (VList [VString "a", VString "b", VString "c"]))
+          result <- runMachine env m0
+          case result of
+            Left err -> expectationFailure (show err)
+            Right (RunCompleted (VRecord outs)) ->
+              Map.lookup "got" outs `shouldBe` Just (VString "b\n")
+            Right other -> expectationFailure ("unexpected outcome: " <> show other)
+          lineCount (ws </> "log.txt") `shouldReturn` 3
+
+    it "resumes mid-par from a branch snapshot" $
+      withSystemTempDirectory "hwfi-m3-par-resume" $ \proj ->
+        withSystemTempDirectory "hwfi-m3-par-resume-ws" $ \ws -> do
+          writeParProject proj parEchoMd
+          tp <- loadChecked proj
+          workspace <- newWorkspace ws
+          env <- newStepEnv tp workspace Map.empty "m3-par-resume" "workflows/main"
+          let m0 =
+                initialMachine
+                  ""
+                  (projectContentHash tp)
+                  (qnameFromText "workflows/main")
+                  (Map.singleton "items" (VList [VString "a", VString "b", VString "c"]))
+          mMid <- stepUntilParMid env m0
+          case decodeMachine (encodeMachine mMid) of
+            Left err -> expectationFailure (T.unpack err)
+            Right restored -> do
+              result <- runMachine env restored
+              case result of
+                Left err -> expectationFailure (show err)
+                Right (RunCompleted (VRecord outs)) ->
+                  Map.lookup "got" outs `shouldBe` Just (VString "b\n")
+                Right other -> expectationFailure ("unexpected outcome: " <> show other)
+
+    it "drains and pauses on exec confirm inside par, then continues after approve" $
+      withSystemTempDirectory "hwfi-m3-par-confirm" $ \proj ->
+        withSystemTempDirectory "hwfi-m3-par-confirm-ws" $ \ws -> do
+          writeParProject proj parGitMd
+          tp <- loadChecked proj
+          workspace <- newWorkspace ws
+          baseEnv <- newStepEnv tp workspace Map.empty "m3-confirm" "workflows/main"
+          let env = baseEnv {seConfirmPolicy = ConfirmHold}
+              m0 =
+                initialMachine
+                  ""
+                  (projectContentHash tp)
+                  (qnameFromText "workflows/main")
+                  (Map.singleton "items" (VList [VString "only"]))
+          halted <- runUntilHalt env m0
+          case mStatus halted of
+            MsPaused (PauseAwaitingConfirm _) -> pure ()
+            s -> expectationFailure ("expected awaiting confirm, got: " <> show s)
+          approved <- approveConfirm env halted
+          result <- runMachine env approved
+          case result of
+            Left err -> expectationFailure (show err)
+            Right (RunCompleted (VRecord outs)) ->
+              Map.lookup "code" outs `shouldBe` Just (VInt 0)
+            Right other -> expectationFailure ("unexpected outcome: " <> show other)
+
 loadFixture :: IO TypedProject
 loadFixture = loadChecked "test/fixtures/check/ok"
+
+parProjectJson :: Text
+parProjectJson =
+  T.unlines
+    [ "{",
+      "  \"name\": \"m3-par\",",
+      "  \"version\": \"0.1.0\",",
+      "  \"entrypoint\": \"workflows/main\",",
+      "  \"env\": [],",
+      "  \"exec\": { \"allow\": [\"sh\", \"git\"], \"env\": [\"PATH\"] }",
+      "}"
+    ]
+
+writeParProject :: FilePath -> Text -> IO ()
+writeParProject dir mainMd = do
+  createDirectoryIfMissing True (dir </> "workflows")
+  TIO.writeFile (dir </> "project.json") parProjectJson
+  TIO.writeFile (dir </> "model-catalog.json") "[]\n"
+  TIO.writeFile (dir </> "workflows" </> "main.md") mainMd
+
+parEchoMd :: Text
+parEchoMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs:",
+      "  items: List<String>",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - builtin/exec",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rs <- par(max = 2) it in ${inputs.items} {",
+      "  r <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo ${it} >> log.txt; echo ${it}\"], stdin = \"\", timeout_ms = 0) @run",
+      "} @fan",
+      "return { got = ${rs[1].stdout} }",
+      "```"
+    ]
+
+parGitMd :: Text
+parGitMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs:",
+      "  items: List<String>",
+      "outputs:",
+      "  code: Int",
+      "imports:",
+      "  - builtin/exec",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rs <- par(max = 1) it in ${inputs.items} {",
+      "  r <- builtin/exec(program = \"sh\", args = [\"-c\", \"true\"], stdin = \"\", timeout_ms = 0) @run",
+      "} @fan",
+      "return { code = ${rs[0].exit_code} }",
+      "```"
+    ]
+
+lineCount :: FilePath -> IO Int
+lineCount fp = length . lines <$> readFile fp
+
+stepUntilParMid :: StepEnv -> Machine -> IO Machine
+stepUntilParMid env m0 = loop m0
+  where
+    loop m
+      | isParMid m = pure m
+      | otherwise =
+          stepMachine env m >>= \case
+            Left err -> fail (show err)
+            Right (Stepped m') -> loop m'
+            Right other -> fail ("stopped before mid-par: " <> show other)
+
+isParMid :: Machine -> Bool
+isParMid m =
+  case mFrames m of
+    FrPar pjs : _ ->
+      any isDone (pjsSlots pjs) && not (allSlotsTerminal (pjsSlots pjs))
+    _ -> False
+  where
+    isDone = \case
+      ParSlotDone _ -> True
+      _ -> False
+
+stepUntilParActive :: StepEnv -> Machine -> IO Machine
+stepUntilParActive env m0 = loop m0
+  where
+    loop m
+      | isParActive m = pure m
+      | otherwise =
+          stepMachine env m >>= \case
+            Left err -> fail (show err)
+            Right (Stepped m') -> loop m'
+            Right other -> fail ("stopped before par active: " <> show other)
+
+isParActive :: Machine -> Bool
+isParActive m =
+  case mFrames m of
+    FrPar pjs : _ -> not (Map.null (pjsActive pjs))
+    _ -> False
+
+runUntilHalt :: StepEnv -> Machine -> IO Machine
+runUntilHalt env m0 = loop m0
+  where
+    loop m =
+      stepMachine env m >>= \case
+        Left err -> fail (show err)
+        Right (Stepped m') -> loop m'
+        Right (StepHalted m') -> pure m'
+        Right (RunCompleted _) -> fail "unexpected completion before confirm halt"
 
 loadChecked :: FilePath -> IO TypedProject
 loadChecked dir = do

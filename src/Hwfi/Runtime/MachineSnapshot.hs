@@ -182,6 +182,7 @@ encodeCurrent = \case
       ]
   CurAgent ag -> object ["tag" .= ("agent" :: Text), "agent" .= encodeAgent ag]
   CurAwaitConfirm c -> object ["tag" .= ("await_confirm" :: Text), "confirm" .= encodeConfirm c]
+  CurParPool -> object ["tag" .= ("par_pool" :: Text)]
 
 parseCurrent :: Value -> Parser Current
 parseCurrent = withObject "current" $ \o -> do
@@ -194,6 +195,7 @@ parseCurrent = withObject "current" $ \o -> do
       pure (CurDispatch (StepStmt BindDiscard tgt [] sid (singletonSpan (Pos 0 0))))
     "agent" -> CurAgent <$> (o .: "agent" >>= parseAgent)
     "await_confirm" -> CurAwaitConfirm <$> (o .: "confirm" >>= parseConfirm)
+    "par_pool" -> pure CurParPool
     _ -> fail ("unknown current tag: " <> T.unpack tag)
 
 encodeAgent :: AgentState -> Value
@@ -356,7 +358,10 @@ encodePar pjs =
       "active" .= encodeActive (pjsActive pjs),
       "next_index" .= pjsNextIndex pjs,
       "phase" .= encodeParPhase (pjsPhase pjs),
-      "confirm_queue" .= map encodeConfirm (pjsConfirmQueue pjs)
+      "confirm_queue" .= map encodeConfirm (pjsConfirmQueue pjs),
+      "loop_path" .= encodePath (pjsLoopPath pjs),
+      "resume_path" .= encodePath (pjsResumePath pjs),
+      "parent_bindings" .= encodeBindings (pjsParentBindings pjs)
     ]
 
 parsePar :: Value -> Parser ParJoinState
@@ -374,6 +379,9 @@ parsePar = withObject "par" $ \o -> do
     <*> o .: "next_index"
     <*> (o .: "phase" >>= parseParPhaseText)
     <*> (o .: "confirm_queue" >>= traverse parseConfirm)
+    <*> (o .: "loop_path" >>= parsePath)
+    <*> (o .: "resume_path" >>= parsePath)
+    <*> (o .:? "parent_bindings" >>= maybe (pure Map.empty) parseBindings)
 
 encodeActive :: Map Int BranchMachine -> Value
 encodeActive m =
