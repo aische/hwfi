@@ -9,7 +9,7 @@ import Data.Text.IO qualified as TIO
 import Hwfi.Ast.Name (QName, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Parse.Project (loadProject)
-import Hwfi.Runtime.Executor (RunResult (..), performRun)
+import Hwfi.Runtime.MachineRun (RunResult (..), performRun)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),

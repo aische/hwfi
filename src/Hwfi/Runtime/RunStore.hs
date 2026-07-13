@@ -3,20 +3,10 @@
 -- Every run lives under @\<workspace>/.hwfi/runs/\<run-id>/@:
 --
 -- @
--- run.json          -- run metadata: project hash, entrypoint, inputs, status
--- steps/
---   \<step-key>.json -- one file per completed cacheable step (§8.1)
--- trace.jsonl       -- append-only event log (§8.3)
+-- run.json       -- run metadata: project hash, entrypoint, inputs, status
+-- machine.json   -- authoritative v2 machine snapshot for resume
+-- trace.jsonl    -- append-only event log (§8.3)
 -- @
---
--- This module owns those paths, the @run.json@ schema, the content-addressed
--- step cache, reading @trace.jsonl@ back into events on resume, and the
--- exclusive @\<workspace>/.hwfi/lock@ that serialises runs sharing a workspace
--- (§12). It performs no policy: the executor decides /when/ to read or write.
---
--- @run.json.inputs@ stores the /actual/ root-input values (not the redacted
--- trace form) because resume must re-evaluate the workflow with the original
--- inputs; the file lives inside the user's workspace under @.hwfi/@.
 module Hwfi.Runtime.RunStore
   ( RunStore,
     rsRunDir,
@@ -34,15 +24,6 @@ module Hwfi.Runtime.RunStore
     writeRunMeta,
     readRunMeta,
     updateRunPhase,
-    cacheStepResult,
-    lookupCachedResult,
-    deleteCachedResult,
-    clearRunStepCache,
-    registerAgentSubCache,
-    purgeAgentSubCaches,
-    deleteCachedResults,
-    cacheWhileDecision,
-    lookupWhileDecision,
     readTraceEvents,
     listRuns,
     readRunTrace,
@@ -75,7 +56,6 @@ import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
 import Hwfi.Runtime.Machine (Machine)
 import Hwfi.Runtime.MachineSnapshot (decodeMachine, encodeMachine)
 import Hwfi.Runtime.RunUsage (RunUsage (..), emptyRunUsage, runUsageFromJson, runUsageToJson)
-import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (TraceEvent, eventFromJson)
 import System.Directory
   ( createDirectoryIfMissing,
@@ -100,7 +80,6 @@ import UnliftIO.Exception (finally, try)
 -- | The resolved paths of one run's artifacts.
 data RunStore = RunStore
   { rsRunDir :: FilePath,
-    rsStepsDir :: FilePath,
     rsTracePath :: FilePath,
     rsMetaPath :: FilePath
   }
@@ -114,8 +93,7 @@ data RunPhase
     PhaseRunning
   | -- | Finished successfully; not resumable.
     PhaseCompleted
-  | -- | Finished with a workflow error; resumable (fix and re-run the failed
-    -- step, reusing cached upstream results).
+  | -- | Finished with a workflow error; resumable from the machine snapshot.
     PhaseAborted
   | -- | Explicitly marked as crashed; resumable.
     PhaseCrashed
@@ -177,7 +155,6 @@ storeFor :: FilePath -> Text -> RunStore
 storeFor wsRoot runId =
   RunStore
     { rsRunDir = dir,
-      rsStepsDir = dir </> "steps",
       rsTracePath = dir </> "trace.jsonl",
       rsMetaPath = dir </> "run.json"
     }
@@ -189,7 +166,7 @@ storeFor wsRoot runId =
 createRunStore :: FilePath -> Text -> IO RunStore
 createRunStore wsRoot runId = do
   let store = storeFor wsRoot runId
-  createDirectoryIfMissing True (rsStepsDir store)
+  createDirectoryIfMissing True (rsRunDir store)
   pure store
 
 -- | Locate an existing run directory for resume. Fails if it is absent.
@@ -263,143 +240,6 @@ updateRunPhase store phase = do
   case existing of
     Right meta -> writeRunMeta store meta {rmPhase = phase}
     Left _ -> pure ()
-
--- Step result cache ----------------------------------------------------------
-
-stepPath :: RunStore -> Text -> FilePath
-stepPath store key = rsStepsDir store </> T.unpack key <> ".json"
-
--- | Persist a completed cacheable step's result (§8.1). The value is the
--- actual (non-redacted) result JSON; the file name is the content-addressed
--- step-key.
-cacheStepResult :: RunStore -> Text -> Value -> IO ()
-cacheStepResult store key value = atomicWrite (stepPath store key) (Aeson.encode value)
-
--- | Look up a cached step result by key; 'Nothing' if there is no persisted
--- result (a never-run or crashed-before-completion step, §8.2).
-lookupCachedResult :: RunStore -> Text -> IO (Maybe Value)
-lookupCachedResult store key = do
-  let path = stepPath store key
-  exists <- doesFileExist path
-  if not exists
-    then pure Nothing
-    else do
-      result <- eitherDecodeFileStrict' path
-      pure (either (const Nothing) Just result)
-
--- | Remove a cached step result, if present. Used when a checkpoint makes
--- earlier intra-step sub-keys obsolete on resume (§8.2.1 optional 8.g).
-deleteCachedResult :: RunStore -> Text -> IO ()
-deleteCachedResult store key = do
-  let path = stepPath store key
-  exists <- doesFileExist path
-  when exists (removeFile path)
-
--- | Remove every persisted step result (and pinned @while@ decisions) for a
--- run. Trace and @run.json@ are left intact so @hwfi resume@ re-executes
--- cacheable steps (§13.1.4 subset).
-clearRunStepCache :: RunStore -> IO Int
-clearRunStepCache store = do
-  let dir = rsStepsDir store
-  exists <- doesDirectoryExist dir
-  if not exists
-    then pure 0
-    else do
-      files <- filter (".json" `isSuffixOf`) <$> listDirectory dir
-      mapM_ (removeFile . (dir </>)) files
-      pure (length files)
-
--- | Record an intra-step agent sub-key under its enclosing agent step-key
--- (§8.2.1, §13.1.4). Used by @hwfi cache invalidate@ to purge nested caches.
-registerAgentSubCache :: RunStore -> Text -> Text -> IO ()
-registerAgentSubCache store agentKey subKey = do
-  reg <- readAgentRegistry store
-  let updated =
-        KM.insertWith
-          mergeKeys
-          (K.fromText agentKey)
-          (subKey : fromMaybe [] (KM.lookup (K.fromText agentKey) reg))
-          reg
-  writeAgentRegistry store updated
-  where
-    mergeKeys old new = nub (new <> old)
-
--- | Delete every registered intra-step cache entry for an agent step-key,
--- including its optional checkpoint (§8.2.1).
-purgeAgentSubCaches :: RunStore -> Text -> IO Int
-purgeAgentSubCaches store agentKey = do
-  reg <- readAgentRegistry store
-  let keys = fromMaybe [] (KM.lookup (K.fromText agentKey) reg)
-      allKeys = nub (agentCheckpointKey agentKey : keys)
-  n <- deleteCachedResults store allKeys
-  writeAgentRegistry store (KM.delete (K.fromText agentKey) reg)
-  pure n
-
--- | Delete a list of cached step results; returns how many files were removed.
-deleteCachedResults :: RunStore -> [Text] -> IO Int
-deleteCachedResults store keys = do
-  deleted <- mapM (deleteIfPresent store) (nub keys)
-  pure (length (filter id deleted))
-  where
-    deleteIfPresent s key = do
-      let path = stepPath s key
-      exists <- doesFileExist path
-      when exists (removeFile path)
-      pure exists
-
-agentCheckpointKey :: Text -> Text
-agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
-
-agentRegistryPath :: RunStore -> FilePath
-agentRegistryPath store = rsStepsDir store </> ".agent-subkeys.json"
-
-readAgentRegistry :: RunStore -> IO (KM.KeyMap [Text])
-readAgentRegistry store = do
-  let path = agentRegistryPath store
-  exists <- doesFileExist path
-  if not exists
-    then pure KM.empty
-    else do
-      result <- eitherDecodeFileStrict' path
-      pure (either (const KM.empty) registryFromJson result)
-
-writeAgentRegistry :: RunStore -> KM.KeyMap [Text] -> IO ()
-writeAgentRegistry store reg =
-  if KM.null reg
-    then do
-      let path = agentRegistryPath store
-      exists <- doesFileExist path
-      when exists (removeFile path)
-    else atomicWrite (agentRegistryPath store) (Aeson.encode (registryToJson reg))
-
-registryToJson :: KM.KeyMap [Text] -> Value
-registryToJson reg =
-  Object (KM.map (Array . V.fromList . map String) reg)
-
-registryFromJson :: Value -> KM.KeyMap [Text]
-registryFromJson = \case
-  Object o ->
-    KM.mapMaybe parseList o
-  _ -> KM.empty
-  where
-    parseList = \case
-      Array a -> Just [t | String t <- V.toList a]
-      _ -> Nothing
-
--- | Persist a pinned @while@ predicate decision (§4.3.5). Stored under the
--- same @steps/@ tree as step results, keyed by 'computeWhileDecisionKey'.
-cacheWhileDecision :: RunStore -> Text -> Bool -> Text -> IO ()
-cacheWhileDecision store key continue reason =
-  cacheStepResult store key (object ["continue" .= continue, "reason" .= reason])
-
--- | Look up a pinned @while@ predicate decision; 'Nothing' if absent.
-lookupWhileDecision :: RunStore -> Text -> IO (Maybe (Bool, Text))
-lookupWhileDecision store key = do
-  mJson <- lookupCachedResult store key
-  pure (mJson >>= parseDecision)
-  where
-    parseDecision = parseMaybe (withObject "WhileDecision" parseBody)
-    parseBody o = (,) <$> o .: "continue" <*> o .: "reason"
 
 -- trace.jsonl ----------------------------------------------------------------
 

@@ -10,7 +10,7 @@ import Hwfi.Check (checkProject)
 import Hwfi.Compat (ModelConfig (..))
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Agent (sanitizeToolName)
-import Hwfi.Runtime.Executor (projectContentHash)
+import Hwfi.Runtime.RunCommon (projectContentHash)
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.Machine
 import Hwfi.Runtime.MachinePar (allSlotsTerminal)

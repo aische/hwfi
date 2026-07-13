@@ -9,12 +9,9 @@ import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),
     RunSummary (..),
-    cacheStepResult,
-    clearRunStepCache,
     createRunStore,
     isResumable,
     listRuns,
-    lookupCachedResult,
     openRunStore,
     readRunMeta,
     readRunTrace,
@@ -60,19 +57,6 @@ spec = do
       map isResumable [PhaseRunning, PhaseAborted, PhaseCrashed] `shouldBe` [True, True, True]
       isResumable PhaseCompleted `shouldBe` False
 
-  describe "step result cache (§8.1)" $ do
-    it "returns Nothing for an absent key" $
-      withSystemTempDirectory "hwfi-rs" $ \root -> do
-        store <- createRunStore root "run-1"
-        lookupCachedResult store "missing" `shouldReturn` Nothing
-
-    it "round-trips a cached result value" $
-      withSystemTempDirectory "hwfi-rs" $ \root -> do
-        store <- createRunStore root "run-1"
-        let v = object ["text" .= ("hello" :: String)]
-        cacheStepResult store "abc" v
-        lookupCachedResult store "abc" `shouldReturn` Just v
-
   describe "openRunStore" $
     it "fails for a run directory that does not exist" $
       withSystemTempDirectory "hwfi-rs" $ \root ->
@@ -93,17 +77,6 @@ spec = do
                     Left err -> ".." `T.isInfixOf` err
                     _ -> False
               )
-
-  describe "clearRunStepCache" $ do
-    it "removes every file under steps/ and leaves trace intact" $
-      withSystemTempDirectory "hwfi-rs" $ \root -> do
-        store <- createRunStore root "run-1"
-        cacheStepResult store "key-a" (object ["x" .= (1 :: Int)])
-        cacheStepResult store "key-b" (object ["y" .= (2 :: Int)])
-        n <- clearRunStepCache store
-        n `shouldBe` 2
-        lookupCachedResult store "key-a" `shouldReturn` Nothing
-        lookupCachedResult store "key-b" `shouldReturn` Nothing
 
   describe "workspace lock (§12)" $ do
     it "grants the lock to a single holder" $

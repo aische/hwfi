@@ -1,36 +1,18 @@
 -- | The agentic tool-use loop for @builtin/llm-agent@ /
--- @builtin/llm-agent-object@ (spec ?6.1).
+-- @builtin/llm-agent-object@ (spec §6.1).
 --
--- Where the one-shot LLM builtins are workflow-driven, this is LLM-driven:
--- within a single step the model is advertised a set of tools (the project's
--- own declarations) and autonomously issues tool calls in a loop until it
--- yields a final answer (?6.1). The loop is expressed as an explicit
--- round\/tool-call state machine over 'RValue', modelled on the reference
--- evaluator in @../llm-workflow@ but without @unsafeCoerce@ (hwfi values are
--- already dynamically typed). A model-chosen tool call is reified as a nested
--- executor step ('aeDispatch') so its effects go through the sandboxed
--- 'Hwfi.Runtime.Workspace' and its events nest under the agent step (?6.1.2,
--- ?8.3.3.7).
---
--- Determinism vs. caching (?8.1, ?8.2.1): the agent step is a non-cacheable
--- black box, but every /model call/ and every /tool call/ inside it is
--- individually content-addressed under the enclosing agent step-key and reused
--- from 'RunStore' on resume. A resumed loop therefore replays deterministically
--- ��� reusing the model's prior choices and tool results ��� without re-paying LLM
--- calls or re-running tool side effects. Caching is consulted only on resume
--- ('aeResume'); every attempt writes cache entries (mirroring the executor).
+-- Production execution uses 'Hwfi.Runtime.MachineAgent' with state in the
+-- machine snapshot. This module exposes the loop for unit tests and shared
+-- helpers (tool schemas, argument coercion, submit validation).
 module Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     SubmitSpec (..),
     AgentSpec (..),
     AgentEnv (..),
-    AgentCheckpoint (..),
     AgentSkillState (..),
     emptyAgentSkillState,
     toolModelJson,
     runAgent,
-    agentCheckpointKey,
-    modelSubKey,
     sanitizeToolName,
     advertisedToolDef,
     submitToolDef,
@@ -76,10 +58,9 @@ import Hwfi.Compat
 import Hwfi.Project.Manifest (SkillPolicy (..))
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), llmError)
 import Hwfi.Runtime.Gateways (primaryModel)
-import Hwfi.Runtime.RunStore (RunStore, cacheStepResult, deleteCachedResult, lookupCachedResult, registerAgentSubCache)
+import Hwfi.Runtime.RunStore (RunStore)
 import Hwfi.Runtime.Schema (recordSchema)
 import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
-import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (EventBody (..), Tracer, emit)
 import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), canonicalJson, coerceFromJson, redactedJson, valueToJson)
@@ -169,56 +150,13 @@ data AgentResponse = AgentResponse
     arToolCalls :: [ToolCall]
   }
 
--- | Persisted agent-loop position (�8.2.1 optional 8.g): the conversation
--- history and the next round index to drive. Lets resume skip re-walking
--- completed rounds whose intra-step sub-caches may be absent.
-data AgentCheckpoint = AgentCheckpoint
-  { acMessages :: [Turn],
-    acNextRound :: Int,
-    acActiveToolIds :: [Text],
-    acLoadedInstructionIds :: [Text]
-  }
-  deriving stock (Eq, Show)
-
 -- | Run the agent loop, returning the step's result record (spec ?6.1):
 -- @{ text, rounds }@ for @builtin/llm-agent@ or @{ value, rounds }@ for
 -- @builtin/llm-agent-object@. A 'Left' is a fatal error (?6.1.4).
 runAgent :: AgentEnv -> AgentSpec -> IO (Either RuntimeError RValue)
 runAgent env spec = do
-  restoreSkillState env (aeSkillState env)
-  (messages, roundIx) <- resolveStart env spec (aeSkillState env)
-  result <- driveRounds env spec (aeSkillState env) messages roundIx
-  case result of
-    Right _ -> clearAgentCheckpoint env
-    Left _ -> pure ()
-  pure result
-
--- | On resume, reload a persisted checkpoint when present; otherwise replay
--- from round 0 (�8.2.1 backward compatibility).
-resolveStart :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> IO ([Turn], Int)
-resolveStart env spec _skillState
-  | not (aeResume env) = pure (initialMessages spec, 0)
-  | otherwise = do
-      mCkpt <- loadAgentCheckpoint (aeStore env) (aeStepKey env)
-      pure $ case mCkpt of
-        Just ckpt -> (acMessages ckpt, acNextRound ckpt)
-        Nothing -> (initialMessages spec, 0)
-
-restoreSkillState :: AgentEnv -> IORef AgentSkillState -> IO ()
-restoreSkillState env skillState
-  | not (aeResume env) = pure ()
-  | otherwise = do
-      mCkpt <- loadAgentCheckpoint (aeStore env) (aeStepKey env)
-      case mCkpt of
-        Nothing -> pure ()
-        Just ckpt ->
-          writeIORef skillState $
-            AgentSkillState
-              { assLoadedCallable = map qnameFromText (acActiveToolIds ckpt),
-                assLoadedInstruction = map qnameFromText (acLoadedInstructionIds ckpt),
-                assInstructionChars = 0,
-                assPendingInjections = []
-              }
+  let messages = initialMessages spec
+  driveRounds env spec (aeSkillState env) messages 0
 
 initialMessages :: AgentSpec -> [Turn]
 initialMessages spec = [UserTurn (asPrompt spec)]
@@ -264,9 +202,7 @@ driveRounds env spec skillState messages roundIx
                 Continue results -> do
                   endRound False
                   let messages'' = messages' <> [ToolTurn results]
-                      nextRound = roundIx + 1
-                  saveAgentCheckpoint env skillState messages'' nextRound
-                  driveRounds env spec skillState messages'' nextRound
+                  driveRounds env spec skillState messages'' (roundIx + 1)
 
 -- | Terminate a round in which the model produced no tool calls: for
 -- @builtin/llm-agent@ this is the final free-text answer; for
@@ -281,33 +217,26 @@ finishTextRound _ spec assistant roundIx = case asSubmit spec of
     pure . Left . llmError $
       "agent finished with plain text but this step requires a terminating submit call (?6.1.3)"
 
--- Model call (cached per round, ?8.2.1) --------------------------------------
+-- Model call -----------------------------------------------------------------
 
 runModelCall :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> [Turn] -> Int -> IO () -> IO (Either RuntimeError AgentResponse)
 runModelCall env spec skillState messages roundIx ensureStart = do
   messages' <- applyPendingInjections skillState messages
   active <- activeTools env spec skillState
-  let key = modelSubKey env spec active messages' roundIx
-  mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
-  case mCached >>= decodeResponse of
-    Just cached -> pure (Right cached) -- cache hit: no new events (?8.3.3.7)
-    Nothing -> do
-      ensureStart
-      budget <- checkBudgetSeam (aeUsage env)
-      case budget of
-        Left err -> pure (Left err)
-        Right _ -> do
-          result <- generateTextWithFallbacks (genReq spec active messages') (asModel spec)
-          case result of
-            Left gerr -> pure (Left (llmError ("agent model call failed: " <> tshow gerr)))
-            Right resp -> do
-              let assistant = responseOf resp
-                  usage = fromMaybe (Usage 0 0 0) resp.respUsage
-              cost <- recordBilledCall (aeUsage env) (primaryModel (asModel spec)) usage
-              emitLlmCall env spec messages' resp cost
-              cacheStepResult (aeStore env) key (encodeResponse assistant)
-              registerAgentSubCache (aeStore env) (aeStepKey env) key
-              pure (Right assistant)
+  ensureStart
+  budget <- checkBudgetSeam (aeUsage env)
+  case budget of
+    Left err -> pure (Left err)
+    Right _ -> do
+      result <- generateTextWithFallbacks (genReq spec active messages') (asModel spec)
+      case result of
+        Left gerr -> pure (Left (llmError ("agent model call failed: " <> tshow gerr)))
+        Right resp -> do
+          let assistant = responseOf resp
+              usage = fromMaybe (Usage 0 0 0) resp.respUsage
+          cost <- recordBilledCall (aeUsage env) (primaryModel (asModel spec)) usage
+          emitLlmCall env spec messages' resp cost
+          pure (Right assistant)
 
 genReq :: AgentSpec -> [AdvertisedTool] -> [Turn] -> GenRequest
 genReq spec tools messages =
@@ -390,38 +319,25 @@ runAdvertisedCall env _spec skillState roundIx callIx ensureStart tc tool
           emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
           recoverable env roundIx callIx (renderQName (atQName tool)) tc ("invalid arguments: " <> reason)
         Right resolved -> do
-          let argsJson = valueToJson (VRecord resolved)
-              key = toolSubKey env roundIx callIx (atFingerprint tool) argsJson
-          mCached <- if aeResume env then lookupCachedResult (aeStore env) key else pure Nothing
-          case mCached of
-            Just cachedJson ->
-              -- Cache hit: no new events; feed the model a redacted view (D3).
-              pure (CallResult (toolResult tc (toolModelJson tool cachedJson)))
-            Nothing -> do
-              ensureStart
-              emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
-              let sid = toolStepId env roundIx callIx
-              void $ emit (aeTracer env) (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) True Nothing)
-              dr <- aeDispatch env (atQName tool) sid resolved
-              case dr of
-                Left err
-                  | reKind err == KInternal -> do
-                      void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
-                      pure (CallFatal err)
-                  | otherwise -> do
-                      -- ?6.1.4: a tool result the callee surfaces as an error is recoverable.
-                      void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
-                      recoverable env roundIx callIx (renderQName (atQName tool)) tc ("tool error: " <> reMessage err)
-                Right result -> do
-                  let actual = valueToJson result
-                      redacted = redactedJson result
-                  void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0 Nothing)
-                  -- Cache actual values (�8.2.1); redact only in trace/events (D3).
-                  cacheStepResult (aeStore env) key actual
-                  registerAgentSubCache (aeStore env) (aeStepKey env) key
-                  void $
-                    emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
-                  pure (CallResult (toolResult tc (canonicalJson redacted)))
+          ensureStart
+          emitToolCall env roundIx callIx (renderQName (atQName tool)) tc.tcArguments
+          let sid = toolStepId env roundIx callIx
+          void $ emit (aeTracer env) (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) False Nothing)
+          dr <- aeDispatch env (atQName tool) sid resolved
+          case dr of
+            Left err
+              | reKind err == KInternal -> do
+                  void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
+                  pure (CallFatal err)
+              | otherwise -> do
+                  void $ emit (aeTracer env) (ErrorEvent (atQName tool) sid (reMessage err) (reKind err))
+                  recoverable env roundIx callIx (renderQName (atQName tool)) tc ("tool error: " <> reMessage err)
+            Right result -> do
+              let redacted = redactedJson result
+              void $ emit (aeTracer env) (StepEnd (atQName tool) sid redacted 0 Nothing)
+              void $
+                emit (aeTracer env) (AgentToolResult (aeQName env) (aeStepId env) roundIx callIx (renderQName (atQName tool)) redacted False)
+              pure (CallResult (toolResult tc (canonicalJson redacted)))
 
 runLoadSkillCall :: AgentEnv -> IORef AgentSkillState -> Int -> Int -> IO () -> ToolCall -> IO CallOutcome
 runLoadSkillCall env skillState roundIx callIx ensureStart tc = do
@@ -611,90 +527,6 @@ renderConversation = T.intercalate "\n" . map render
         "assistant: " <> t <> if null calls then "" else "  [calls: " <> T.intercalate ", " (map (.tcName) calls) <> "]"
       ToolTurn results -> "tool: " <> T.intercalate " | " (map (\r -> r.trName <> "=" <> r.trContent) results)
 
--- Sub-keys (?8.2.1) ----------------------------------------------------------
-
--- | Content-addressed key for the optional agent-loop checkpoint (�8.2.1 8.g).
-agentCheckpointKey :: Text -> Text
-agentCheckpointKey stepKey = sha256Hex ("agent-checkpoint:" <> stepKey)
-
-saveAgentCheckpoint :: AgentEnv -> IORef AgentSkillState -> [Turn] -> Int -> IO ()
-saveAgentCheckpoint env skillState messages nextRound = do
-  st <- readIORef skillState
-  cacheStepResult
-    (aeStore env)
-    (agentCheckpointKey (aeStepKey env))
-    ( encodeCheckpoint
-        messages
-        nextRound
-        (map renderQName (assLoadedCallable st))
-        (map renderQName (assLoadedInstruction st))
-    )
-  registerAgentSubCache (aeStore env) (aeStepKey env) (agentCheckpointKey (aeStepKey env))
-
-loadAgentCheckpoint :: RunStore -> Text -> IO (Maybe AgentCheckpoint)
-loadAgentCheckpoint store stepKey =
-  lookupCachedResult store (agentCheckpointKey stepKey) <&> (>>= decodeCheckpoint)
-
-clearAgentCheckpoint :: AgentEnv -> IO ()
-clearAgentCheckpoint env =
-  deleteCachedResult (aeStore env) (agentCheckpointKey (aeStepKey env))
-
-encodeCheckpoint :: [Turn] -> Int -> [Text] -> [Text] -> Value
-encodeCheckpoint messages nextRound activeIds instructionIds =
-  object
-    [ "messages" .= toJSON messages,
-      "next_round" .= nextRound,
-      "active_tool_ids" .= activeIds,
-      "loaded_instruction_ids" .= instructionIds
-    ]
-
-decodeCheckpoint :: Value -> Maybe AgentCheckpoint
-decodeCheckpoint = \case
-  Object o -> do
-    msgs <- case KM.lookup "messages" o of
-      Just v -> case fromJSON v of
-        Aeson.Success ts -> Just ts
-        Aeson.Error _ -> Nothing
-      Nothing -> Nothing
-    roundIx <- case KM.lookup "next_round" o of
-      Just (Aeson.Number n) -> Just (floor n)
-      _ -> Nothing
-    activeIds <- textList (KM.lookup "active_tool_ids" o)
-    instrIds <- textList (KM.lookup "loaded_instruction_ids" o)
-    Just (AgentCheckpoint msgs roundIx activeIds instrIds)
-  _ -> Nothing
-  where
-    textList (Just (Array a)) = Just [t | String t <- V.toList a]
-    textList _ = Just []
-
-modelSubKey :: AgentEnv -> AgentSpec -> [AdvertisedTool] -> [Turn] -> Int -> Text
-modelSubKey env spec tools messages roundIx =
-  sha256Hex . T.intercalate "\n" $
-    [ "agent:" <> aeStepKey env,
-      "kind:model",
-      "round:" <> tshow roundIx,
-      "model-fp:" <> asModelFingerprint spec,
-      "tools-fp:" <> toolsFingerprintAt tools,
-      "messages:" <> canonicalJson (toJSON messages)
-    ]
-
-toolsFingerprintAt :: [AdvertisedTool] -> Text
-toolsFingerprintAt tools =
-  sha256Hex (T.intercalate ";" entries)
-  where
-    entries = sort [renderQName (atQName t) <> "=" <> atFingerprint t | t <- tools]
-
-toolSubKey :: AgentEnv -> Int -> Int -> Text -> Value -> Text
-toolSubKey env roundIx callIx calleeFp argsJson =
-  sha256Hex . T.intercalate "\n" $
-    [ "agent:" <> aeStepKey env,
-      "kind:tool",
-      "round:" <> tshow roundIx,
-      "call:" <> tshow callIx,
-      "callee:" <> calleeFp,
-      "args:" <> canonicalJson argsJson
-    ]
-
 toolStepId :: AgentEnv -> Int -> Int -> Ident
 toolStepId env roundIx callIx =
   aeStepId env <> "~r" <> tshow roundIx <> "c" <> tshow callIx
@@ -733,32 +565,6 @@ coerceArgs inputs = \case
       Just v -> (,) n <$> either (Left . ((n <> ": ") <>)) Right (coerceFromJson ty v)
       Nothing -> Left ("missing argument '" <> n <> "'")
 
--- Cache (de)serialisation of an assistant response ---------------------------
-
-encodeResponse :: AgentResponse -> Value
-encodeResponse ar =
-  object
-    [ "text" .= arText ar,
-      "reasoning" .= arReasoning ar,
-      "tool_calls" .= toJSON (arToolCalls ar)
-    ]
-
-decodeResponse :: Value -> Maybe AgentResponse
-decodeResponse = \case
-  Object o -> do
-    txt <- str (KM.lookup "text" o)
-    calls <- case KM.lookup "tool_calls" o of
-      Just v -> case fromJSON v of
-        Aeson.Success cs -> Just cs
-        Aeson.Error _ -> Nothing
-      Nothing -> Just []
-    Just (AgentResponse txt (KM.lookup "reasoning" o >>= optStr) calls)
-  _ -> Nothing
-  where
-    str (Just (String t)) = Just t
-    str _ = Nothing
-    optStr (String t) = Just t
-    optStr _ = Nothing
 
 -- Tool-name mapping and ToolDef construction ---------------------------------
 

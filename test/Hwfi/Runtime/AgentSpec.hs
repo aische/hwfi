@@ -25,9 +25,7 @@ import Hwfi.Runtime.Agent
     AgentSpec (..),
     SubmitSpec (..),
     advertisedToolDef,
-    agentCheckpointKey,
     emptyAgentSkillState,
-    modelSubKey,
     runAgent,
     sanitizeToolName,
     submitToolDef,
@@ -36,7 +34,7 @@ import Hwfi.Runtime.Agent
   )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
-import Hwfi.Runtime.RunStore (RunStore, createRunStore, deleteCachedResult, lookupCachedResult)
+import Hwfi.Runtime.RunStore (RunStore, createRunStore)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), Tracer, newTracer, snapshotEvents)
 import Hwfi.Runtime.Usage (UsageSeam (..), newUsageSeam)
@@ -123,58 +121,13 @@ spec = describe "Agent loop (§6.1)" $ do
         res <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (objectSpec gw)
         res `shouldBe` Right (record [("value", VJson (object ["answer" .= ("ok" :: Text)])), ("rounds", VInt 2)])
 
-  describe "intra-step caching and resume (§8.2.1, A21)" $ do
-    it "replays cached model and tool calls without re-invoking either on resume" $
-      withEnv $ \store tracer usageSeam skillState -> do
-        calls <- newIORef (0 :: Int)
-        let liveGw = scriptedGateway [searchCall "c1", textResp "cached answer"]
-        primed <- runAgent (env store tracer usageSeam False (countingDispatch calls searchResult) skillState) (textSpec liveGw)
-        primed `shouldBe` Right (record [("text", VString "cached answer"), ("rounds", VInt 2)])
-        readIORef calls `shouldReturn` 1
-        -- Resume against a gateway/dispatch that fail if touched: the cache must
-        -- satisfy every model and tool call.
-        tracer2 <- newTracer
-        usageBefore <- readIORef (usRef usageSeam)
-        resumed <-
-          runAgent
-            (env store tracer2 usageSeam True explodingDispatch skillState)
-            (textSpec explodingGateway)
-        resumed `shouldBe` primed
-        usageAfter <- readIORef (usRef usageSeam)
-        usageAfter `shouldBe` usageBefore
-        evs2 <- snapshotEvents tracer2
-        length [() | TraceEvent _ _ (LlmCall {}) <- evs2] `shouldBe` 0
-
-    it "feeds the model redacted tool JSON from cache when outputs include Secret (D3)" $ do
+    it "feeds the model redacted tool JSON when outputs include Secret (D3)" $ do
       let secretTool =
             searchTool
               { atOutputs = [("token", TySecret TyString), ("label", TyString)]
               }
           cached = object ["token" .= ("sekrit" :: Text), "label" .= ("ok" :: Text)]
       T.unpack (toolModelJson secretTool cached) `shouldNotContain` "sekrit"
-
-    it "resumes from a persisted checkpoint without re-walking earlier rounds (8.g)" $
-      withEnv $ \store tracer usageSeam skillState -> do
-        calls <- newIORef (0 :: Int)
-        let primingSpec = (textSpec crashAfterTwoToolRounds) {asMaxRounds = 4}
-            resumeSpec = (textSpec finishAfterTwoToolRounds) {asMaxRounds = 4}
-            dispatch = countingDispatch calls searchResult
-            agentEnv resume = env store tracer usageSeam resume dispatch skillState
-        first <- runAgent (agentEnv False) primingSpec
-        reKind (fromLeft first) `shouldBe` KLlm
-        ckptVal <- lookupCachedResult store (agentCheckpointKey "step-key-fixed")
-        ckptVal `shouldSatisfy` isJust
-        let resumeEnv = agentEnv True
-        -- Drop intra-step model caches for completed rounds; resume must still
-        -- succeed by jumping to the checkpoint rather than replaying round 0.
-        deleteCachedResult store (modelSubKey resumeEnv primingSpec (asTools primingSpec) [UserTurn (asPrompt primingSpec)] 0)
-        case ckptVal >>= decodeCheckpointForTest of
-          Just msgsAtRound2 ->
-            deleteCachedResult store (modelSubKey resumeEnv primingSpec (asTools primingSpec) (init (init msgsAtRound2)) 1)
-          Nothing -> expectationFailure "checkpoint missing after partial agent run"
-        resumed <- runAgent resumeEnv resumeSpec
-        resumed `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 3)])
-        lookupCachedResult store (agentCheckpointKey "step-key-fixed") `shouldReturn` Nothing
 
   describe "skill loading in agent loop (§6.7)" $ do
     it "A47: load-skill injects instruction content and is idempotent" $
@@ -215,36 +168,6 @@ spec = describe "Agent loop (§6.1)" $ do
         let toolNames = map toolDefName (head requests).reqTools
         sanitizeToolName fixShellQ `elem` toolNames `shouldBe` True
 
-    it "A49: resume restores loaded skills without re-dispatching load-skill" $
-      withSkillAgent $ \tp store tracer usageSeam skillState -> do
-        let primingSpec = (skillToolboxSpec crashAfterSkillLoads) {asMaxRounds = 4}
-            agent resume = skillAgentEnv store tracer usageSeam resume (\_ _ _ -> pure (Right (record []))) skillState tp
-        first <- runAgent (agent False) primingSpec
-        reKind (fromLeft first) `shouldBe` KLlm
-        ckptVal <- lookupCachedResult store (agentCheckpointKey "step-key-fixed")
-        ckptVal `shouldSatisfy` isJust
-        case ckptVal >>= decodeCheckpointSkillIds of
-          Just (active, loaded) -> do
-            "skills/fix-shell" `elem` active `shouldBe` True
-            "skills/shell-guide" `elem` loaded `shouldBe` True
-          Nothing -> expectationFailure "checkpoint missing skill ids"
-        resumedReqs <- newIORef ([] :: [ChatRequest])
-        let resumeGw =
-              gatewayOf $ \req -> do
-                modifyIORef' resumedReqs (req :)
-                let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
-                pure $
-                  if toolRounds >= 2
-                    then Right (textResp "done")
-                    else Left (NetworkError "resume expected skill loads in checkpoint")
-            resumeSpec = skillToolboxSpec resumeGw
-        resumed <- runAgent (agent True) resumeSpec
-        resumed `shouldBe` Right (record [("text", VString "done"), ("rounds", VInt 3)])
-        requests <- readIORef resumedReqs
-        case requests of
-          (req : _) ->
-            sanitizeToolName fixShellQ `elem` map toolDefName req.reqTools `shouldBe` True
-          [] -> expectationFailure "expected resumed model request with expanded tools"
 
   describe "coding loop end-to-end (§6.2, §6.3, A26)" $
     it "reacts to a failing exec by editing a file and re-running until it passes" $

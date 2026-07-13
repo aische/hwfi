@@ -2199,12 +2199,21 @@ Every run has a `run id` (ULID). Run artifacts are stored under
 
 ```
 run.json          # run metadata: project hash, entrypoint, inputs, status
-steps/
-  <step-key>.json # one file per completed cacheable step
+machine.json      # v2 machine snapshot (cursor + frames); see execution-model.md
 trace.jsonl       # append-only event log
 ```
 
+The v2 runtime (M6+) does **not** persist `steps/<step-key>.json` cache files.
+Resume loads `machine.json` and continues via `stepMachine` (§8.2).
+
+Author-facing guide: [caching-and-resume.md](caching-and-resume.md).
+
 ### 8.1 Step-key hashing
+
+Step-keys and Merkle fingerprints remain part of **static classification** at
+check time (`classifyCacheable`, callee invalidation, §5.6). They are emitted
+on trace events for observability but are **not** used to skip execution on
+resume in the v2 runtime.
 
 ```
 step-key = hash( qname,
@@ -2282,103 +2291,48 @@ units are cached instead (§8.2.1).
 
 Author-facing guide: [caching-and-resume.md](caching-and-resume.md).
 
-- Cacheable steps: skipped on resume if their `step-key` has a persisted
-  result. A skipped step emits **no new trace events**; its original
-  events from the earlier attempt remain in `trace.jsonl` and continue to
-  represent it (see §8.3.5).
-- Non-cacheable steps: always re-executed. Rationale: their whole purpose
-  is to observe the current trace or environment, so replaying with cached
-  output would defeat the point.
-- A step is atomic: partial LLM output is not resumed mid-call. A step
-  whose `StepStart` was written but which crashed before a terminal event
-  has no persisted result, so it is re-executed on resume.
+- **Machine snapshot.** After each completed transition (and on step-batch
+  pause), the runtime writes `machine.json` — cursor (`StmtPath`), frames,
+  bindings, `current` (agent / `par` / confirm), and status. `hwfi continue`
+  / `hwfi step` reload this snapshot and call `stepMachine` until the
+  requested stop condition.
+- **Project staleness.** Continue is refused when `project_hash` in `run.json`
+  differs from the current project directory hash; start a new run id.
+- **No step-key skip.** Completed work is represented in the snapshot; there
+  is no lookup of `steps/<step-key>.json` on resume (M6).
+- A transition is atomic: partial LLM output is not resumed mid-call unless
+  the agent snapshot says otherwise (§8.2.1).
 - On resume the runtime appends one `Resumed` marker (§8.3.2) before any
   new events, then continues numbering `seq` from the last value + 1.
 - A run is resumable if `run.json.status ∈ {running, crashed, aborted}`.
 - **Crash handling.** Typed `RuntimeError` values end a run deliberately
   (`run-end` with `status: aborted`, `run.json.status: aborted`). An
-  **unexpected synchronous exception** (provider library fault, aeson bug,
-  unhandled I/O, etc.) must also be handled deliberately: emit a terminal
-  `error` event (`kind: internal`), append `run-end` with `status: crashed`,
-  set `run.json.status` to `crashed`, then rethrow or exit. A run must not
-  be left at `status: running` with no `run-end` after a crash. `crashed`
-  runs remain resumable like `aborted` ones.
+  **unexpected synchronous exception** must emit a terminal `error` event
+  (`kind: internal`), append `run-end` with `status: crashed`, set
+  `run.json.status` to `crashed`, then exit. `crashed` runs remain resumable
+  like `aborted` ones.
 
 **Durable-workspace invariant.** Resume treats the workspace directory as
-**durable state carried over from the interrupted attempt**. A cache hit
-therefore means "this step's effect is already present in the workspace"
-(for a mutation like `write-file`/`edit-file`/`move-file`/`exec`) or "this
-observation was valid as of the interrupted attempt" (for a read like
-`read-file`/`grep`). Consequently:
+**durable state carried over from the interrupted attempt**. Transitions
+already completed before the snapshot was written are not re-applied; a
+transition interrupted mid-flight is re-run from the snapshot. If the workspace
+is mutated out-of-band between attempts, reads may no longer match reality —
+the snapshot does not encode live file contents.
 
-- A cached **mutating** step is skipped and its effect is **not
-  re-applied** — this is exactly why A4 (a marker-writing step must not
-  double-write on resume) holds, and it extends unchanged to the new
-  mutation builtins (§6.2) and to `exec` (§6.3).
-- A cached **read/exec** step replays its recorded result rather than
-  re-reading/re-running, so an agent loop follows the same branch
-  deterministically (§8.2.1).
-- The step-key hashes arguments and the ctx projection, **not** the live
-  contents of the workspace. If the workspace is mutated out-of-band
-  between the interrupted attempt and `hwfi resume`, cached reads/execs may
-  no longer match reality. This is the same, already-documented assumption
-  that governs `read-file` today; it is a property of content-addressing
-  by inputs, not a new risk introduced by mutation/exec.
+**`while` predicate pinning (§4.3.5).** Predicate `continue`/`reason` for
+iteration `i` is recorded as a `while-pred` trace event (with `decision_key`).
+On resume, if that decision is already present, the predicate sub-workflow for
+iteration `i` is not re-invoked and the event is not re-emitted.
 
-### 8.2.1 Intra-step caching of agent loops
+### 8.2.1 Agent loop resume (v2)
 
-An agent step is non-cacheable as a whole (§8.1), but re-running the
-**entire** loop on resume — re-issuing every model call (cost) and
-re-executing every tool call (side effects like `builtin/write-file`) —
-is unacceptable. Therefore the loop's internal units are **individually
-content-addressed and cached**, reusing the existing store (`RunStore`'s
-`cacheStepResult` / `lookupCachedResult`; the sub-keys are just more
-entries under `steps/`, so no new storage layer is needed). This is a
-requirement, not an optimization.
+An agent step is non-cacheable as a whole (§8.1). In the v2 runtime, resume
+does **not** replay model/tool sub-keys from `steps/`. Instead, `machine.json`
+stores `CurAgent` state (round index, messages, pending tool calls, etc.) and
+`stepMachine` continues the loop from that snapshot. Mid-round resume re-runs
+the interrupted transition if it had not completed.
 
-Two kinds of unit are cached under the enclosing agent step-key:
-
-- **Tool calls** (each model-chosen call is a nested step, §6.1.2):
-  `hash(agent-step-key, round-index, call-index-in-round,
-  callee-fingerprint, canonical(resolved-args))`. `call-index-in-round`
-  disambiguates multiple tool calls in one assistant turn (provider order
-  is stable). `submit` is just another tool call and needs no special
-  handling.
-- **Model calls** (each round's generation):
-  `hash(agent-step-key, round-index, canonical(messages-so-far),
-  model-catalog-fingerprint, advertised-tools-fingerprint)`. The
-  `messages-so-far` already encode every prior round's assistant turn and
-  tool results, so the key chain is self-consistent.
-- **`advertised-tools-fingerprint`** incorporates the ordered
-  `active-tool-ids` at the start of the round (baseline `tools` plus any
-  callable skills loaded via `builtin/load-skill`, §6.1.6). When the active
-  set changes between rounds, subsequent model-call sub-keys change
-  accordingly — a round cached with three tools must not replay as if five
-  were advertised.
-
-**Canonicalization caveat.** Sub-keys hash the **actual** message content
-and resolved args (as stored in `steps/*.json`, non-redacted — §6.1.2),
-never the trace's redacted form, and use `canonicalJson` so turn ordering,
-tool-result serialisation, and JSON field order do not perturb the key. Any
-instability here silently turns cache hits into misses on resume.
-
-**Resume behaviour.** The loop re-drives from round 0 but consults the
-cache (only on resume, per §8.2):
-
-- Each model call: on a hit, reuse the cached assistant turn *including the
-  tool calls it chose*, without paying the provider — this makes the
-  nondeterministic replay follow the **same branch** deterministically.
-- Each tool call: on a hit, reuse the cached non-redacted result without
-  re-running its side effects; the model still receives the redacted tool
-  message (§6.1.2).
-- A miss anywhere re-runs from that point; every downstream sub-key then
-  changes and re-runs too — exactly the existing "cacheable ⇒ skip, else
-  re-run" rule applied one level down.
-
-Because a cached replay does no provider calls and no side effects (only
-re-walks the loop, hashing and looking up), serialising the loop's
-in-memory state to disk is a *possible later optimization*, not a
-prerequisite for correct, cheap resume.
+Legacy v1 intra-step sub-key caching (`steps/*.json`) is removed (M6).
 
 ### 8.3 Trace event schema
 
@@ -2789,20 +2743,16 @@ hwfi run     <project-dir> --workspace <dir>
              [--input <k>=<v>]... [--input <k>=@<file.json>]...
              [--input-json <file.json>]
              [--entry <qname>]
-hwfi resume  <workspace-dir> <run-id>
+hwfi resume  <workspace-dir> <run-id>          # alias for continue
+hwfi continue <workspace-dir> <run-id>         # resume from machine.json
+hwfi step    <workspace-dir> <run-id>          # one transition batch, then pause
 hwfi show    <workspace-dir> <run-id>          # pretty-print trace + usage
-hwfi cache clear <workspace-dir> <run-id>      # drop all steps/*.json cache
-hwfi cache invalidate <workspace-dir> <run-id>
-             (--step-key <hex> | --from-step <qname>#<step-id>)
 ```
 
 `hwfi show` prints the run's accumulated `usage` (tokens and `cost_usd`) from
-`run.json` after the trace. `hwfi cache clear` deletes every file under
-`<workspace>/.hwfi/runs/<run-id>/steps/` so the next `hwfi resume` re-executes
-cacheable steps (§13.1.4). `hwfi cache invalidate` drops only the chosen step
-and later cached results in trace order, leaving upstream `steps/` entries
-intact (§13.1.4). Trace events for cacheable completions carry optional
-`step_key`; `while-pred` events carry `decision_key`.
+`run.json` after the trace. Resume continues from `machine.json` (§8.2); there
+is no `steps/` cache or `hwfi cache *` commands in the v2 runtime (M6).
+`while-pred` events may carry `decision_key` for predicate pinning (§4.3.5).
 
 - `hwfi check` performs parse + type-check only, exits non-zero on any
   error.
@@ -2980,12 +2930,8 @@ A41a. `builtin/json-values` returns `{ ok = true, values = [...] }` for a
 A42. `builtin/concat` joins a list of strings into `text`.
 A43. `builtin/log` emits a `workflow-log` trace event with redacted `fields`
     and is re-executed on resume (non-cacheable).
-A44. `hwfi cache clear` removes cached step results so a subsequent
-    `hwfi resume` re-runs previously cached steps.
-A44a. `hwfi cache invalidate --from-step <qname>#<step-id>` removes cached
-    results from the first matching step onward in trace order, preserving
-    upstream cache entries; `--step-key` accepts a full or prefix key from
-    trace `step_key` / `decision_key` fields.
+A44. *(removed M6)* — v2 resume uses `machine.json`; no step cache to clear.
+A44a. *(removed M6)* — use a new `run-id` to force a full retry.
 A45. `builtin/discover-skills` returns catalog metadata for skills under
     `skills/` filtered by `query`, `kinds`, and `limit`; empty catalog
     yields `ok = true` and `skills = []`.
@@ -3102,12 +3048,10 @@ Merkle `callee-fingerprint` in the step-key (§8.1) changes when any transitive
 callee changes, so resume after an edit does not silently reuse stale step
 files for changed code.
 
-**Implemented:** `hwfi cache clear` drops all files under `steps/` for a run.
-`hwfi cache invalidate` drops cached steps from a given `step_key` or
-`qname#step-id` onward in trace order (finer than `cache clear`), including
-agent intra-step sub-caches when an agent step falls in the suffix. Trace
-events record `step_key` / `decision_key` for this policy. Author guide:
-[caching-and-resume.md](caching-and-resume.md).
+**Implemented (M6):** Step-key cache and `hwfi cache *` removed. Resume uses
+`machine.json`; project-hash staleness replaces Merkle step-file invalidation
+for execution. Static fingerprints remain for check-time classification (§8.1).
+Author guide: [caching-and-resume.md](caching-and-resume.md).
 
 **Documented policy:**
 

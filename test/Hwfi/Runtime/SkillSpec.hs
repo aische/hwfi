@@ -20,7 +20,7 @@ import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (StepRef (..))
-import Hwfi.Runtime.Executor (RunResult (..), performRun)
+import Hwfi.Runtime.MachineRun (RunResult (..), performRun)
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),

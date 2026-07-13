@@ -9,13 +9,10 @@
 -- hwfi step     \<workspace-dir> \<run-id> [--approve]
 -- hwfi resume   \<workspace-dir> \<run-id>   (alias for continue)
 -- hwfi show    \<workspace-dir> \<run-id>
--- hwfi cache clear \<workspace-dir> \<run-id>
--- hwfi cache invalidate \<workspace-dir> \<run-id> (--step-key \<hex> | --from-step \<qname>#\<step-id>)
 -- @
 --
 -- @hwfi check@ parses and type-checks the project (spec §9, §7.3, A1/A2).
--- @run@, @continue@, @step@, @resume@ (alias), @show@, @cache clear@, and
--- @cache invalidate@ are fully implemented.
+-- @run@, @continue@, @step@, @resume@ (alias), and @show@ are fully implemented.
 module Hwfi.Cli
   ( Command (..),
     CheckOpts (..),
@@ -67,14 +64,8 @@ import Hwfi.Runtime.ModelCatalog
     renderCatalogError,
     validateProviderKeys,
   )
-import Hwfi.Runtime.CacheInvalidate
-  ( InvalidateFrom (..),
-    invalidateRunCacheFrom,
-    parseStepRef,
-  )
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
-    clearRunStepCache,
     openRunStore,
     phaseText,
     readRunMeta,
@@ -106,8 +97,6 @@ data Command
   | Step StepOpts
   | Resume ResumeOpts
   | Show ShowOpts
-  | CacheClear CacheClearOpts
-  | CacheInvalidate CacheInvalidateOpts
   deriving stock (Eq, Show)
 
 -- | @hwfi check \<project-dir>@.
@@ -155,19 +144,6 @@ data ShowOpts = ShowOpts
   }
   deriving stock (Eq, Show)
 
--- | @hwfi cache clear \<workspace-dir> \<run-id>@.
-newtype CacheClearOpts = CacheClearOpts
-  { cacheClearRun :: (FilePath, Text)
-  }
-  deriving stock (Eq, Show)
-
--- | @hwfi cache invalidate \<workspace-dir> \<run-id>@ (§13.1.4).
-data CacheInvalidateOpts = CacheInvalidateOpts
-  { cacheInvalidateRun :: (FilePath, Text),
-    cacheInvalidateFrom :: InvalidateFrom
-  }
-  deriving stock (Eq, Show)
-
 -- | A single @--input@ argument. @k=v@ binds a string; @k=@file.json@ reads
 -- a JSON value from a file (spec §9).
 data InputArg
@@ -208,16 +184,6 @@ commandParser =
         <> command "step" (info (Step <$> stepOpts) (progDesc "Advance a v2 run until the next halt point"))
         <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume an interrupted run (alias for continue)"))
         <> command "show" (info (Show <$> showOpts) (progDesc "Pretty-print a run's trace"))
-        <> command
-          "cache"
-          ( info
-              ( hsubparser
-                  ( command "clear" (info (CacheClear <$> cacheClearOpts) (progDesc "Drop all cached step results for a run"))
-                      <> command "invalidate" (info (CacheInvalidate <$> cacheInvalidateOpts) (progDesc "Drop cached steps from a step onward"))
-                  )
-              )
-              (progDesc "Manage run caches")
-          )
     )
 
 checkOpts :: Parser CheckOpts
@@ -261,33 +227,6 @@ showOpts =
     <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run")
     <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to display"))
 
-cacheClearOpts :: Parser CacheClearOpts
-cacheClearOpts =
-  CacheClearOpts
-    <$> ((,) <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run") <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id whose step cache to clear")))
-
-cacheInvalidateOpts :: Parser CacheInvalidateOpts
-cacheInvalidateOpts =
-  CacheInvalidateOpts
-    <$> ((,) <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run") <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id whose step cache to invalidate from")))
-    <*> invalidateFromParser
-
-invalidateFromParser :: Parser InvalidateFrom
-invalidateFromParser =
-  (FromStepKey . T.pack <$> strOption (long "step-key" <> metavar "HEX" <> help "Step-key from trace `step_key` / `decision_key` field"))
-    <|> option
-            (eitherReader parseFromStep)
-            ( long "from-step"
-                <> metavar "QNAME#STEP-ID"
-                <> help "Invalidate from the first matching step onward"
-            )
-
-parseFromStep :: String -> Either String InvalidateFrom
-parseFromStep raw =
-  case parseStepRef (T.pack raw) of
-    Left err -> Left (T.unpack err)
-    Right (q, sid) -> Right (FromStepRef q sid)
-
 -- | Parse @argv@ and dispatch. Entry point for the executable.
 defaultMain :: IO ()
 defaultMain = execParser commandParserInfo >>= dispatch
@@ -301,8 +240,6 @@ dispatch = \case
   Step opts -> runStep opts
   Resume opts -> runResume opts
   Show opts -> runShow opts
-  CacheClear opts -> runCacheClear opts
-  CacheInvalidate opts -> runCacheInvalidate opts
 
 -- | Run @hwfi check@ (spec §9): parse the project, require a parseable
 -- @model-catalog.json@ (§7.3), and type-check. Prints nothing and exits 0 on
@@ -511,39 +448,6 @@ runShow opts = do
               Right m -> [renderUsageSummary m.rmUsage, ""]
               Left _ -> []
       TIO.putStr (T.unlines (metaLines <> map renderEvent events <> summary))
-
--- | Drop every file under @steps/@ for a run so @hwfi resume@ re-executes
--- cacheable steps (§13.1.4 subset).
-runCacheClear :: CacheClearOpts -> IO ()
-runCacheClear opts = do
-  let (wsDir, runId) = cacheClearRun opts
-  workspace <- newWorkspace wsDir
-  eStore <- openRunStore (workspaceRoot workspace) runId
-  case eStore of
-    Left e -> failMsgs ["error: " <> e]
-    Right store -> do
-      n <- clearRunStepCache store
-      TIO.putStrLn ("cleared " <> T.pack (show n) <> " cached step(s) for run " <> runId)
-
--- | Drop cached step results from a step onward in trace order (§13.1.4).
-runCacheInvalidate :: CacheInvalidateOpts -> IO ()
-runCacheInvalidate opts = do
-  let (wsDir, runId) = cacheInvalidateRun opts
-  workspace <- newWorkspace wsDir
-  eStore <- openRunStore (workspaceRoot workspace) runId
-  case eStore of
-    Left e -> failMsgs ["error: " <> e]
-    Right store -> do
-      outcome <- invalidateRunCacheFrom store (cacheInvalidateFrom opts)
-      case outcome of
-        Left err -> failMsgs ["error: " <> err]
-        Right n ->
-          TIO.putStrLn
-            ( "invalidated "
-                <> T.pack (show n)
-                <> " cached step(s) from the chosen point onward for run "
-                <> runId
-            )
 
 -- Input assembly (§9) --------------------------------------------------------
 

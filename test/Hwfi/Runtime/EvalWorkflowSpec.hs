@@ -27,7 +27,7 @@ import Hwfi.Runtime.Agent
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (RuntimeError (..), StepRef (..))
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
-import Hwfi.Runtime.Executor (RunResult (..), performRun)
+import Hwfi.Runtime.MachineRun (RunResult (..), performRun)
 import Hwfi.Runtime.RunStore (RunStore, createRunStore)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (Tracer, newTracer)

@@ -4,22 +4,19 @@ Last updated: 2026-07-13
 
 ## Current focus
 
-**v2 runtime (cursor + frames)** — M4 CLI cutover done. Finish the v2 tranche:
-**M6** (drop legacy cache-as-resume, single resume story, spec §8). Design:
-[execution-model.md](execution-model.md).
+**v2 runtime (cursor + frames)** — M6 done: single resume story via
+`machine.json` + `MachineRun`. Design: [execution-model.md](execution-model.md).
 
-**M5** (DB / server `ProjectStore`) is deferred — optional, not blocking local
-filesystem mode.
-
-Legacy v1.1 cache-as-resume `Executor.performRun` remains for direct test use
-until M6.
+**M5** (DB / server `ProjectStore`) remains deferred — optional, not blocking
+local filesystem mode.
 
 ## Done recently
 
-- **M4** — `MachineRun`, `machine.json`, CLI `continue` / `step` / `resume`.
+- **M6** — Removed step-key cache path, `Executor`, `hwfi cache *`; resume via
+  snapshot; while-pred pinning from trace; trace parity (if/try/par/while).
+- **M4** — CLI `continue` / `step` / `resume`; `MachineRun`.
 - **M3** — real `par`, cooperative confirm, per-branch snapshots.
 - **M2** — agent `CurAgent` stepping; snapshot resume.
-- **M1** — sequential `stepMachine`, control flow, `StepEnv`, `runMachine`.
 
 ## Blockers
 
@@ -27,4 +24,4 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) → **M6** legacy cutover and resume test migration.
+[TASKS.md](TASKS.md) — M5 (optional) or v1.1 backlog.

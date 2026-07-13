@@ -5,7 +5,7 @@ import Data.Text qualified as T
 import Hwfi.Ast.Name (Ident, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Parse.Project (loadProject)
-import Hwfi.Runtime.Executor (RunResult (..))
+import Hwfi.Runtime.RunCommon (RunResult (..))
 import Hwfi.Runtime.MachineRun (performContinueToEnd, performRun)
 import Hwfi.Runtime.RunStore (hasMachineSnapshot, openRunStore, rsRunDir)
 import Hwfi.Runtime.Value (RValue (..))

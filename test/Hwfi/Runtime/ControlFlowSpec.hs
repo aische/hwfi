@@ -15,7 +15,7 @@ import Hwfi.Check.Error (TypeError (..), TypeErrorKind (..))
 import Hwfi.Compat (ModelConfig (..))
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), reKind)
-import Hwfi.Runtime.Executor (RunResult (..), performResume, performRun)
+import Hwfi.Runtime.MachineRun (RunResult (..), performContinueToEnd, performRun)
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.RunStore (RunPhase (..), RunStore, openRunStore, rsTracePath, updateRunPhase)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), eventFromJson)
@@ -96,10 +96,11 @@ runProjectWithSubs mainMd subs inputs k =
       TIO.writeFile (ws </> "good.txt") "ok\n"
       tp <- loadChecked proj
       workspace <- newWorkspace ws
+      let wsDir = workspaceRoot workspace
       res <- performRun tp workspace Map.empty Map.empty proj "run-1" mainQ inputs
       case res of
         Left e -> error ("run failed: " <> T.unpack e)
-        Right rr -> k rr ws
+        Right rr -> k rr wsDir
 
 checkOnlyWithSubs :: Text -> Map.Map Text Text -> IO (Either [TypeError] TypedProject)
 checkOnlyWithSubs mainMd subs =
@@ -125,11 +126,12 @@ runThenResumeWithSubsModels mainMd subs inputs models1 models2 k =
       writeProjectWithSubs proj mainMd subs
       tp <- loadChecked proj
       workspace <- newWorkspace ws
+      let wsDir = workspaceRoot workspace
       r1 <- expectRun_ =<< performRun tp workspace models1 Map.empty proj "run-1" mainQ inputs
       Right store <- openRunStore (workspaceRoot workspace) "run-1"
       updateRunPhase store PhaseAborted
-      r2 <- expectRun_ =<< performResume tp workspace models2 Map.empty "run-1"
-      k r1 r2 ws
+      r2 <- expectRun_ =<< performContinueToEnd tp workspace models2 Map.empty "run-1" False
+      k r1 r2 wsDir
   where
     expectRun_ = either (\e -> error ("run failed: " <> T.unpack e)) pure
 
@@ -739,7 +741,7 @@ runAbortAfter mainMd inputs truncate_ k = do
       Right store <- openRunStore (workspaceRoot workspace) "run-1"
       truncate_ store
       updateRunPhase store PhaseAborted
-      r2 <- expectRun =<< performResume tp workspace Map.empty Map.empty "run-1"
+      r2 <- expectRun =<< performContinueToEnd tp workspace Map.empty Map.empty "run-1" False
       k r1 r2
 
 expectRun :: Either Text RunResult -> IO RunResult

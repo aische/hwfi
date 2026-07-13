@@ -1,103 +1,69 @@
-# Caching and resume — author guide
+# Resume and persistence — author guide
 
-hwfi persists every run under `<workspace>/.hwfi/runs/<run-id>/`. Resume reuses
-**cached step results** so completed work is not repeated. This guide explains
-what is cached, what is not, and the surprises that matter when writing
-workflows and tutorials.
+hwfi persists every run under `<workspace>/.hwfi/runs/<run-id>/`. Resume
+continues from the **machine snapshot** (`machine.json`) plus the append-only
+trace — not from a content-addressed step cache.
 
-Normative detail: spec §8.1–§8.3.
+Normative detail: spec §8, [execution-model.md](execution-model.md).
 
-## Step cache basics
+## Run artifacts
 
-A **cacheable** step computes a **step-key** from:
-
-- the callee qname and `@step-id`
-- evaluated argument values (secrets hashed, not logged)
-- stable `ctx` fields the step references
-- the callee's Merkle **fingerprint** (code edits invalidate downstream cache)
-
-If a matching file exists under `steps/<step-key>.json`, resume **skips** the
-step: no new trace events, no re-execution.
-
-**Non-cacheable** steps always re-run on resume:
-
-- `builtin/introspect`
-- `builtin/llm-agent` / `builtin/llm-agent-object` (the step as a whole)
-- `builtin/eval-workflow`, `builtin/list-runs`, `builtin/read-run-trace`,
-  `builtin/trace-slice`
-- `builtin/log`
-- any step whose arguments reference volatile `ctx` fields (`ctx.trace`,
-  `ctx.run.started_at`, `ctx.run.usage`)
-
-## Workspace vs cache
-
-The **workspace** is durable state across a run and resume. The **step cache**
-stores *results*, not file contents.
-
-| Situation | Behaviour |
-|-----------|-----------|
-| `write-file` / `edit-file` completed and cached | File already on disk; write not re-applied |
-| `read-file` cached | Returns cached text; does **not** re-read disk |
-| You edit a workspace file **outside** the workflow | Cached `read-file` may return stale content |
-| You edit workflow **source** | Fingerprints change; affected steps re-run |
-
-**Rule:** treat the workspace as the source of truth for mutations; treat the
-cache as memoization of step *outputs* for unchanged code and inputs.
-
-To force recomputation during development:
-
-```bash
-# Drop every cached step (full wipe)
-hwfi cache clear <workspace> <run-id>
-
-# Drop from a step onward (finer; §13.1.4)
-hwfi cache invalidate <workspace> <run-id> --from-step workflows/main#read
-hwfi cache invalidate <workspace> <run-id> --step-key <hex-prefix>
+```
+run.json          # metadata: project hash, entrypoint, inputs, status
+machine.json      # v2 cursor + frames snapshot (written after each transition)
+trace.jsonl       # append-only event log
 ```
 
-`cache invalidate` uses `step_key` / `decision_key` fields recorded in
-`trace.jsonl` (visible in `hwfi show` as a truncated `key=` suffix). Upstream
-cache entries are preserved; only the chosen step and everything after it in
-trace order are removed. Agent intra-step caches are purged when invalidating
-from an agent step onward.
+There is no `steps/` directory in the v2 runtime.
 
-Or start a fresh run id.
+## How resume works
+
+1. `hwfi run` (or `hwfi continue` / `hwfi resume`) loads `machine.json` if
+   present and the run is resumable (`run.json.status ∈ {running, crashed,
+   aborted}`).
+2. The runtime checks `project_hash` in `run.json` against the current project.
+   If the project changed since the run started, continue is refused — start a
+   new run id.
+3. Execution continues via `stepMachine`: the same cursor, frames, bindings,
+   and agent/`par` state as when the snapshot was written.
+4. One `Resumed` event is appended to `trace.jsonl`; `seq` continues from the
+   last value + 1.
+
+**Completed steps are not skipped by step-key lookup.** If a transition finished
+before pause/crash, the snapshot reflects that progress; if it did not, the
+transition is re-run.
+
+## Workspace durability
+
+The **workspace** is durable across a run and resume. Side effects from
+completed transitions (writes, exec, edits) remain on disk. Resume does not
+re-apply work that is already represented in the machine snapshot.
+
+| Situation | Behaviour on resume |
+|-----------|---------------------|
+| Body iteration completed (foreach/par/while) | Snapshot holds progress; iteration not re-run |
+| Step mid-flight when killed | Transition re-run from snapshot |
+| Workspace edited out-of-band | Reads see live disk; snapshot does not encode file contents |
 
 ## Agent steps
 
-An agent step (`builtin/llm-agent`) is a **non-cacheable black box** at the
-workflow level. Inside it, each **model call** and **tool call** has its own
-sub-key under the agent step-key.
+Agent loops (`builtin/llm-agent`) are resumed via **`CurAgent` state in
+`machine.json`**, not via per-round sub-keys under `steps/`. Mid-loop resume
+continues the same round/tool sequence from the persisted agent state.
 
-On **resume**:
+## `while` predicate pinning
 
-1. The agent step re-executes (re-walks the loop).
-2. Cached model rounds replay without calling the provider.
-3. Cached tool calls replay without re-running side effects.
-4. A miss anywhere re-runs from that point forward.
+Predicate `continue`/`reason` decisions are recorded as `while-pred` trace events
+(with optional `decision_key`). On resume, if a decision for iteration `i` is
+already in the trace, the predicate sub-workflow for that iteration is not
+re-invoked (§4.3.5). This matters when the predicate contains non-deterministic
+steps such as `builtin/llm-agent`.
 
-This is why a resumed coding agent does not re-pay LLM calls or re-apply edits
-it already made — see `examples/coding/README.md`.
+## Step-key hashing (static only)
 
-Tool results are stored in the cache as **actual values**; traces redact
-secrets (§5.5).
-
-## Control-flow scopes
-
-`foreach`, `par`, and `while` fold an iteration/branch prefix into step-keys
-(`#i/…`, `#i/p/`, `#i/b/`). Each iteration's steps cache independently on
-resume.
-
-`while` predicate decisions are pinned per iteration (`while-pred` events) so
-resume does not re-invoke the predicate workflow when the decision is cached.
-
-## Environment and inputs
-
-- Inputs are fixed for a run (`run.json`).
-- Whitelisted `project.json` `env` variables must be **present at startup**
-  (strict presence, §5.7). There is no `Optional<T>` in v1.
-- Changing `model-catalog.json` invalidates one-shot LLM step-keys that name
-  the affected catalog entry.
+The checker still computes **step-keys** and **fingerprints** for cacheability
+classification (§8.1) and Merkle invalidation when callee code changes. These
+hashes are **not** used to skip execution on resume in the v2 runtime.
 
 ## Inspecting runs
 
@@ -105,29 +71,16 @@ resume does not re-invoke the predicate workflow when the decision is cached.
 cabal run hwfi -- show <workspace> <run-id>
 ```
 
-Shows the trace with secrets redacted. Step results under `steps/` hold actual
-(non-redacted) values for resume.
+Shows the trace with secrets redacted.
 
-## When automatic invalidation is enough
+## CLI
 
-Merkle fingerprints handle **declaration edits** transitively. You do **not**
-need manual cache busting when you change workflow/tool markdown.
+```bash
+hwfi run <project-dir> <workspace-dir> <run-id> ...
+hwfi continue <workspace-dir> <run-id>    # run to completion from snapshot
+hwfi step <workspace-dir> <run-id>      # one transition batch, then pause
+hwfi resume ...                         # alias for continue
+```
 
-You **may** need manual busting when:
-
-- workspace files changed but step inputs and code did not
-- you are re-running tutorial steps against an old run dir
-- you suspect a corrupted `steps/` entry after a crash
-- you want to re-run only a suffix of a long workflow (`hwfi cache invalidate`)
-
-| Situation | Automatic (fingerprints) | Manual |
-|-----------|-------------------------|--------|
-| Edited workflow/tool markdown | Yes — callee fingerprint changes | Not needed |
-| Edited workspace file outside workflow | No — `read-file` args unchanged | `cache invalidate` or `cache clear` |
-| Changed `model-catalog.json` (one-shot LLM) | Yes — catalog fp in step-key | Not needed for agent inner rounds* |
-| Re-run one step onward on same run dir | No | `cache invalidate --from-step …` |
-| Full dev reset | No | `cache clear` or new run id |
-
-\* Agent steps re-execute on resume; intra-step model/tool caches are namespaced
-under the agent `step_key` and are purged by `cache invalidate` when the agent
-step is in the invalidated suffix.
+`hwfi cache clear` and `hwfi cache invalidate` were removed with the v2
+cutover (M6). To force a clean retry, use a new `run-id`.

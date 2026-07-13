@@ -29,7 +29,7 @@ import Hwfi.Ast.Name (Ident)
 import Hwfi.Ast.Step (Binder (..), LoopStmt (..), ParOnError (..), ParOpts (..))
 import Hwfi.Ast.Step qualified as Ast
 import Hwfi.Runtime.Error (RuntimeError, internalError)
-import Hwfi.Runtime.Executor (defaultParallelism)
+import Hwfi.Runtime.RunCommon (defaultParallelism)
 import Hwfi.Runtime.Machine
 import Hwfi.Runtime.MachinePath (StmtContext (..), enterChildBlock, resolveStmtPath)
 import Hwfi.Runtime.StepEnv (ConfirmPolicy (..), RunWorkflowSeam, StepEnv (..), StepOutcome (..))

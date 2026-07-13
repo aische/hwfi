@@ -2,13 +2,6 @@
 
 Active work only. Move completed sections to `docs/log/archive/` weekly.
 
-## Now — v2 runtime (cursor + frames)
-
-Design: [execution-model.md](execution-model.md).
-
-- [ ] **M6** Drop step-key cache path; migrate resume tests to `MachineRun`;
-  rewrite spec §8 and caching docs; remove legacy executor from default path
-
 ## Later — server / DB (optional)
 
 Deferred until v2 cutover is complete; may not ship.
@@ -29,19 +22,17 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **M6 (2026-07-13):** Dropped step-key cache resume (`Executor`, `steps/`,
+  `hwfi cache clear|invalidate`); single v2 path via `MachineRun` +
+  `machine.json`; migrated tests; rewrote spec §8 / caching docs; while-pred
+  replay from trace; control-flow trace parity.
 - **M4 (2026-07-13):** CLI `step` / `continue` (+ `resume` alias); v2 default
   runtime via `MachineRun` — `machine.json` snapshot persistence, project-hash
-  staleness gate, `performContinueToEnd` / `performStep`; legacy
-  `Executor.performResume` replaced on CLI path.
-- **M3 (2026-07-13):** Real `par` + cooperative confirm + per-branch snapshots —
-  `MachinePar`, `CurParPool`, `FrPar` scheduler/drain/confirm; `MachineSpec` par
-  e2e/resume/confirm.
-- **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine` — `MachineAgent`;
-  snapshot resume; `seRunWorkflow` seam; `MachineSpec` agent e2e.
-- **M1 (2026-07-13):** Sequential `stepMachine` — dispatch, builtins,
-  sub-workflows, control flow; `StepEnv`, `runMachine`; `MachineSpec` file-only e2e.
-- **M0 (2026-07-13):** `Machine`, `MachinePath`, `MachineSnapshot`, `StepDriver`
-  stub; `MachineSpec` snapshot round-trip.
+  staleness gate, `performContinueToEnd` / `performStep`.
+- **M3 (2026-07-13):** Real `par` + cooperative confirm + per-branch snapshots.
+- **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine`; snapshot resume.
+- **M1 (2026-07-13):** Sequential `stepMachine`; control flow; `StepEnv`.
+- **M0 (2026-07-13):** `Machine`, `MachinePath`, `MachineSnapshot`, stub driver.
 
 Completed v1.1 author-capability items (9.9–9.14) and earlier milestones are
 archived in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).

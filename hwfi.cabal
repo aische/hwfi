@@ -66,13 +66,12 @@ library
         Hwfi.Project.Manifest
         Hwfi.Runtime.Agent
         Hwfi.Runtime.Builtins
-        Hwfi.Runtime.CacheInvalidate
         Hwfi.Runtime.Context
         Hwfi.Runtime.Error
         Hwfi.Runtime.Eval
         Hwfi.Runtime.EvalWorkflow
         Hwfi.Runtime.Exec
-        Hwfi.Runtime.Executor
+        Hwfi.Runtime.RunCommon
         Hwfi.Runtime.Machine
         Hwfi.Runtime.MachineAgent
         Hwfi.Runtime.MachineRun
@@ -162,7 +161,6 @@ test-suite hwfi-test
         Hwfi.Parse.TypeSpec
         Hwfi.Project.ManifestSpec
         Hwfi.Runtime.AgentSpec
-        Hwfi.Runtime.CacheInvalidateSpec
         Hwfi.Runtime.ControlFlowSpec
         Hwfi.Runtime.CrossRunTraceSpec
         Hwfi.Runtime.SkillSpec
@@ -170,7 +168,6 @@ test-suite hwfi-test
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec
-        Hwfi.Runtime.ExecutorSpec
         Hwfi.Runtime.MachineRunSpec
         Hwfi.Runtime.MachineSpec
         Hwfi.Runtime.GatewaysSpec

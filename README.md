@@ -18,7 +18,7 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
   (`llm-agent`, `llm-agent-object`)
 - Sandboxed file I/O, mutation tools, and allowlisted `exec`
 - Control flow: `if`/`else`, `foreach`, `par`, `while`, `try`/`catch`
-- Content-addressed step cache and `hwfi resume`
+- Machine snapshot resume via `hwfi continue` / `hwfi step`
 - Cross-run trace reading and skill extraction (Mode A)
 - Agent skill discovery and loading (`discover-skills`, `load-skill`) — §6.7
 
@@ -74,8 +74,6 @@ hwfi check <project-dir>
 hwfi run <project-dir> --workspace <dir> [--input K=V]... [--entry <qname>]
 hwfi resume <workspace-dir> <run-id>
 hwfi show <workspace-dir> <run-id>
-hwfi cache clear <workspace-dir> <run-id>
-hwfi cache invalidate <workspace-dir> <run-id> --from-step <qname>#<step-id>
 ```
 
 ## Examples
@@ -119,7 +117,7 @@ Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
 - [docs/workflow-reference.md](docs/workflow-reference.md) — author reference (write and run workflows)
 - [docs/spec.md](docs/spec.md) — normative specification
 - [docs/workflow-refs.md](docs/workflow-refs.md) — `ToolRef` / `WorkflowRef` patterns
-- [docs/caching-and-resume.md](docs/caching-and-resume.md) — cache semantics for authors
+- [docs/caching-and-resume.md](docs/caching-and-resume.md) — resume semantics for authors
 - [CHANGELOG.md](CHANGELOG.md) — release history
 - [docs/TASKS.md](docs/TASKS.md) — active backlog
 - [docs/STATUS.md](docs/STATUS.md) — current focus
@@ -130,7 +128,7 @@ See spec §13 and [docs/TASKS.md](docs/TASKS.md). Notable gaps:
 
 - No `Optional<T>` — whitelisted env vars are required at startup
 - `Bytes`-typed file I/O and `trace.jsonl` rotation (v1.1 backlog)
-- Step cache keys do not include workspace file contents
+- Step-keys classify cacheability at check time; resume uses `machine.json`
 
 For `ToolRef`/`WorkflowRef` patterns and scoping rules, see
 [docs/workflow-refs.md](docs/workflow-refs.md).

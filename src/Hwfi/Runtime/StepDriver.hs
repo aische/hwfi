@@ -57,7 +57,7 @@ import Hwfi.Runtime.Error
 import Hwfi.Runtime.Error qualified as Err
 import Hwfi.Runtime.Eval (EvalEnv (..), evalExpr)
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..))
-import Hwfi.Runtime.Executor (projectContentHash)
+import Hwfi.Runtime.RunCommon (projectContentHash)
 import Hwfi.Runtime.Machine
 import Hwfi.Runtime.MachineAgent (initAgentState, stepAgent)
 import Hwfi.Runtime.MachinePar
@@ -85,7 +85,8 @@ import Hwfi.Runtime.MachinePath
 import Hwfi.Runtime.RunUsage (runUsageToJson)
 import Hwfi.Runtime.StepEnv (ConfirmPolicy (..), RunWorkflowSeam, StepEnv (..), StepOutcome (..))
 import UnliftIO.Async (pooledForConcurrentlyN)
-import Hwfi.Runtime.Trace (EventBody (..), emit, snapshotEvents, snapshotJson)
+import Hwfi.Runtime.StepKey (computeWhileDecisionKey)
+import Hwfi.Runtime.Trace (EventBody (..), Tracer, TraceEvent (..), emit, snapshotEvents, snapshotJson)
 import Hwfi.Runtime.Usage (usRef)
 import Hwfi.Runtime.Value (RValue (..), RefKind (..), redactedJson, valueToJson)
 import Hwfi.Runtime.Workspace (workspaceRoot)
@@ -165,20 +166,44 @@ stepDraining env machine =
 
 stepRunning :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepRunning env machine =
-  case mCurrent machine of
-    CurReady -> stepFromReady env machine
-    CurDispatch step -> stepDispatch env machine step
-    CurAgent ag -> stepAgentTransition env machine ag
-    CurParPool -> stepParPool env machine
-    CurAwaitConfirm c ->
-      case seParBranchIndex env of
-        Just idx -> do
-          approved <- readIORef (seConfirmApprovals env)
-          if Set.member (idx, crStepId c) approved
-            then resumeApprovedConfirm env machine
-            else pure (Right (Stepped machine))
-        Nothing ->
-          pure (Right (StepHalted machine {mStatus = MsPaused (PauseAwaitingConfirm c)}))
+  maybeReplayPinnedWhilePred env machine >>= \case
+    Just outcome -> pure outcome
+    Nothing ->
+      case mCurrent machine of
+        CurReady -> stepFromReady env machine
+        CurDispatch step -> stepDispatch env machine step
+        CurAgent ag -> stepAgentTransition env machine ag
+        CurParPool -> stepParPool env machine
+        CurAwaitConfirm c ->
+          case seParBranchIndex env of
+            Just idx -> do
+              approved <- readIORef (seConfirmApprovals env)
+              if Set.member (idx, crStepId c) approved
+                then resumeApprovedConfirm env machine
+                else pure (Right (Stepped machine))
+            Nothing ->
+              pure (Right (StepHalted machine {mStatus = MsPaused (PauseAwaitingConfirm c)}))
+
+maybeReplayPinnedWhilePred :: StepEnv -> Machine -> IO (Maybe (Either RuntimeError StepOutcome))
+maybeReplayPinnedWhilePred env machine =
+  case mFrames machine of
+    FrWhile wf : rest
+      | wfPhase wf == WhileRunPred -> do
+          let q = spQName (wfWhilePath wf)
+          mPinned <- lookupPinnedWhilePred (seTracer env) q (wfLoopId wf) (wfIteration wf)
+          case mPinned of
+            Nothing -> pure Nothing
+            Just (cont, reason) -> do
+              let rest' = popWhileCalleeSeq wf rest
+                  machine' =
+                    machine
+                      { mFrames = FrWhile wf : rest',
+                        mPath = wfWhilePath wf,
+                        mScope = wfScope wf,
+                        mCurrent = CurReady
+                      }
+              Just <$> applyWhilePredDecision env machine' wf rest' cont reason
+    _ -> pure Nothing
 
 stepFromReady :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepFromReady env machine =
@@ -196,7 +221,7 @@ stepFromReady env machine =
       SIf s -> startIf env machine ctx s
       SLoop s -> startLoop env machine ctx s
       SWhile s -> startWhile env machine ctx s
-      STry s -> startTry machine ctx s
+      STry s -> startTry env machine ctx s
 
 stepDispatch :: StepEnv -> Machine -> StepStmt -> IO (Either RuntimeError StepOutcome)
 stepDispatch env machine step = do
@@ -294,10 +319,21 @@ runBuiltinDispatch ::
   Binder ->
   IO (Either RuntimeError StepOutcome)
 runBuiltinDispatch env machine stepRef argMap realTarget binder = do
+  let q = Err.srQName stepRef
+      sid = Err.srStepId stepRef
+  _ <-
+    emit
+      (seTracer env)
+      (StepStart q sid (redactedJson (VRecord argMap)) False Nothing)
   r <- runBuiltin (builtinEnv env stepRef (mBindings machine) (mScope machine)) realTarget argMap
   case r of
     Left e -> handleStepError env machine (atStep stepRef e)
-    Right result -> completeStep machine binder result
+    Right result -> do
+      _ <-
+        emit
+          (seTracer env)
+          (StepEnd q sid (redactedJson result) 0 Nothing)
+      completeStep machine binder result
 
 resolveDispatchTarget :: Machine -> QName -> Either RuntimeError QName
 resolveDispatchTarget machine target
@@ -373,17 +409,19 @@ endOfBlock env machine result =
             mLastResult = Just result,
             mCurrent = CurReady
           }
-    FrForeach ff : rest -> continueForeach machine ff rest result
+    FrForeach ff : rest -> continueForeach env machine ff rest result
     FrWhile wf : rest -> continueWhile env machine wf rest result
     FrTry tf : rest -> continueTry machine tf rest result
 
-continueForeach :: Machine -> ForeachFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
-continueForeach machine ff rest result = do
-  let acc' = result : ffAcc ff
+continueForeach :: StepEnv -> Machine -> ForeachFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
+continueForeach env machine ff rest result = do
+  let q = spQName (ffResumePath ff)
+      acc' = result : ffAcc ff
       idx' = ffIndex ff + 1
       items = ffItems ff
   if idx' < length items
-    then
+    then do
+      void $ emit (seTracer env) (LoopIter q (ffLoopId ff) idx')
       pure . Right . Stepped $
         machine
           { mFrames = FrForeach (ff {ffIndex = idx', ffAcc = acc'}) : rest,
@@ -393,17 +431,23 @@ continueForeach machine ff rest result = do
             mLastResult = Just result,
             mCurrent = CurReady
           }
-    else
+    else do
+      void $ emit (seTracer env) (LoopEnd q (ffLoopId ff) (length items))
       let v = VList (reverse acc')
-       in pure . Right . Stepped $
-            machine
-              { mFrames = rest,
-                mScope = ffScope ff,
-                mPath = ffResumePath ff,
-                mBindings = bindResult (ffBinder ff) v (mBindings machine),
-                mLastResult = Just v,
-                mCurrent = CurReady
-              }
+      pure . Right . Stepped $
+        machine
+          { mFrames = rest,
+            mScope = ffScope ff,
+            mPath = ffResumePath ff,
+            mBindings = bindResult (ffBinder ff) v (mBindings machine),
+            mLastResult = Just v,
+            mCurrent = CurReady
+          }
+
+popWhileCalleeSeq :: WhileFrame -> [Frame] -> [Frame]
+popWhileCalleeSeq wf = \case
+  FrSeq {fsResumePath = rp} : r | rp == wfWhilePath wf -> r
+  fs -> fs
 
 continueWhile :: StepEnv -> Machine -> WhileFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
 continueWhile env machine wf rest bodyResult =
@@ -411,33 +455,54 @@ continueWhile env machine wf rest bodyResult =
     WhileRunPred -> do
       case extractPredDecision bodyResult of
         Left e -> pure (Left e)
-        Right (cont, _)
-          | not cont -> finishWhile machine wf rest
-          | wfIteration wf >= wfMaxIterations wf ->
-              pure $
-                Left
-                  ( userError_
-                      ( "while loop reached max_iterations ("
-                          <> T.pack (show (wfMaxIterations wf))
-                          <> ") without predicate returning continue = false (§4.3)"
+        Right (cont, reason) -> do
+          let q = spQName (wfWhilePath wf)
+              dk = computeWhileDecisionKey q (wfScope wf) (wfLoopId wf) (wfIteration wf)
+          void $
+            emit
+              (seTracer env)
+              (WhilePred q (wfLoopId wf) (wfIteration wf) cont reason (Just dk))
+          if not cont
+            then finishWhile env machine wf rest
+            else
+              if wfIteration wf >= wfMaxIterations wf
+                then
+                  pure $
+                    Left
+                      ( userError_
+                          ( "while loop reached max_iterations ("
+                              <> T.pack (show (wfMaxIterations wf))
+                              <> ") without predicate returning continue = false (§4.3)"
+                          )
                       )
-                  )
-          | otherwise -> startWhileBody env machine wf rest bodyResult
-    WhileRunBody ->
-      startWhilePred env machine (wf {wfIteration = wfIteration wf + 1, wfAcc = bodyResult : wfAcc wf, wfCarry = Just bodyResult, wfPhase = WhileRunPred}) rest
+                else startWhileBody env machine wf rest bodyResult
+    WhileRunBody -> do
+      let wf' =
+            wf
+              { wfIteration = wfIteration wf + 1,
+                wfAcc = bodyResult : wfAcc wf,
+                wfCarry = Just bodyResult,
+                wfPhase = WhileRunPred
+              }
+          q = spQName (wfWhilePath wf')
+      void $ emit (seTracer env) (LoopIter q (wfLoopId wf') (wfIteration wf'))
+      startWhilePred env machine wf' (popWhileCalleeSeq wf rest)
 
-finishWhile :: Machine -> WhileFrame -> [Frame] -> IO (Either RuntimeError StepOutcome)
-finishWhile machine wf rest =
+finishWhile :: StepEnv -> Machine -> WhileFrame -> [Frame] -> IO (Either RuntimeError StepOutcome)
+finishWhile env machine wf rest = do
+  let q = spQName (wfWhilePath wf)
+      count = length (wfAcc wf)
+  void $ emit (seTracer env) (LoopEnd q (wfLoopId wf) count)
   let v = VList (reverse (wfAcc wf))
-   in pure . Right . Stepped $
-        machine
-          { mFrames = rest,
-            mScope = wfScope wf,
-            mPath = wfResumePath wf,
-            mBindings = bindResult (wfBinder wf) v (mBindings machine),
-            mLastResult = Just v,
-            mCurrent = CurReady
-          }
+  pure . Right . Stepped $
+    machine
+      { mFrames = popWhileCalleeSeq wf rest,
+        mScope = wfScope wf,
+        mPath = wfResumePath wf,
+        mBindings = bindResult (wfBinder wf) v (mBindings machine),
+        mLastResult = Just v,
+        mCurrent = CurReady
+      }
 
 continueTry :: Machine -> TryFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
 continueTry machine tf rest result =
@@ -459,10 +524,10 @@ startIf env machine ctx s = do
   let envEval = mkEvalEnv env sections (Map.insert "ctx" ctxR (mBindings machine))
   case evalExpr envEval (ifCond s) of
     Left e -> pure (Left e)
-    Right (VBool True) -> enterIfBranch machine ctx s BkIfThen
+    Right (VBool True) -> enterIfBranch env machine ctx s BkIfThen
     Right (VBool False) ->
       case ifElse s of
-        Just _ -> enterIfBranch machine ctx s BkIfElse
+        Just _ -> enterIfBranch env machine ctx s BkIfElse
         Nothing ->
           let v = VRecord mempty
            in pure . Right . Stepped $
@@ -474,15 +539,17 @@ startIf env machine ctx s = do
                   }
     Right _ -> pure (Left (evalError "'if' condition did not evaluate to a Bool"))
 
-enterIfBranch :: Machine -> StmtContext -> IfStmt -> BlockKind -> IO (Either RuntimeError StepOutcome)
-enterIfBranch machine ctx s bk = do
-  let idx = scIndex ctx
+enterIfBranch :: StepEnv -> Machine -> StmtContext -> IfStmt -> BlockKind -> IO (Either RuntimeError StepOutcome)
+enterIfBranch env machine ctx s bk = do
+  let q = spQName (mPath machine)
+      idx = scIndex ctx
       branch = case bk of
         BkIfThen -> "then"
         BkIfElse -> "else"
         _ -> "branch"
       scope' = ifScope (mScope machine) (ifId s) branch
       bodyEntry = enterChildBlock (mPath machine) idx bk
+  void $ emit (seTracer env) (IfBranch q (ifId s) branch)
   pure . Right . Stepped $
     machine
       { mFrames =
@@ -517,13 +584,16 @@ startLoop env machine ctx s =
       let envEval = mkEvalEnv env sections (Map.insert "ctx" ctxR (mBindings machine))
       case evalExpr envEval (loopList s) of
         Left e -> pure (Left e)
-        Right (VList xs) -> startForeach machine ctx s xs
+        Right (VList xs) -> startForeach env machine ctx s xs
         Right _ -> pure (Left (evalError "'foreach' expected a list to iterate over"))
 
-startForeach :: Machine -> StmtContext -> LoopStmt -> [RValue] -> IO (Either RuntimeError StepOutcome)
-startForeach machine ctx s items =
+startForeach :: StepEnv -> Machine -> StmtContext -> LoopStmt -> [RValue] -> IO (Either RuntimeError StepOutcome)
+startForeach env machine ctx s items = do
+  let q = spQName (mPath machine)
   if null items
     then do
+      void $ emit (seTracer env) (LoopStart q (loopId s) "foreach" (Just 0))
+      void $ emit (seTracer env) (LoopEnd q (loopId s) 0)
       let v = VList []
       pure . Right . Stepped $
         machine
@@ -533,6 +603,8 @@ startForeach machine ctx s items =
             mCurrent = CurReady
           }
     else do
+      void $ emit (seTracer env) (LoopStart q (loopId s) "foreach" (Just (length items)))
+      void $ emit (seTracer env) (LoopIter q (loopId s) 0)
       let idx = scIndex ctx
           scope' = iterScope (mScope machine) (loopId s) 0
           bodyEntry = enterChildBlock (mPath machine) idx BkLoopBody
@@ -566,7 +638,9 @@ startWhile env machine _ctx s = do
   case evalExpr envEval (whileMaxIterations s) of
     Left e -> pure (Left e)
     Right (VInt n)
-      | n >= 1 ->
+      | n >= 1 -> do
+          void $ emit (seTracer env) (LoopStart q (whileId s) "while" Nothing)
+          void $ emit (seTracer env) (LoopIter q (whileId s) 0)
           let wf =
                 WhileFrame
                   { wfLoopId = whileId s,
@@ -580,18 +654,61 @@ startWhile env machine _ctx s = do
                     wfWhilePath = mPath machine,
                     wfPhase = WhileRunPred
                   }
-           in startWhilePred env machine wf (mFrames machine)
+          startWhilePred env machine wf (mFrames machine)
     Right _ -> pure (Left (evalError "while max_iterations must evaluate to an Int >= 1 (§4.3)"))
 
 startWhilePred :: StepEnv -> Machine -> WhileFrame -> [Frame] -> IO (Either RuntimeError StepOutcome)
 startWhilePred env machine wf rest = do
-  case resolveStmtPath (seProject env) (wfWhilePath wf) of
-    Left err -> pure (Left (internalStub err))
-    Right ctx ->
-      case scStmt ctx of
-        SWhile s ->
-          invokeWhileCallee env machine wf rest (whilePredScope (wfScope wf) (wfLoopId wf) (wfIteration wf)) (whilePredicate s) (whilePredicateArgs s) (wfCarry wf)
-        _ -> pure (Left (internalError "while path does not point at a while statement"))
+  let q = spQName (wfWhilePath wf)
+  mPinned <- lookupPinnedWhilePred (seTracer env) q (wfLoopId wf) (wfIteration wf)
+  case mPinned of
+    Just (cont, reason) -> applyWhilePredDecision env machine wf rest cont reason
+    Nothing ->
+      case resolveStmtPath (seProject env) (wfWhilePath wf) of
+        Left err -> pure (Left (internalStub err))
+        Right ctx ->
+          case scStmt ctx of
+            SWhile s ->
+              invokeWhileCallee env machine wf rest (whilePredScope (wfScope wf) (wfLoopId wf) (wfIteration wf)) (whilePredicate s) (whilePredicateArgs s) (wfCarry wf)
+            _ -> pure (Left (internalError "while path does not point at a while statement"))
+
+lookupPinnedWhilePred :: Tracer -> QName -> Ident -> Int -> IO (Maybe (Bool, Text))
+lookupPinnedWhilePred tracer q sid ix = do
+  evs <- snapshotEvents tracer
+  pure $
+    foldr
+      ( \e acc ->
+          case e of
+            TraceEvent _ _ (WhilePred q' sid' i cont reason _)
+              | q' == q, sid' == sid, i == ix -> Just (cont, reason)
+            _ -> acc
+      )
+      Nothing
+      evs
+
+applyWhilePredDecision ::
+  StepEnv ->
+  Machine ->
+  WhileFrame ->
+  [Frame] ->
+  Bool ->
+  Text ->
+  IO (Either RuntimeError StepOutcome)
+applyWhilePredDecision env machine wf rest cont reason =
+  if not cont
+    then finishWhile env machine wf rest
+    else
+      if wfIteration wf >= wfMaxIterations wf
+        then
+          pure $
+            Left
+              ( userError_
+                  ( "while loop reached max_iterations ("
+                      <> T.pack (show (wfMaxIterations wf))
+                      <> ") without predicate returning continue = false (§4.3)"
+                  )
+              )
+        else startWhileBody env machine wf rest (VRecord (Map.fromList [("continue", VBool cont), ("reason", VString reason)]))
 
 startWhileBody :: StepEnv -> Machine -> WhileFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
 startWhileBody env machine wf rest _predResult = do
@@ -649,9 +766,10 @@ invokeWhileCallee env machine wf rest scope calleeExpr args mCarry = do
                     mCurrent = CurReady
                   }
 
-startTry :: Machine -> StmtContext -> TryStmt -> IO (Either RuntimeError StepOutcome)
-startTry machine ctx s = do
-  let idx = scIndex ctx
+startTry :: StepEnv -> Machine -> StmtContext -> TryStmt -> IO (Either RuntimeError StepOutcome)
+startTry env machine ctx s = do
+  let q = spQName (mPath machine)
+      idx = scIndex ctx
       scope' = tryScope (mScope machine) (tryId s) "try"
       bodyEntry = enterChildBlock (mPath machine) idx BkTryTry
       tf =
@@ -663,6 +781,7 @@ startTry machine ctx s = do
             tfResumePath = advancePath (mPath machine),
             tfTryPath = mPath machine
           }
+  void $ emit (seTracer env) (TryBranch q (tryId s) "try")
   pure . Right . Stepped $
     machine
       { mFrames = FrTry tf : mFrames machine,
@@ -671,19 +790,29 @@ startTry machine ctx s = do
         mCurrent = CurReady
       }
 
+emitStepError :: StepEnv -> RuntimeError -> IO ()
+emitStepError env err =
+  case reStep err of
+    Just (Err.StepRef q sid) ->
+      void $ emit (seTracer env) (ErrorEvent q sid (reMessage err) (reKind err))
+    Nothing -> pure ()
+
 handleStepError :: StepEnv -> Machine -> RuntimeError -> IO (Either RuntimeError StepOutcome)
 handleStepError env machine err =
   case (mFrames machine, isCatchable (reKind err)) of
     (FrTry tf : rest, True)
       | tfPhase tf == TryInTry -> do
+          emitStepError env err
           case resolveStmtPath (seProject env) (tfTryPath tf) of
             Left e -> pure (Left (internalStub e))
             Right ctx ->
               case scStmt ctx of
                 STry s -> do
                   let idx = scIndex ctx
+                      q = spQName (tfTryPath tf)
                       scope' = tryScope (tfScope tf) (tryId s) "catch"
                       bodyEntry = enterChildBlock (tfTryPath tf) idx BkTryCatch
+                  void $ emit (seTracer env) (TryBranch q (tryId s) "catch")
                   pure . Right . Stepped $
                     machine
                       { mFrames = FrTry (tf {tfPhase = TryInCatch}) : rest,
@@ -693,7 +822,9 @@ handleStepError env machine err =
                         mError = Just (reMessage err)
                       }
                 _ -> pure (Left (internalError "try path does not point at a try statement"))
-    _ -> pure (Left err)
+    _ -> do
+      emitStepError env err
+      pure (Left err)
 
 -- Environment ----------------------------------------------------------------
 
@@ -873,7 +1004,9 @@ spawnAndStep :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either Runt
 spawnAndStep env machine pjs rest =
   case spawnBranch env machine pjs of
     Left err -> pure (Left err)
-    Right (m', pjs', _idx, _bm) ->
+    Right (m', pjs', idx, _bm) -> do
+      let q = spQName (pjsLoopPath pjs)
+      void $ emit (seTracer env) (LoopIter q (pjsLoopId pjs) idx)
       pure . Right . Stepped $ m' {mFrames = FrPar pjs' : rest}
 
 drainPar :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)

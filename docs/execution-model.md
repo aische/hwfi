@@ -1,8 +1,8 @@
 # Execution model (v2 runtime)
 
-Design for replacing content-addressed resume with an explicit **cursor + frames**
-machine. Normative for new runtime work; legacy behaviour remains in
-[caching-and-resume.md](caching-and-resume.md) until cutover.
+Design for the **cursor + frames** machine runtime. Legacy step-cache behaviour
+is documented historically in git history pre-M6; author guide:
+[caching-and-resume.md](caching-and-resume.md).
 
 ## Goals
 
@@ -125,7 +125,7 @@ is authoritative.
 | **M2** | Agent as `Current` states; drop agent sub-key replay |
 | **M3** | `FrPar` + cooperative confirm + branch snapshots |
 | **M4** | CLI `step` / `continue`; replace `performResume` |
-| **M6** | Remove step-key cache path, update spec §8 (next) |
+| **M6** | Remove step-key cache path, update spec §8 (**done**) |
 | **M5** | `ProjectStore` DB + server API (optional; deferred) |
 
 ## Modules

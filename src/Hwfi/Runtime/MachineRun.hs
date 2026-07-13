@@ -12,7 +12,9 @@ module Hwfi.Runtime.MachineRun
 where
 
 import Control.Exception (SomeException, displayException)
-import Control.Monad (join)
+import Control.Monad (join, void, when)
+import Data.List (find)
+import Data.Maybe (listToMaybe)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -21,19 +23,33 @@ import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Project.Manifest (budgetMaxCostUsd)
 import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord)
 import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), internalError)
-import Hwfi.Runtime.Executor
+import Hwfi.Runtime.Gateways (ModelStore)
+import Hwfi.Runtime.RunCommon
   ( RunResult (..),
     projectContentHash,
     reconstructInputs,
   )
-import Hwfi.Runtime.Gateways (ModelStore)
+import Hwfi.Ast.Step (Statement (..), tryId, tryBinder)
 import Hwfi.Runtime.Machine
-  ( Frame (..),
+  ( BlockKind (..),
+    Current (..),
+    Frame (..),
     Machine (..),
     MachineStatus (..),
+    PathSegment (..),
+    StmtPath (..),
+    TryFrame (..),
+    TryPhase (..),
     initialMachine,
   )
 import Hwfi.Runtime.MachinePar (isParDriving)
+import Hwfi.Runtime.MachinePath
+  ( StmtContext (..),
+    advancePath,
+    declStatements,
+    enterChildBlock,
+    resolveStmtPath,
+  )
 import Hwfi.Runtime.RunStore
   ( RunMeta (..),
     RunPhase (..),
@@ -77,7 +93,7 @@ import Hwfi.Runtime.Trace
 import Hwfi.Runtime.Usage (newUsageSeam)
 import Hwfi.Runtime.Value (RValue (..), redactedJson, valueToJson)
 import Hwfi.Runtime.Workspace (Workspace, workspaceRoot)
-import Hwfi.TypedProject (TypedProject, tpManifest)
+import Hwfi.TypedProject (TypedProject, lookupTyped, tdDeclaration, tpManifest)
 import System.IO (hClose)
 import UnliftIO.Exception (bracket, tryAny)
 
@@ -122,7 +138,7 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
       let ri = runInfo runId startedAt entry rootInputs envVars
           m0 = initialMachine "" ph entry rootInputs
       _ <- emit tracer (RunStart runId (renderQName entry) (redactedJson (VRecord rootInputs)) ph)
-      env <- newRunStepEnv tp ws models envVars store tracer usageSeam ri ConfirmHold
+      env <- newRunStepEnv tp ws models envVars store tracer usageSeam ri ConfirmAuto
       writeMachineSnapshot store m0
       guardedFinish env store tracer =<< tryAny (drive env store m0 DriveToEnd)
 
@@ -212,8 +228,7 @@ continueWith tp ws models envVars runId store approve mode = do
                 ( Left
                     ( "run '"
                         <> runId
-                        <> "' has no machine snapshot (legacy cache-as-resume run); "
-                        <> "use the v1 executor path or start a new run"
+                        <> "' has no machine snapshot; start a new run with `hwfi run`"
                     )
                 )
             else resumeMachine tp ws models envVars runId store meta approve mode
@@ -248,12 +263,21 @@ resumeMachine tp ws models envVars runId store meta approve mode = do
             updateRunPhase store PhaseRunning
             usageSeam <- newUsageSeam store (budgetMaxCostUsd (tpManifest tp)) (rmUsage meta)
             let ri = runInfo runId (rmStartedAt meta) entry rootInputs envVars
-            env <- newRunStepEnv tp ws models envVars store tracer usageSeam ri ConfirmHold
+                confirmPolicy =
+                  if mode == DriveOneBatch
+                    then ConfirmHold
+                    else ConfirmAuto
+            env <- newRunStepEnv tp ws models envVars store tracer usageSeam ri confirmPolicy
+            let (machineR, rewoundTry) = rewindTryIfErroredTrace tp priorEvents machine0 rootInputs
             _ <- emit tracer (Resumed runId lastSeq)
+            when rewoundTry $
+              case trailingTryError priorEvents of
+                Just (tryQ, trySid) -> void $ emit tracer (TryBranch tryQ trySid "try")
+                Nothing -> pure ()
             machine <-
               if approve
-                then approveConfirm env machine0
-                else pure machine0
+                then approveConfirm env machineR
+                else pure machineR
             exResult <- tryAny (drive env store machine mode)
             Right <$> guardedFinish env store tracer exResult
 
@@ -381,3 +405,83 @@ nowIso :: IO Text
 nowIso = do
   now <- getCurrentTime
   pure (T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%3QZ" now))
+
+-- | When a run was aborted with a trace ending at a catchable error inside a
+-- @try@ (but before a @catch@ branch was recorded), rewind the machine so
+-- resume re-enters the @try@ arm (§4.4.6 T5).
+rewindTryIfErroredTrace ::
+  TypedProject ->
+  [TraceEvent] ->
+  Machine ->
+  Map Ident RValue ->
+  (Machine, Bool)
+rewindTryIfErroredTrace tp evs m bindings =
+  case trailingTryError evs of
+    Nothing -> (m, False)
+    Just (tryQ, trySid) ->
+      case findTryStmtPath tp tryQ trySid of
+        Nothing -> (m, False)
+        Just tryPath ->
+          case resolveStmtPath tp tryPath of
+            Left _ -> (m, False)
+            Right ctx ->
+              case scStmt ctx of
+                STry s ->
+                  let idx = scIndex ctx
+                      scope' = tryArmScope (mScope m) (tryId s) "try"
+                      bodyEntry = enterChildBlock tryPath idx BkTryTry
+                      tf =
+                        TryFrame
+                          { tfLoopId = tryId s,
+                            tfScope = mScope m,
+                            tfBinder = tryBinder s,
+                            tfPhase = TryInTry,
+                            tfResumePath = advancePath tryPath,
+                            tfTryPath = tryPath
+                          }
+                   in
+                    ( m
+                        { mStatus = MsRunning,
+                          mFrames = [FrTry tf],
+                          mScope = scope',
+                          mPath = bodyEntry,
+                          mBindings = bindings,
+                          mCurrent = CurReady,
+                          mLastResult = Nothing,
+                          mError = Nothing
+                        },
+                      True
+                    )
+                _ -> (m, False)
+
+trailingTryError :: [TraceEvent] -> Maybe (QName, Ident)
+trailingTryError evs =
+  case reverse evs of
+    (TraceEvent _ _ (ErrorEvent {})) : _
+      | not (any isCatchBranch evs) ->
+          listToMaybe collectTryBranches
+    _ -> Nothing
+  where
+    isCatchBranch (TraceEvent _ _ (TryBranch _ _ "catch")) = True
+    isCatchBranch _ = False
+    collectTryBranches =
+      reverse
+        [ (q, sid)
+          | TraceEvent _ _ (TryBranch q sid "try") <- evs
+        ]
+
+findTryStmtPath :: TypedProject -> QName -> Ident -> Maybe StmtPath
+findTryStmtPath tp q sid = do
+  td <- lookupTyped q tp
+  let stmts = declStatements (tdDeclaration td)
+  (i, STry s) <-
+    find
+      ( \(_, st) -> case st of
+          STry s' -> tryId s' == sid
+          _ -> False
+      )
+      (zip [0 ..] stmts)
+  pure (StmtPath q [PathSegment i Nothing])
+
+tryArmScope :: Text -> Ident -> Text -> Text
+tryArmScope scope sid arm = scope <> sid <> "?" <> arm <> "/"

@@ -10,7 +10,7 @@ import Hwfi.Check (checkProject)
 import Hwfi.Cli (CheckOpts (..), runCheck)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.Error (RuntimeError (..))
-import Hwfi.Runtime.Executor (RunResult (..), performRun)
+import Hwfi.Runtime.MachineRun (RunResult (..), performRun)
 import Hwfi.Runtime.Gateways (buildGateways, buildModelStore)
 import Hwfi.Runtime.KeyStore (loadKeyStore, lookupKey)
 import Hwfi.Runtime.ModelCatalog
