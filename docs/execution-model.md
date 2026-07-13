@@ -104,10 +104,11 @@ Legacy `steps/<step-key>.json` skip-as-resume is **deprecated** by this model.
 Append-only events remain for `hwfi show` and `ctx.trace`, but progress is
 defined by the machine snapshot, not cache hits.
 
-### Project store (phase 2)
+### Project store (optional / deferred)
 
 Server mode: workflows in DB, not on disk. `ProjectStore` loads declarations by
-`project_id` / hash. Local mode keeps filesystem project dir.
+`project_id` / hash. Local mode keeps filesystem project dir. Not scheduled until
+after M6; may not ship.
 
 ## Staleness
 
@@ -124,8 +125,8 @@ is authoritative.
 | **M2** | Agent as `Current` states; drop agent sub-key replay |
 | **M3** | `FrPar` + cooperative confirm + branch snapshots |
 | **M4** | CLI `step` / `continue`; replace `performResume` |
-| **M5** | `ProjectStore` DB + server API |
-| **M6** | Remove step-key cache path, update spec §8 |
+| **M6** | Remove step-key cache path, update spec §8 (next) |
+| **M5** | `ProjectStore` DB + server API (optional; deferred) |
 
 ## Modules
 

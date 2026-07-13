@@ -6,8 +6,14 @@ Active work only. Move completed sections to `docs/log/archive/` weekly.
 
 Design: [execution-model.md](execution-model.md).
 
-- [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend
-- [ ] **M6** Drop step-key cache path; rewrite spec §8 and caching docs
+- [ ] **M6** Drop step-key cache path; migrate resume tests to `MachineRun`;
+  rewrite spec §8 and caching docs; remove legacy executor from default path
+
+## Later — server / DB (optional)
+
+Deferred until v2 cutover is complete; may not ship.
+
+- [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend; server API
 
 ## Next — v1.1 (paused during v2)
 
