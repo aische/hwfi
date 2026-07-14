@@ -228,11 +228,11 @@ findFiles ws rel glob = do
 -- directory (walked recursively). Binary and oversize files are skipped.
 -- Returns @(workspace-relative file, 1-based line, matching line text)@.
 grepFiles :: Workspace -> Text -> Text -> IO (Either RuntimeError [(Text, Int, Text)])
-grepFiles ws pattern rel = do
+grepFiles ws grepPattern rel = do
   resolved <- resolveContainedPath ws rel
   case resolved of
     Left e -> pure (Left e)
-    Right root -> case compile defaultCompOpt defaultExecOpt (T.unpack pattern) of
+    Right root -> case compile defaultCompOpt defaultExecOpt (T.unpack grepPattern) of
       Left err -> pure (Left (evalError ("invalid grep pattern: " <> T.pack err)))
       Right regex -> do
         isDir <- doesDirectoryExist root

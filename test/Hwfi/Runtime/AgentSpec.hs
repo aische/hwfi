@@ -3,8 +3,6 @@
 module Hwfi.Runtime.AgentSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))
-import Data.Aeson qualified as Aeson
-import Data.Aeson.KeyMap qualified as KM
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -32,7 +30,7 @@ import Hwfi.Runtime.Agent
     toolModelJson,
   )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
-import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), internalError, reKind)
+import Hwfi.Runtime.Error (ErrorKind (..), RuntimeError (..), StepRef (..), reKind)
 import Hwfi.Runtime.RunStore (RunStore, createRunStore)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (EventBody (..), TraceEvent (..), Tracer, newTracer, snapshotEvents)
@@ -335,7 +333,7 @@ submitSchema =
       "additionalProperties" .= False
     ]
 
--- Skill-loading fixtures (§6.7, A47–A49) ---------------------------------------
+-- Skill-loading fixtures (§6.7, A47–A48) ---------------------------------------
 
 fixShellQ :: QName
 fixShellQ = qnameFromText "skills/fix-shell"
@@ -519,16 +517,6 @@ capturingGateway ref responses = gatewayOf $ \req -> do
       then Right (responses !! toolRounds)
       else Left EmptyResponse
 
-crashAfterSkillLoads :: LLMGateway
-crashAfterSkillLoads =
-  gatewayOf $ \req ->
-    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
-     in pure $
-          case toolRounds of
-            0 -> Right (loadSkillCall "c1" "skills/shell-guide")
-            1 -> Right (loadSkillCall "c2" "skills/fix-shell")
-            _ -> Left (NetworkError "simulated crash after skill loads")
-
 loadSkillCall :: Text -> Text -> ChatResponse
 loadSkillCall cid skillId =
   toolResp cid (sanitizeToolName loadSkillQName) (object ["id" .= skillId])
@@ -537,17 +525,6 @@ hasUserText :: Text -> Turn -> Bool
 hasUserText needle = \case
   UserTurn t -> needle `T.isInfixOf` t
   _ -> False
-
-decodeCheckpointSkillIds :: Value -> Maybe ([Text], [Text])
-decodeCheckpointSkillIds = \case
-  Object o -> do
-    active <- textList (KM.lookup "active_tool_ids" o)
-    loaded <- textList (KM.lookup "loaded_instruction_ids" o)
-    Just (active, loaded)
-  _ -> Nothing
-  where
-    textList (Just (Array a)) = Just [t | String t <- V.toList a]
-    textList _ = Just []
 
 -- Environment ----------------------------------------------------------------
 
@@ -609,43 +586,8 @@ countingDispatch calls result _ _ _ = do
   modifyIORef' calls (+ 1)
   pure (Right result)
 
--- | A dispatch that must never be called (resume should hit the cache).
-explodingDispatch :: QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue)
-explodingDispatch _ _ _ = pure (Left (internalError "dispatch invoked during a fully-cached resume"))
-
 searchResult :: RValue
 searchResult = record [("hits", VList [VString "result A", VString "result B"])]
-
--- Gateways for checkpoint resume (8.g) -----------------------------------------
-
--- | Two tool rounds, then fail on the third model call (simulated crash).
-crashAfterTwoToolRounds :: LLMGateway
-crashAfterTwoToolRounds =
-  gatewayOf $ \req ->
-    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
-     in pure $
-          if toolRounds < 2
-            then Right (searchCall ("c" <> tshow (toolRounds + 1)))
-            else Left (NetworkError "simulated crash at final model round")
-
--- | After two tool rounds in the conversation, answer with plain text.
-finishAfterTwoToolRounds :: LLMGateway
-finishAfterTwoToolRounds =
-  gatewayOf $ \req ->
-    let toolRounds = length [() | ToolTurn _ <- req.reqConversation]
-     in pure $
-          if toolRounds < 2
-            then Right (searchCall ("c" <> tshow (toolRounds + 1)))
-            else Right (textResp "done")
-
-decodeCheckpointForTest :: Value -> Maybe [Turn]
-decodeCheckpointForTest = \case
-  Object o -> case KM.lookup "messages" o of
-    Just v -> case Aeson.fromJSON v of
-      Aeson.Success ts -> Just ts
-      Aeson.Error _ -> Nothing
-    Nothing -> Nothing
-  _ -> Nothing
 
 -- Fake gateway ---------------------------------------------------------------
 
@@ -676,10 +618,6 @@ scriptedGateway responses = gatewayOf $ \req ->
         if i < length responses
           then Right (responses !! i)
           else Left EmptyResponse
-
--- | A gateway that fails if invoked (used to prove resume never calls it).
-explodingGateway :: LLMGateway
-explodingGateway = gatewayOf (\_ -> pure (Left (NetworkError "gateway invoked during a fully-cached resume")))
 
 gatewayOf :: (ChatRequest -> IO (Either LLMError ChatResponse)) -> LLMGateway
 gatewayOf f =
@@ -731,6 +669,3 @@ fromLeft (Right v) = error ("expected Left, got " <> show v)
 recoverableToolResult :: TraceEvent -> Bool
 recoverableToolResult (TraceEvent _ _ (AgentToolResult _ _ _ _ _ _ recov)) = recov
 recoverableToolResult _ = False
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show

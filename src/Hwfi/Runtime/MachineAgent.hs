@@ -727,7 +727,11 @@ genReq spec tools messages =
     }
 
 lookupTool :: [AdvertisedTool] -> Text -> Maybe AdvertisedTool
-lookupTool tools name = lookup name [((atToolDef t).toolName, t) | t <- tools]
+lookupTool tools name = lookup name [(toolDefName t, t) | t <- tools]
+  where
+    toolDefName t =
+      let td = atToolDef t
+       in td.toolName
 
 toolStepId :: AgentState -> Int -> Int -> Ident
 toolStepId ag roundIx callIx =

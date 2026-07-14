@@ -413,6 +413,7 @@ endOfBlock env machine result =
     FrForeach ff : rest -> continueForeach env machine ff rest result
     FrWhile wf : rest -> continueWhile env machine wf rest result
     FrTry tf : rest -> continueTry machine tf rest result
+    FrPar _ : _ -> pure (Left (internalError "endOfBlock with FrPar frame"))
 
 continueForeach :: StepEnv -> Machine -> ForeachFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
 continueForeach env machine ff rest result = do

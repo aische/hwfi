@@ -189,8 +189,8 @@ findFilesTool env args =
 
 grepTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
 grepTool env args =
-  orFail ((,) <$> argText args "pattern" <*> argText args "path") $ \(pattern, path) -> do
-    result <- grepFiles (beWorkspace env) pattern path
+  orFail ((,) <$> argText args "pattern" <*> argText args "path") $ \(grepPattern, path) -> do
+    result <- grepFiles (beWorkspace env) grepPattern path
     case result of
       Left e -> pure (Left e)
       Right matches -> do

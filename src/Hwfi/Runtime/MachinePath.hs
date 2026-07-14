@@ -85,6 +85,7 @@ childBlock stmt bk = case stmt of
   SIf s -> case bk of
     BkIfThen -> Right (ifThen s)
     BkIfElse -> maybe (Left "if has no else branch") Right (ifElse s)
+    _ -> Left "invalid block kind for if"
   SLoop s -> case bk of
     BkLoopBody -> Right (loopBody s)
     _ -> Left "invalid block kind for loop"
@@ -94,6 +95,7 @@ childBlock stmt bk = case stmt of
   STry s -> case bk of
     BkTryTry -> Right (tryTry s)
     BkTryCatch -> Right (tryCatch s)
+    _ -> Left "invalid block kind for try"
   _ -> Left "statement has no child block for this path segment"
 
 statementAt :: [Statement] -> Int -> Either Text Statement

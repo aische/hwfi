@@ -571,7 +571,11 @@ isSubmit tc = tc.tcName == submitToolName
 
 -- | Map an advertised tool to the model by its provider name.
 lookupTool :: [AdvertisedTool] -> Text -> Maybe AdvertisedTool
-lookupTool tools name = lookup name [((atToolDef t).toolName, t) | t <- tools]
+lookupTool tools name = lookup name [(toolDefName t, t) | t <- tools]
+  where
+    toolDefName t =
+      let td = atToolDef t
+       in td.toolName
 
 -- | A provider-safe tool name for a qname (some providers reject @/@\/@-@ in
 -- function names). @tools/search@ becomes @tools_search@.
