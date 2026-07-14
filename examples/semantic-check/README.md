@@ -15,9 +15,22 @@ Given a target project root in the workspace:
    plus shipped builtins; prose scan via `resolve-qnames-in-text` on markdown
    sections (skips ` ```step ` fences and shipped builtins).
 
-Writes `semantic-report.json` into the workspace.
+Writes `semantic-report.json` into the workspace (`semantic-report/v0`).
 
 No LLM calls — runs without API keys.
+
+## Roadmap (experimental track)
+
+See [TASKS.md](../../docs/TASKS.md) and design doc §Experimental track.
+
+| Phase | Adds |
+|-------|------|
+| **E1** | Layer 2 corpus profile, clusters, hints (entropy + similarity) |
+| **E2** | Speech-act pattern tagger + step↔agent alignment |
+| **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) |
+| **E4** | Graph findings (cycles, orphans, reachability) |
+
+Target report schema: `semantic-report/v1` after E1–E2.
 
 ## Prerequisites
 
@@ -49,7 +62,7 @@ cabal run hwfi -- run examples/semantic-check \
 On success the workflow prints `{ "report_path": "semantic-report.json", "ok": … }`
 and the workspace contains `semantic-report.json`.
 
-## Report shape
+## Report shape (v0)
 
 | Field | Content |
 |-------|---------|
@@ -68,10 +81,6 @@ Layer 1 uses nested loops (`decl → step → mention`) in
 `tools/step-ref-findings` and `tools/referential-scan`. Inner loops must bind
 their result (`inner <- foreach …`), not appear as bare statements — see
 [workflow-reference.md](../../docs/workflow-reference.md).
-
-## Limitations (v0)
-
-- Corpus quality (layer 2) and LLM pragmatics (layer 3) are not wired here.
 
 ## Related
 

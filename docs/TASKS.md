@@ -8,40 +8,59 @@ Deferred until v2 cutover is complete; may not ship.
 
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend; server API
 
-## Next — semantic review builtins (planned)
+## Now — semantic review (experimental track)
 
-Design: [semantic-check-design.md](semantic-check-design.md). Semantic review is
-a **workflow**, not engine logic. Builtins are general-purpose primitives.
+Design: [semantic-check-design.md](semantic-check-design.md) (§Experimental track).
+Policy stays in `examples/semantic-check`; engine exposes general-purpose
+primitives only. Entropy and speech-act heuristics are **signals, not verdicts**.
 
-### Tier 1 — project and markdown structure
+**Done foundation:** layers 0–1 wired; Tier 1–2 builtins + `resolve-qnames-in-text`.
 
-- [x] `builtin/check-project` — parse + type-check workspace project; structured
-  declarations, call graph, step metadata
-- [x] `builtin/parse-markdown` — frontmatter, sections, fenced blocks
+### E1 — Layer 2 corpus wiring *(implement first)*
 
-### Tier 2 — text corpus analysis
+Wire existing Tier 2 builtins into the example workflow; no new engine code
+required except workflow types/tools.
 
-- [x] `builtin/text-metrics` — entropy, compression ratio, token counts
-- [x] `builtin/text-similarity` — Jaccard / LCS pairwise similarity
-- [x] `builtin/text-search-corpus` — overlap clusters across documents
+- [ ] `types/corpus-profile` — per-slice metrics row (`location`, `shannon_entropy`, `compression_ratio`, `tokens`, …)
+- [ ] `tools/corpus-profile` — `parse-markdown` sections → `text-metrics` per slice
+- [ ] `tools/corpus-clusters` — `text-search-corpus` over agent/tool/skill bodies
+- [ ] `tools/corpus-hints` — outlier + redundancy findings from metrics + clusters
+- [ ] Extend `tools/semantic-review` — add `corpus_profile`, `corpus_hints`; schema `semantic-report/v1`
 
-### Tier 3 — graph and reference utilities
+### E2 — Speech-act heuristics *(deterministic, no LLM)*
+
+Pattern-based illocutionary tagging; compare prose profiles to step metadata.
+
+- [ ] `types/speech-act-tag` — `{ force, sentence, patterns }` per tagged sentence
+- [ ] `types/speech-act-hint` — finding shape for act mismatches / bare directives
+- [ ] `tools/speech-act-scan` — tag section bodies (directive / assertive / commissive / declarative)
+- [ ] `tools/speech-act-align` — step `target`/`agent_tools` vs agent-section act profile
+- [ ] Wire into report — `speech_act_hints` array in `semantic-report/v1`
+
+### E3 — Layer 3 pragmatic LLM pass *(gated)*
+
+LLM only on slices flagged by E1/E2; bounded cost.
+
+- [ ] `builtin/split-text` — sentence/paragraph chunks for act tagging + LLM context
+- [ ] `tools/review-gate` — union entropy outliers, similarity pairs, speech-act mismatches
+- [ ] `tools/pragmatic-review` — `llm-gen-object` with fixed contradiction/clarity schema
+- [ ] Workflow input `mode` — `strict` (skip LLM) vs `exploratory` (run layer 3)
+- [ ] Report field `pragmatic_findings`
+
+### E4 — Graph layer *(after E1; parallel with E2/E3)*
+
+Structural graph analysis on `check-project` output.
 
 - [ ] `builtin/graph-reachability`
 - [ ] `builtin/graph-cycles`
 - [ ] `builtin/graph-topo-sort`
-- [x] `builtin/resolve-qnames-in-text` — resolved / unresolved / builtin mentions
-- [x] `builtin/list-concat` — flatten `List<List<T>>` (typed plumbing for workflows)
+- [ ] `tools/graph-findings` — orphans, import cycles, unreachable from entry
+- [ ] Report field `graph_findings`
 
-### Tier 4 — convenience
+### Engine backlog (deferred until E3/E4 need them)
 
 - [ ] `builtin/diff-text`
 - [ ] `builtin/json-validate`
-- [ ] `builtin/split-text`
-
-### Example workflow (after Tier 1)
-
-- [x] `examples/semantic-check` — layers 0–1 review; `semantic-report.json` output
 
 ## Next — v1.1 (paused during v2)
 
@@ -57,31 +76,15 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
-- **`resolve-qnames-in-text` (2026-07-14):** Pure resolver + runtime builtin;
-  semantic-check prose layer uses `find-files` + `parse-markdown` + section scan;
-  ship `prose_hints` noise eliminated (142 grep hits → 2 real dead refs).
-- **Eval errors in `try`/`catch` (2026-07-14):** `routeStepOutcome` +
-  `breakCatchableTry` in StepDriver; T8/T9 tests; semantic-check runs on ship.
-- **`return` in control-flow blocks (2026-07-14):** Nested loop/branch bodies
-  may end with `return { … }`; top-level return rule unchanged. semantic-check
-  loops inlined; helper tools removed.
-- **Per-transition stepping (2026-07-14):** `DriveOneBatch` halts after each
-  `Stepped` outcome; agent loops step per model/tool call.
-- **`hwfi run --step` (2026-07-14):** `performRunMode` + `--step` flag.
-- **M6 cleanup (2026-07-14):** Stale step-cache artifacts in docs/examples;
-  runtime comment fixes; `cacheable` from checker in traces; removed unused agent
-  fields (`aeStepKey`, `atFingerprint`).
-- **M6 (2026-07-13):** Dropped step-key cache resume (`Executor`, `steps/`,
-  `hwfi cache clear|invalidate`); single v2 path via `MachineRun` +
-  `machine.json`; migrated tests; rewrote spec §8 / caching docs; while-pred
-  replay from trace; control-flow trace parity.
-- **M4 (2026-07-13):** CLI `hwfi step` / `hwfi resume`; v2 default runtime via
-  `MachineRun` — `machine.json` snapshot persistence, project-hash staleness
-  gate, `performContinueToEnd` / `performStep`.
-- **M3 (2026-07-13):** Real `par` + cooperative confirm + per-branch snapshots.
-- **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine`; snapshot resume.
-- **M1 (2026-07-13):** Sequential `stepMachine`; control flow; `StepEnv`.
-- **M0 (2026-07-13):** `Machine`, `MachinePath`, `MachineSnapshot`, stub driver.
+- **Semantic review engine primitives (2026-07-14):** Tier 1 (`check-project`,
+  `parse-markdown`), Tier 2 (`text-metrics`, `text-similarity`,
+  `text-search-corpus`), `resolve-qnames-in-text`, `list-concat`.
+- **`resolve-qnames-in-text` prose layer (2026-07-14):** `prose_hints` 142 → 2
+  on ship; section scan via `parse-markdown`.
+- **`examples/semantic-check` layers 0–1 (2026-07-14):** structural + referential
+  review; `semantic-report/v0`.
+- **Eval errors in `try`/`catch` (2026-07-14):** catchable eval failures in StepDriver.
+- **`return` in control-flow blocks (2026-07-14):** nested loop/branch tail return.
+- **M6 runtime (2026-07-13–14):** v2 cursor/frames, `--step`, cache removal.
 
-Completed v1.1 author-capability items (9.9–9.14) and earlier milestones are
-archived in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).
+Earlier milestones archived in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).

@@ -29,6 +29,7 @@ There will be no GUI
 
 ## Open questions
 
-- **Semantic review** — Can workflow prompts and agent prose be checked for
-  coherence beyond static types? Planned as an ordinary workflow with
-  general-purpose builtins; see [semantic-check-design.md](semantic-check-design.md).
+- **Semantic review** — Prompt/prose coherence beyond static types. Implemented as
+  an ordinary workflow with general-purpose builtins; active experimental track
+  (entropy + speech-act heuristics, gated LLM). See
+  [semantic-check-design.md](semantic-check-design.md).

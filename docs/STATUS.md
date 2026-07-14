@@ -4,25 +4,22 @@ Last updated: 2026-07-14
 
 ## Current focus
 
-**Semantic review example** — `examples/semantic-check` layers 0–1 complete with
-`resolve-qnames-in-text` prose pass (no grep noise). Next Tier 3 graph builtins.
+**Semantic review — experimental track (E1)** — layers 0–1 and Tier 1–2 engine
+primitives are done. Next: wire layer 2 corpus analysis into
+`examples/semantic-check` (entropy + similarity as review signals), then E2
+speech-act heuristics and gated layer 3 LLM. Plan:
+[semantic-check-design.md](semantic-check-design.md) §Experimental track;
+checklist: [TASKS.md](TASKS.md).
 
-**v2 runtime (cursor + frames)** — M6 done. Design:
-[execution-model.md](execution-model.md).
-
-**M5** (DB / server `ProjectStore`) remains deferred — optional, not blocking
-local filesystem mode.
+**v2 runtime** — M6 done. **M5** (DB/server) deferred.
 
 ## Done recently
 
-- **`resolve-qnames-in-text` + prose layer rewrite** — engine builtin classifies
-  qname mentions in markdown prose; `examples/semantic-check` scans `**/*.md`
-  via `parse-markdown` + section scan; `list-concat` flattens nested findings.
-  Ship report: `prose_hints` 142 → 2 (real README dead refs only).
-- **Eval errors in `try`/`catch`** — catchable eval failures route through
-  `handleStepError`; stack scan skips `FrSeq`/loop frames (§4.4.3).
-- **`return` in control-flow blocks** — checker allows nested `return { … }`.
-- **Semantic review Tier 2** — text metrics, similarity, corpus clustering.
+- **Layers 0–1 + prose resolver** — `resolve-qnames-in-text` section scan;
+  ship `prose_hints` 142 → 2.
+- **Tier 2 builtins** — Shannon entropy, compression ratio, Jaccard/LCS,
+  corpus clustering (`Hwfi.Text.Corpus`).
+- **Semantic-check example** — `semantic-report/v0`; no LLM; runs without API keys.
 
 ## Blockers
 
@@ -30,4 +27,4 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) — remaining Tier 3 graph builtins, layer 2+ review passes.
+[TASKS.md](TASKS.md) — **E1** corpus profile/clusters/hints → report v1.

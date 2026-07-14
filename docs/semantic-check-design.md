@@ -1,7 +1,10 @@
 # Semantic review — design notes
 
-Companion to spec §13.1.8. Planned builtins are **not implemented**; this
-document captures the research direction and implementation backlog.
+Companion to spec §13.1.8. Tier 1–2 builtins and layers 0–1 of the example
+workflow are **implemented**; the experimental track (entropy + speech-act
+heuristics, gated LLM pragmatics) is the active backlog. See
+[Implementation phases](#implementation-phases) and [Experimental
+track](#experimental-track).
 
 ## Problem
 
@@ -62,29 +65,40 @@ flowchart TB
 
   subgraph passes [Review passes]
     L0["Layer 0: check-project"]
-    L1["Layer 1: resolve-qnames, grep"]
-    L2["Layer 2: similarity, corpus search"]
+    L1["Layer 1: referential scan"]
+    L2["Layer 2: corpus metrics + clusters"]
+    L2b["Layer 2b: speech-act tagger"]
+    GATE["Gate: outliers + mismatches"]
     L3["Layer 3: llm-gen-object on slices"]
+    L4["Layer 4: graph analysis"]
   end
 
   WF --> L0
   L0 --> L1
   L1 --> L2
-  L2 --> L3
-  L3 --> OUT["semantic-report.json"]
+  L1 --> L2b
+  L0 --> L4
+  L2 --> GATE
+  L2b --> GATE
+  GATE --> L3
+  L2 --> OUT["semantic-report.json"]
+  L2b --> OUT
+  L3 --> OUT
+  L4 --> OUT
   target --> passes
 ```
 
-**Invocation (planned example):**
+**Invocation:**
 
 ```bash
 cabal run hwfi -- run examples/semantic-check \
   --workspace /path/to/target-project \
+  --input path=. \
   --input entry=workflows/main
 ```
 
-**v0 without new builtins:** `grep` + `read-file` + `exec(hwfi check .)` +
-`llm-gen-object`. Works but brittle; Tier 1 builtins remove regex re-parsing.
+Layers 0–1 run today without API keys. Future `mode=exploratory` enables gated
+layer 3 LLM (E3).
 
 ## Analysis layers
 
@@ -93,12 +107,85 @@ cabal run hwfi -- run examples/semantic-check \
 | 0 — Structure | Types, imports, call graph, tool lists | Yes | `check-project` |
 | 1 — Referential prose | Qnames, `@self#` sections, model names in text | Mostly | `resolve-qnames-in-text`, `parse-markdown` |
 | 2 — Corpus quality | Duplication, redundancy, noise | Heuristic | `text-metrics`, `text-similarity`, `text-search-corpus` |
-| 3 — Pragmatics | Contradictions, vague directives, speech-act clarity | No | `llm-gen-object` (workflow policy) |
+| 2b — Speech acts | Directive/assertive mix, step↔agent alignment | Heuristic | Workflow pattern tagger on `parse-markdown` slices |
+| 3 — Pragmatics | Contradictions, vague directives, felicity | No | `llm-gen-object` on **gated** slices only (workflow policy) |
 | 4 — Graph | Import cycles, unreachable callees, orphan declarations | Yes | `graph-*` on `check-project` output |
 
-**Speech act theory** and **entropy** inform layer 3–4 vocabulary and
+**Speech act theory** and **entropy** inform layers 2–3 vocabulary and
 heuristics; they do not define a sound type system. High entropy is not
-inherently bad — treat metrics as signals, not verdicts.
+inherently bad — treat metrics as **signals**, not verdicts. Layer 3 LLM runs
+only on slices flagged by layer 2 / 2b gates.
+
+## Experimental track
+
+Research direction: use **information-theoretic** and **pragmatic-linguistic**
+signals to prioritize human-style design review, without baking policy into the
+engine.
+
+### Entropy and corpus metrics (layer 2)
+
+For each prose slice (agent section, tool description, skill body):
+
+1. `parse-markdown` → section `body` strings.
+2. `text-metrics` per slice → profile row (`shannon_entropy`, `compression_ratio`, token counts).
+3. `text-search-corpus` + `text-similarity` across slices → duplication / near-duplicate clusters.
+
+**Finding rules (workflow policy, tunable):**
+
+| Signal | Interpretation | Suggested category |
+|--------|----------------|-------------------|
+| Entropy outlier within same `kind` (all agent sections) | Unusual information density — inspect | `ambiguity` (info) |
+| High similarity + high compression in two sections | Literal or phrasing redundancy | `redundancy` |
+| High similarity + divergent entropy | Same topic, different wording — contradiction candidate | gate → layer 3 |
+| Compression ratio very high within one section | Repetitive boilerplate | `redundancy` (info) |
+
+Workflow tools: `corpus-profile`, `corpus-clusters`, `corpus-hints`.
+
+### Speech act heuristics (layer 2b)
+
+Lightweight **illocutionary force** tagging before any LLM call. Pattern-based
+(not NLP model); reproducible and cheap.
+
+| Force | Typical patterns | Review question |
+|-------|------------------|-----------------|
+| Directive | imperatives, “must”, “always”, “never”, “do not” | Is there a verifiable condition? |
+| Assertive | “is/are”, “the workspace contains”, factual claims | Checkable against layer 0/1? |
+| Commissive | “you will”, “I will ensure” | Does the agent control this? |
+| Declarative | “consider yourself authorized”, role assignment | Allowed by workflow policy? |
+
+**Cross-artifact alignment** (uses `check-project` step metadata):
+
+- Step advertises tools / callee → agent section should contain matching **directives**.
+- Two agent sections both **direct** the same action differently → `contradiction` candidate.
+- Tool description **declarative** scope exceeds what steps actually invoke → `policy` hint.
+
+Workflow tools: `speech-act-scan`, `speech-act-align`.
+
+### Gated pragmatics (layer 3)
+
+Union gates from layer 2 and 2b feed `llm-gen-object` on **bounded slices** only:
+
+- Entropy outliers (top/bottom N or z-score threshold).
+- High-similarity pairs with divergent metrics.
+- Speech-act mismatches (step vs agent section).
+
+Suggested LLM output fields (workflow schema, not engine):
+
+```json
+{
+  "illocutionary_force": "directive",
+  "felicity_violations": ["missing condition on retry directive"],
+  "contradictions": [{ "other_location": "…", "evidence": "…" }],
+  "clarity_score": 0.72
+}
+```
+
+Map to `types/finding` (`contradiction`, `ambiguity`, `policy`). Workflow input
+`mode`: `strict` (skip layer 3) vs `exploratory` (run LLM). Low temperature;
+findings may vary between runs — document in report metadata.
+
+Workflow tools: `review-gate`, `pragmatic-review`. Depends on `split-text` for
+sentence-level tagging when paragraph split is too coarse.
 
 ## Findings schema (workflow-defined)
 
@@ -118,10 +205,30 @@ The checker workflow owns the output schema. Suggested starting shape:
 Emit via `write-file` or `llm-gen-object` into the workspace (e.g.
 `semantic-report.json`).
 
+### Report schema versions
+
+**v0 (current)** — layers 0–1 only:
+
+`structural_errors`, `structural_warnings`, `entry_findings`, `prose_hints`,
+`step_referential`.
+
+**v1 (target after E1–E2)** — adds corpus and speech-act signals:
+
+| Field | Layer | Content |
+|-------|-------|---------|
+| `corpus_profile` | 2 | List of per-slice metric rows (not findings) |
+| `corpus_hints` | 2 | Redundancy / outlier findings |
+| `speech_act_hints` | 2b | Act tag summaries and alignment mismatches |
+| `pragmatic_findings` | 3 | LLM judgments (exploratory mode only) |
+| `graph_findings` | 4 | Cycles, orphans, unreachable nodes |
+
+Keep v0 fields unchanged for backward compatibility within the checker project.
+
 ## Planned builtins
 
-All builtins below are **proposed**. Signatures follow §6 naming; cacheability
-and agent-eligibility are design defaults subject to implementation review.
+Signatures follow §6 naming. **Implemented:** Tier 1, Tier 2,
+`resolve-qnames-in-text`, `list-concat`. **Remaining:** graph Tier 3,
+Tier 4 convenience (`split-text` prioritized for E3).
 
 ### Tier 1 — project and markdown structure
 
@@ -364,18 +471,32 @@ Chunk long prose for bounded LLM context windows.
 
 ## Implementation phases
 
+### Completed
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| **P0 — Docs** | This document, TASKS, spec §13.1.8 | done |
+| **P1 — Tier 1** | `check-project`, `parse-markdown` | done |
+| **P2 — Example v0** | `examples/semantic-check` layers 0–1 | done |
+| **P3 — Tier 2** | `text-metrics`, `text-similarity`, `text-search-corpus` | done |
+| **P4 partial** | `resolve-qnames-in-text`, `list-concat` | done |
+
+### Active — experimental track
+
+Priority order ([TASKS.md](TASKS.md)):
+
 | Phase | Deliverable | Depends on |
 |-------|-------------|------------|
-| **P0 — Docs** | This document, TASKS backlog, spec §13.1.8 | — |
-| **P1 — Tier 1** | `check-project`, `parse-markdown` | Checker internals, markdown parser |
-| **P2 — Example** | `examples/semantic-check` workflow (layers 0–1) | P1 |
-| **P3 — Tier 2** | `text-metrics`, `text-similarity`, `text-search-corpus` | — |
-| **P4 — Tier 3** | `graph-*`, `resolve-qnames-in-text` | P1 |
-| **P5 — Tier 4** | `diff-text`, `json-validate`, `split-text` | — |
-| **P6 — Full review** | Layer 3 LLM pass, findings report | P2–P5 |
+| **E1 — Layer 2 wiring** | `corpus-profile`, `corpus-clusters`, `corpus-hints`; report v1 | P2, P3 |
+| **E2 — Speech acts** | `speech-act-scan`, `speech-act-align`; `speech_act_hints` | P2, E1 (shared slice extraction) |
+| **E3 — Gated LLM** | `review-gate`, `pragmatic-review`, `split-text`; `pragmatic_findings` | E1, E2 |
+| **E4 — Graph layer** | `graph-*` builtins, `graph-findings` | P1, P2 |
 
-Implement tiers in order; each tier is independently useful outside semantic
-review (docs tooling, skill dedup, planner lint).
+E4 may proceed in parallel after E1 (no dependency on speech acts or LLM).
+Defer `diff-text` and `json-validate` until a concrete workflow needs them.
+
+Each phase is independently shippable; strict mode (E1+E2+E4, no LLM) remains
+usable without API keys.
 
 ## Non-goals
 
