@@ -5,7 +5,8 @@ inputs:
 outputs:
   ok: Bool
 imports:
-  - tools/strings-equal
+  - builtin/record-filter
+  - tools/hit-nonempty
 ---
 
 ## flow
@@ -13,25 +14,25 @@ imports:
 True when the step target is an LLM agent builtin.
 
 ```step
-agent <- tools/strings-equal(
-  left = ${inputs.target},
-  right = "builtin/llm-agent"
-) @agent
+hits <- builtin/record-filter(
+  items = [
+    { name = "builtin/llm-agent" },
+    { name = "builtin/llm-agent-object" }
+  ],
+  field = "name",
+  equals = ${inputs.target}
+) @filter
 
-pack <- if ${agent.equal} {
+rows <- foreach row in ${hits.items} {
+  return { hit = "yes" }
+} @rows
+
+pack <- try {
+  _ <- tools/hit-nonempty(items = ${rows}) @probe
   return { ok = true }
-} else {
-  obj <- tools/strings-equal(
-    left = ${inputs.target},
-    right = "builtin/llm-agent-object"
-  ) @obj
-  branch <- if ${obj.equal} {
-    return { ok = true }
-  } else {
-    return { ok = false }
-  } @branch
-  return { ok = ${branch.ok} }
-} @kind
+} catch {
+  return { ok = false }
+} @branch
 
 return { ok = ${pack.ok} }
 ```

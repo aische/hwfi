@@ -9,9 +9,8 @@ imports:
   - builtin/list-concat
   - builtin/record-filter
   - builtin/record-map
-  - tools/speech-act-bare-directive-hint
-  - tools/speech-act-declarative-hint
   - tools/speech-act-step-align
+  - tools/speech-act-tag-hints
 ---
 
 ## flow
@@ -34,10 +33,8 @@ file_tags <- builtin/record-filter(
 ) @file_tags
 
 tag_rows <- foreach tag in ${file_tags.items} {
-  bare <- tools/speech-act-bare-directive-hint(tag = ${tag}) @bare
-  decl <- tools/speech-act-declarative-hint(tag = ${tag}) @decl_hint
-  merged <- builtin/list-concat(lists = [${bare.hints}, ${decl.hints}]) @merged
-  return { hints = ${merged.items} }
+  pack <- tools/speech-act-tag-hints(tag = ${tag}) @row
+  return { hints = ${pack.hints} }
 } @tag_loop
 
 step_layers <- builtin/record-map(items = ${step_rows}, field = "hints") @step_map

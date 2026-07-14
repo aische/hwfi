@@ -6,9 +6,7 @@ outputs:
   ok: Bool
 imports:
   - builtin/record-filter
-  - builtin/record-map
   - tools/nonempty
-  - tools/catalog-row
 ---
 
 ## flow
@@ -16,56 +14,51 @@ imports:
 Succeed when `mention` names a shipped engine builtin; fail catchably otherwise.
 
 ```step
-rows <- foreach name in [
-  "builtin/read-file",
-  "builtin/write-file",
-  "builtin/list-dir",
-  "builtin/read-file-slice",
-  "builtin/find-files",
-  "builtin/grep",
-  "builtin/edit-file",
-  "builtin/move-file",
-  "builtin/copy-file",
-  "builtin/remove-file",
-  "builtin/make-dir",
-  "builtin/remove-dir",
-  "builtin/exec",
-  "builtin/llm-generate",
-  "builtin/llm-chat",
-  "builtin/llm-gen-object",
-  "builtin/introspect",
-  "builtin/llm-agent",
-  "builtin/llm-agent-object",
-  "builtin/eval-workflow",
-  "builtin/list-runs",
-  "builtin/read-run-trace",
-  "builtin/trace-slice",
-  "builtin/json-get",
-  "builtin/json-values",
-  "builtin/concat",
-  "builtin/record-merge",
-  "builtin/record-filter",
-  "builtin/record-map",
-  "builtin/log",
-  "builtin/discover-skills",
-  "builtin/load-skill",
-  "builtin/check-project",
-  "builtin/parse-markdown",
-  "builtin/text-metrics",
-  "builtin/text-similarity",
-  "builtin/text-search-corpus",
-  "builtin/split-text",
-  "builtin/text-grep",
-  "builtin/resolve-qnames-in-text",
-  "builtin/list-concat"
-] {
-  row <- tools/catalog-row(qname = ${name}) @row
-} @builtins
-
-picked <- builtin/record-map(items = ${rows}, field = "row") @pick
-
 hits <- builtin/record-filter(
-  items = ${picked.values},
+  items = [
+    { qname = "builtin/read-file" },
+    { qname = "builtin/write-file" },
+    { qname = "builtin/list-dir" },
+    { qname = "builtin/read-file-slice" },
+    { qname = "builtin/find-files" },
+    { qname = "builtin/grep" },
+    { qname = "builtin/edit-file" },
+    { qname = "builtin/move-file" },
+    { qname = "builtin/copy-file" },
+    { qname = "builtin/remove-file" },
+    { qname = "builtin/make-dir" },
+    { qname = "builtin/remove-dir" },
+    { qname = "builtin/exec" },
+    { qname = "builtin/llm-generate" },
+    { qname = "builtin/llm-chat" },
+    { qname = "builtin/llm-gen-object" },
+    { qname = "builtin/introspect" },
+    { qname = "builtin/llm-agent" },
+    { qname = "builtin/llm-agent-object" },
+    { qname = "builtin/eval-workflow" },
+    { qname = "builtin/list-runs" },
+    { qname = "builtin/read-run-trace" },
+    { qname = "builtin/trace-slice" },
+    { qname = "builtin/json-get" },
+    { qname = "builtin/json-values" },
+    { qname = "builtin/concat" },
+    { qname = "builtin/record-merge" },
+    { qname = "builtin/record-filter" },
+    { qname = "builtin/record-map" },
+    { qname = "builtin/log" },
+    { qname = "builtin/discover-skills" },
+    { qname = "builtin/load-skill" },
+    { qname = "builtin/check-project" },
+    { qname = "builtin/parse-markdown" },
+    { qname = "builtin/text-metrics" },
+    { qname = "builtin/text-similarity" },
+    { qname = "builtin/text-search-corpus" },
+    { qname = "builtin/split-text" },
+    { qname = "builtin/text-grep" },
+    { qname = "builtin/resolve-qnames-in-text" },
+    { qname = "builtin/list-concat" },
+    { qname = "builtin/list-unique-by" }
+  ],
   field = "qname",
   equals = ${inputs.mention}
 ) @filter

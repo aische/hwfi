@@ -5,8 +5,9 @@ inputs:
 outputs:
   hints: List<types/speech-act-hint>
 imports:
+  - builtin/record-filter
   - tools/empty-speech-act-hints
-  - tools/strings-equal
+  - tools/hit-nonempty
 ---
 
 ## flow
@@ -14,12 +15,18 @@ imports:
 Flag declarative role-assignment language in agent-facing prose.
 
 ```step
-force <- tools/strings-equal(
-  left = ${inputs.tag.force},
-  right = "declarative"
-) @force_chk
+declaratives <- builtin/record-filter(
+  items = [${inputs.tag}],
+  where = { force = "declarative" }
+) @declaratives
 
-pack <- if ${force.equal} {
+pack <- try {
+  rows <- foreach tag in ${declaratives.items} {
+    return { hit = "yes" }
+  } @rows
+
+  _ <- tools/hit-nonempty(items = ${rows}) @force_hit
+
   return {
     hints = [{
       severity = "info",
@@ -32,7 +39,7 @@ pack <- if ${force.equal} {
       step_id = ""
     }]
   }
-} else {
+} catch {
   empty <- tools/empty-speech-act-hints() @skip
   return { hints = ${empty.hints} }
 } @branch

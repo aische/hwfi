@@ -47,9 +47,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
-- **Semantic-check perf builtins (2026-07-15):** `builtin/list-unique-by`;
-  `record-filter` dot paths + nested `where`; `text-grep` multi-pattern `tags`;
-  rewired `review-gate-dedupe-cap`, speech-act align/scan tools.
+- **Semantic-check workflow perf (2026-07-15):** engine builtins (`list-unique-by`,
+  extended `record-filter` / `text-grep`) plus workflow rewrite: merged review-gate
+  rows, single-step `is-builtin`, record-filter replaces `strings-equal` loops.
 - **E3 layer 3 gated LLM (2026-07-14):** `tools/review-gate`, `tools/pragmatic-review`,
   `types/review-gate-item`, `pragmatic-schema.json`; workflow inputs `mode` +
   `schema`; report `mode`, `review_gate`, `pragmatic_findings`.

@@ -8,7 +8,6 @@ outputs:
 imports:
   - builtin/record-filter
   - tools/hit-nonempty
-  - tools/speech-act-has-directive-in-section
 ---
 
 ## flow
@@ -17,16 +16,29 @@ True when any agent section in the declaration contains a directive tag.
 
 ```step
 rows <- foreach section in ${inputs.decl.agent_sections} {
-  probe <- tools/speech-act-has-directive-in-section(
-    tags = ${inputs.tags},
-    file = ${inputs.decl.path},
-    section = ${section}
-  ) @probe
-  branch <- if ${probe.ok} {
+  hits <- builtin/record-filter(
+    items = ${inputs.tags},
+    where = {
+      force = "directive",
+      location = {
+        file = ${inputs.decl.path},
+        section = ${section}
+      }
+    }
+  ) @hits
+
+  pack <- try {
+    markers <- foreach tag in ${hits.items} {
+      return { hit = "yes" }
+    } @markers
+
+    _ <- tools/hit-nonempty(items = ${markers}) @count
     return { hit = "yes" }
-  } else {
+  } catch {
     return { hit = "no" }
   } @branch
+
+  return { hit = ${pack.hit} }
 } @sections
 
 pack <- try {

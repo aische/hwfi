@@ -9,12 +9,9 @@ outputs:
 imports:
   - builtin/list-concat
   - builtin/record-map
-  - tools/corpus-hint-is-gate
-  - tools/empty-review-gate-items
+  - tools/review-gate-corpus-row
   - tools/review-gate-dedupe-cap
-  - tools/review-gate-from-finding
-  - tools/review-gate-from-speech-hint
-  - tools/speech-act-hint-is-gate
+  - tools/review-gate-speech-row
 ---
 
 ## flow
@@ -23,36 +20,18 @@ Union layer 2 / 2b gate signals into bounded slice list for layer 3 LLM review.
 
 ```step
 corpus_rows <- foreach hint in ${inputs.corpus_hints} {
-  gate <- tools/corpus-hint-is-gate(hint = ${hint}) @gate
-
-  pack <- if ${gate.gate} {
-    item <- tools/review-gate-from-finding(
-      hint = ${hint},
-      slices = ${inputs.slices}
-    ) @item
-    return { items = ${item.items} }
-  } else {
-    empty <- tools/empty-review-gate-items() @skip
-    return { items = ${empty.items} }
-  } @branch
-
+  pack <- tools/review-gate-corpus-row(
+    hint = ${hint},
+    slices = ${inputs.slices}
+  ) @row
   return { items = ${pack.items} }
 } @corpus
 
 speech_rows <- foreach hint in ${inputs.speech_act_hints} {
-  gate <- tools/speech-act-hint-is-gate(hint = ${hint}) @gate
-
-  pack <- if ${gate.gate} {
-    item <- tools/review-gate-from-speech-hint(
-      hint = ${hint},
-      slices = ${inputs.slices}
-    ) @item
-    return { items = ${item.items} }
-  } else {
-    empty <- tools/empty-review-gate-items() @skip
-    return { items = ${empty.items} }
-  } @branch
-
+  pack <- tools/review-gate-speech-row(
+    hint = ${hint},
+    slices = ${inputs.slices}
+  ) @row
   return { items = ${pack.items} }
 } @speech
 

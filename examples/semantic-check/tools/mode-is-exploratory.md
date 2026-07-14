@@ -5,7 +5,8 @@ inputs:
 outputs:
   exploratory: Bool
 imports:
-  - tools/strings-equal
+  - builtin/record-filter
+  - tools/hit-nonempty
 ---
 
 ## flow
@@ -13,10 +14,21 @@ imports:
 True when review mode enables layer 3 LLM pragmatics.
 
 ```step
-probe <- tools/strings-equal(
-  left = ${inputs.mode},
-  right = "exploratory"
+hits <- builtin/record-filter(
+  items = [{ mode = ${inputs.mode} }],
+  where = { mode = "exploratory" }
 ) @probe
 
-return { exploratory = ${probe.equal} }
+rows <- foreach row in ${hits.items} {
+  return { hit = "yes" }
+} @rows
+
+pack <- try {
+  _ <- tools/hit-nonempty(items = ${rows}) @hit
+  return { exploratory = true }
+} catch {
+  return { exploratory = false }
+} @branch
+
+return { exploratory = ${pack.exploratory} }
 ```

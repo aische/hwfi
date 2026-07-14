@@ -5,10 +5,11 @@ inputs:
 outputs:
   hints: List<types/speech-act-hint>
 imports:
+  - builtin/record-filter
   - builtin/text-grep
   - tools/empty-speech-act-hints
+  - tools/hit-nonempty
   - tools/string-nonempty
-  - tools/strings-equal
 ---
 
 ## flow
@@ -16,12 +17,18 @@ imports:
 Flag directive sentences that lack an explicit condition (if/when/unless).
 
 ```step
-force <- tools/strings-equal(
-  left = ${inputs.tag.force},
-  right = "directive"
-) @force_chk
+directives <- builtin/record-filter(
+  items = [${inputs.tag}],
+  where = { force = "directive" }
+) @directives
 
-pack <- if ${force.equal} {
+pack <- try {
+  rows <- foreach tag in ${directives.items} {
+    return { hit = "yes" }
+  } @rows
+
+  _ <- tools/hit-nonempty(items = ${rows}) @force_hit
+
   inner <- try {
     grep <- builtin/text-grep(
       text = ${inputs.tag.sentence},
@@ -48,7 +55,7 @@ pack <- if ${force.equal} {
   } @probe
 
   return { hints = ${inner.hints} }
-} else {
+} catch {
   empty <- tools/empty-speech-act-hints() @skip
   return { hints = ${empty.hints} }
 } @branch
