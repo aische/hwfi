@@ -41,10 +41,12 @@ import Hwfi.Compat
     noHooks,
   )
 import Hwfi.Project.Manifest (ExecPolicy)
+import Hwfi.Runtime.CheckProject (runCheckProject)
 import Hwfi.Runtime.Error (RuntimeError, StepRef (..), evalError, llmError, sandboxError)
 import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
+import Hwfi.Runtime.ParseMarkdown (runParseMarkdown)
 import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
 import Hwfi.Runtime.Skills (discoverSkillsResult, loadSkillScripted)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, sliceTrace, snapshotEvents)
@@ -124,6 +126,8 @@ runBuiltin env q args = case renderQName q of
   "builtin/log" -> logTool env args
   "builtin/discover-skills" -> discoverSkillsTool env args
   "builtin/load-skill" -> loadSkillTool env args
+  "builtin/check-project" -> runCheckProject (beWorkspace env) args
+  "builtin/parse-markdown" -> runParseMarkdown (beWorkspace env) args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------

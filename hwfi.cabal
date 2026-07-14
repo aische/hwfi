@@ -66,6 +66,7 @@ library
         Hwfi.Project.Manifest
         Hwfi.Runtime.Agent
         Hwfi.Runtime.Builtins
+        Hwfi.Runtime.CheckProject
         Hwfi.Runtime.Context
         Hwfi.Runtime.Error
         Hwfi.Runtime.Eval
@@ -78,6 +79,7 @@ library
         Hwfi.Runtime.MachinePar
         Hwfi.Runtime.MachinePath
         Hwfi.Runtime.MachineSnapshot
+        Hwfi.Runtime.ParseMarkdown
         Hwfi.Runtime.StepDriver
         Hwfi.Runtime.StepEnv
         Hwfi.Runtime.Gateways
@@ -165,6 +167,8 @@ test-suite hwfi-test
         Hwfi.Runtime.CrossRunTraceSpec
         Hwfi.Runtime.SkillSpec
         Hwfi.Runtime.DataPlumbingSpec
+        Hwfi.Runtime.CheckProjectSpec
+        Hwfi.Runtime.ParseMarkdownSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec

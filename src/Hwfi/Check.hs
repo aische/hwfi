@@ -15,6 +15,7 @@
 module Hwfi.Check
   ( checkProject,
     checkProjectWithMeta,
+    projectPhaseOne,
     renderCheckErrors,
     renderCheckWarnings,
   )
@@ -63,17 +64,7 @@ checkProjectWithMeta proj = (allErrs, bodyWarnings, if null allErrs then Just ty
     decls = projDecls proj
     manifest = projManifest proj
 
-    -- Phase 1: aliases and signatures.
-    aliasDefs = Map.fromList (mapMaybe aliasDef (Map.elems decls))
-    known = Map.keysSet aliasDefs
-    (aliasErrs, aliasMap) = resolveAliasDefs aliasDefs
-
-    sigResults =
-      [ (q, resolveSignature known aliasMap (declPath q) (declSignature d))
-        | (q, d) <- Map.toList decls
-      ]
-    sigErrs = concat [e | (_, (e, _)) <- sigResults]
-    sigMap = Map.fromList [(q, s) | (q, (_, s)) <- sigResults]
+    (phaseOneErrs, sigMap) = projectPhaseOne proj
 
     -- Phase 2: imports and cycles.
     importErrs = concatMap (importErrors decls) (Map.toList decls)
@@ -93,9 +84,10 @@ checkProjectWithMeta proj = (allErrs, bodyWarnings, if null allErrs then Just ty
     -- §6.3/§7.5/A24: fail-closed rejection of un-permitted builtin/exec calls.
     execErrs = concatMap (execErrors manifest) (Map.toList decls)
 
-    allErrs = aliasErrs <> sigErrs <> importErrs <> cycleErrs <> entrypointErrs <> bodyErrs <> execErrs
+    allErrs = phaseOneErrs <> importErrs <> cycleErrs <> entrypointErrs <> bodyErrs <> execErrs
 
     -- Phase 4 (success only): fingerprints and assembly.
+    aliasMap = phaseOneAliases proj
     fps = computeFingerprints decls sigMap
     declMap = Map.mapWithKey mkTypedDecl decls
     skillCatalog =
@@ -130,6 +122,27 @@ checkProjectWithMeta proj = (allErrs, bodyWarnings, if null allErrs then Just ty
             ],
           tdFingerprint = Map.findWithDefault (Fingerprint "") q fps
         }
+
+-- | Phase-1 alias and signature resolution. Available even when later
+-- checking phases fail (used by review builtins).
+projectPhaseOne :: Project -> ([TypeError], Map QName ResolvedSignature)
+projectPhaseOne proj =
+  let decls = projDecls proj
+      aliasDefs = Map.fromList (mapMaybe aliasDef (Map.elems decls))
+      known = Map.keysSet aliasDefs
+      (aliasErrs, aliasMap) = resolveAliasDefs aliasDefs
+      sigResults =
+        [ (q, resolveSignature known aliasMap (declPath q) (declSignature d))
+          | (q, d) <- Map.toList decls
+        ]
+      sigErrs = concat [e | (_, (e, _)) <- sigResults]
+      sigMap = Map.fromList [(q, s) | (q, (_, s)) <- sigResults]
+   in (aliasErrs <> sigErrs, sigMap)
+
+phaseOneAliases :: Project -> Map QName Type
+phaseOneAliases proj =
+  let aliasDefs = Map.fromList (mapMaybe aliasDef (Map.elems (projDecls proj)))
+   in snd (resolveAliasDefs aliasDefs)
 
 -- | Render check errors as spec §9.1 diagnostics.
 renderCheckErrors :: [TypeError] -> [Diagnostic]

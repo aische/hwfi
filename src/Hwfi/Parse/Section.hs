@@ -6,8 +6,10 @@
 -- section's raw content is the verbatim source text from the line after the
 -- heading up to (but excluding) the next heading of the same or higher level.
 module Hwfi.Parse.Section
-  ( computeSlug,
+  ( MarkdownSection (..),
+    computeSlug,
     buildSections,
+    buildMarkdownSections,
     lookupSection,
     resolveSelf,
   )
@@ -20,6 +22,15 @@ import Data.Text qualified as T
 import Hwfi.Ast.Name (Slug (..), renderSlug)
 import Hwfi.Ast.Workflow (Section (..))
 import Hwfi.Parse.Markdown (MdHeading (..), sliceLines)
+
+-- | A markdown section for general-purpose structure extraction.
+data MarkdownSection = MarkdownSection
+  { msLevel :: Int,
+    msTitle :: Text,
+    msSlug :: Text,
+    msBody :: Text
+  }
+  deriving stock (Eq, Show)
 
 -- | Compute the slug for a heading's text (§3.4).
 computeSlug :: Text -> Slug
@@ -35,6 +46,35 @@ isWordChar c =
     || isAsciiUpper c
     || isDigit c
     || c == '_'
+
+-- | Build sections for every heading level. A section ends at the next heading
+-- whose level is less than or equal to its own.
+buildMarkdownSections :: [Text] -> [MdHeading] -> [MarkdownSection]
+buildMarkdownSections srcLines headings =
+  [ mkSection i h
+    | (i, h) <- zip [0 ..] headings
+  ]
+  where
+    total = length headings
+
+    mkSection i h =
+      MarkdownSection
+        { msLevel = mhLevel h,
+          msTitle = mhText h,
+          msSlug = renderSlug (computeSlug (mhText h)),
+          msBody = T.strip (sliceLines srcLines contentStart contentEnd)
+        }
+      where
+        contentStart = mhEndLine h + 1
+        contentEnd = case laterSameOrHigher i h of
+          (nh : _) -> mhStartLine nh - 1
+          [] -> length srcLines
+
+    laterSameOrHigher i h =
+      [ headings !! j
+        | j <- [i + 1 .. total - 1],
+          mhLevel (headings !! j) <= mhLevel h
+      ]
 
 -- | Build the addressable H2/H3 sections of a file from its heading list and
 -- source lines. A section ends at the next heading whose level is less than

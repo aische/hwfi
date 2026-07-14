@@ -27,6 +27,8 @@ module Hwfi.Check.Builtins
     recordMapQName,
     discoverSkillsQName,
     loadSkillQName,
+    checkProjectQName,
+    parseMarkdownQName,
     isAgentBuiltin,
     isRecordPlumbingBuiltin,
     isOneShotLlmBuiltin,
@@ -125,6 +127,53 @@ discoverSkillsQName = qnameFromText "builtin/discover-skills"
 -- | Skill loading (§6.7.2).
 loadSkillQName :: QName
 loadSkillQName = qnameFromText "builtin/load-skill"
+
+-- | Project parse + type-check for semantic review (§13.1.8).
+checkProjectQName :: QName
+checkProjectQName = qnameFromText "builtin/check-project"
+
+-- | General-purpose markdown structure extraction (§13.1.8).
+parseMarkdownQName :: QName
+parseMarkdownQName = qnameFromText "builtin/parse-markdown"
+
+stepSummaryTy :: Type
+stepSummaryTy =
+  TyRecord
+    [ ("step_id", TyString),
+      ("target", TyString),
+      ("agent_tools", TyList TyString),
+      ("interpolations", TyList TyString),
+      ("bare_qnames", TyList TyString)
+    ]
+
+declarationSummaryTy :: Type
+declarationSummaryTy =
+  TyRecord
+    [ ("qname", TyString),
+      ("kind", TyString),
+      ("path", TyString),
+      ("inputs", TyJson),
+      ("outputs", TyJson),
+      ("imports", TyList TyString),
+      ("agent_sections", TyList TyString),
+      ("steps", TyList stepSummaryTy)
+    ]
+
+markdownSectionTy :: Type
+markdownSectionTy =
+  TyRecord
+    [ ("level", TyInt),
+      ("title", TyString),
+      ("slug", TyString),
+      ("body", TyString)
+    ]
+
+markdownFenceTy :: Type
+markdownFenceTy =
+  TyRecord
+    [ ("lang", TyString),
+      ("body", TyString)
+    ]
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
 -- bespoke argument checking (the @tools@ argument is a heterogeneous list of
@@ -312,6 +361,29 @@ builtinCallees =
           ("kind", TyString),
           ("loaded", TyBool),
           ("content", TyString),
+          ("error", TyString)
+        ],
+      builtin
+        "builtin/check-project"
+        [("path", TyFileRef)]
+        [ ("ok", TyBool),
+          ("errors", TyList TyString),
+          ("warnings", TyList TyString),
+          ("declarations", TyList declarationSummaryTy),
+          ("call_graph", TyJson),
+          ("error", TyString)
+        ],
+      builtin
+        "builtin/parse-markdown"
+        [ ("path", TyFileRef),
+          ("sections", TyBool),
+          ("frontmatter", TyBool),
+          ("fences", TyBool)
+        ]
+        [ ("ok", TyBool),
+          ("frontmatter", TyJson),
+          ("sections", TyList markdownSectionTy),
+          ("fences", TyList markdownFenceTy),
           ("error", TyString)
         ]
     ]

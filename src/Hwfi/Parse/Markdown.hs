@@ -19,6 +19,7 @@ module Hwfi.Parse.Markdown
   ( MarkdownFile (..),
     MdHeading (..),
     MdStepBlock (..),
+    MdFence (..),
     parseMarkdown,
     sliceLines,
   )
@@ -120,11 +121,19 @@ data MdStepBlock = MdStepBlock
   }
   deriving stock (Eq, Show)
 
+-- | A fenced code block (any language tag).
+data MdFence = MdFence
+  { mfLang :: Text,
+    mfBody :: Text
+  }
+  deriving stock (Eq, Show)
+
 -- | The structural parse of one markdown file.
 data MarkdownFile = MarkdownFile
   { mdFrontmatter :: Maybe Text,
     mdHeadings :: [MdHeading],
     mdStepBlocks :: [MdStepBlock],
+    mdFences :: [MdFence],
     mdSourceLines :: [Text]
   }
   deriving stock (Eq, Show)
@@ -142,6 +151,7 @@ parseMarkdown path src =
               { mdFrontmatter = mfm,
                 mdHeadings = mapMaybe toHeading items,
                 mdStepBlocks = mapMaybe toStep items,
+                mdFences = mapMaybe toFence items,
                 mdSourceLines = srcLines
               }
   where
@@ -156,6 +166,19 @@ parseMarkdown path src =
           fenceLine <- rangeStartLine r
           Just (MdStepBlock content (fenceLine + 1))
     toStep _ = Nothing
+
+    toFence (BCode info content _) =
+      Just
+        MdFence
+          { mfLang = fenceLang info,
+            mfBody = content
+          }
+    toFence _ = Nothing
+
+    fenceLang info =
+      case T.words (T.strip info) of
+        [] -> ""
+        (lang : _) -> lang
 
     isStepInfo info = case T.words (T.strip info) of
       ("step" : _) -> True

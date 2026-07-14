@@ -14,6 +14,7 @@ module Hwfi.Runtime.Workspace
     workspaceRoot,
     newWorkspace,
     resolvePath,
+    resolveContainedPath,
     readTextFile,
     writeTextFile,
     listDir,

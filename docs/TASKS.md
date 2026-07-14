@@ -15,9 +15,9 @@ a **workflow**, not engine logic. Builtins are general-purpose primitives.
 
 ### Tier 1 — project and markdown structure
 
-- [ ] `builtin/check-project` — parse + type-check workspace project; structured
+- [x] `builtin/check-project` — parse + type-check workspace project; structured
   declarations, call graph, step metadata
-- [ ] `builtin/parse-markdown` — frontmatter, sections, fenced blocks
+- [x] `builtin/parse-markdown` — frontmatter, sections, fenced blocks
 
 ### Tier 2 — text corpus analysis
 
