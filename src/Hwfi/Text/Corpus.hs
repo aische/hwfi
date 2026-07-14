@@ -107,7 +107,7 @@ grepTextLines rawPattern text =
         Left err -> Left (T.pack err)
         Right regex ->
           let lineMatches =
-                filter (\line -> matchTest regex (T.unpack line)) (T.lines text)
+                filter (matchTest regex . T.unpack) (T.lines text)
            in Right lineMatches
 
 patternOpts :: Text -> (Text, CompOption)
@@ -131,9 +131,7 @@ splitSentences text =
        in if not (null acc)
             then reverse acc
             else
-              if T.null (T.strip sent)
-                then []
-                else [T.strip sent]
+              [T.strip sent | not (T.null (T.strip sent))]
     consume (c : cs) acc cur
       | c `elem` punct && (null cs || head cs `elem` space) =
           let sent = T.pack (reverse (c : cur))
