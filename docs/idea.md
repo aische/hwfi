@@ -28,3 +28,7 @@ There will be no GUI
 - GHC2021 language
 
 ## Open questions
+
+- **Semantic review** — Can workflow prompts and agent prose be checked for
+  coherence beyond static types? Planned as an ordinary workflow with
+  general-purpose builtins; see [semantic-check-design.md](semantic-check-design.md).

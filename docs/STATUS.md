@@ -7,6 +7,11 @@ Last updated: 2026-07-14
 **v2 runtime (cursor + frames)** — M6 done: single resume story via
 `machine.json` + `MachineRun`. Design: [execution-model.md](execution-model.md).
 
+**Semantic review (research)** — design captured in
+[semantic-check-design.md](semantic-check-design.md): review as an ordinary
+workflow; Tier 1–4 general-purpose builtins backlog in [TASKS.md](TASKS.md).
+Implementation not started.
+
 **M5** (DB / server `ProjectStore`) remains deferred — optional, not blocking
 local filesystem mode.
 
@@ -30,4 +35,5 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) — M5 (optional) or v1.1 backlog.
+[TASKS.md](TASKS.md) — semantic review builtins (Tier 1 first), M5 (optional),
+or v1.1 backlog.

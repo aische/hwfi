@@ -8,6 +8,40 @@ Deferred until v2 cutover is complete; may not ship.
 
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend; server API
 
+## Next — semantic review builtins (planned)
+
+Design: [semantic-check-design.md](semantic-check-design.md). Semantic review is
+a **workflow**, not engine logic. Builtins are general-purpose primitives.
+
+### Tier 1 — project and markdown structure
+
+- [ ] `builtin/check-project` — parse + type-check workspace project; structured
+  declarations, call graph, step metadata
+- [ ] `builtin/parse-markdown` — frontmatter, sections, fenced blocks
+
+### Tier 2 — text corpus analysis
+
+- [ ] `builtin/text-metrics` — entropy, compression ratio, token counts
+- [ ] `builtin/text-similarity` — Jaccard / LCS pairwise similarity
+- [ ] `builtin/text-search-corpus` — overlap clusters across documents
+
+### Tier 3 — graph and reference utilities
+
+- [ ] `builtin/graph-reachability`
+- [ ] `builtin/graph-cycles`
+- [ ] `builtin/graph-topo-sort`
+- [ ] `builtin/resolve-qnames-in-text` — resolved / unresolved / ambiguous mentions
+
+### Tier 4 — convenience
+
+- [ ] `builtin/diff-text`
+- [ ] `builtin/json-validate`
+- [ ] `builtin/split-text`
+
+### Example workflow (after Tier 1)
+
+- [ ] `examples/semantic-check` — layers 0–1 review; `semantic-report.json` output
+
 ## Next — v1.1 (paused during v2)
 
 Deferred from v1; spec §13 and [code-issues.md](code-issues.md).

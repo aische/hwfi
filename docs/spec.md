@@ -2986,6 +2986,7 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
+- **Semantic review primitives** — §13.1.8 (design only; workflow-based review).
 - **Author capability backlog (post-v1)** — §13.1 items 9.9–9.14 are
   **implemented**; remaining v1.1 work is listed in [TASKS.md](TASKS.md).
 
@@ -3098,6 +3099,44 @@ must still pass `hwfi check` before `load-skill` can advertise it.
 **Follow-ups (not blocking):** semantic/embedding discover (substring match
 today); `hwfi skill list` CLI; honor `skills.directory` in the project
 walker; catalog entries for callable workflow skills under `skills/`.
+
+#### 13.1.8 Semantic review primitives (planned)
+
+**Status: design only (2026-07-14).** Full design:
+[semantic-check-design.md](semantic-check-design.md).
+
+**Problem:** `hwfi check` validates structure and types; authors also need to
+review whether prompts, agent sections, and skill prose are coherent,
+non-contradictory, and consistent with declared tools. That judgment is
+inherently partial and evolving — it must not be baked into the engine.
+
+**Approach:** Semantic review is an **ordinary workflow** (future
+`examples/semantic-check`). The workspace is the project under review. The
+engine adds **general-purpose builtins** so review workflows can extract
+structure, compute text metrics, traverse graphs, and classify references —
+without a `builtin/semantic-check` policy builtin.
+
+**Planned builtins (not implemented):**
+
+| Tier | Builtin | Purpose |
+|------|---------|---------|
+| 1 | `check-project` | Parse + type-check; declarations, call graph, step metadata |
+| 1 | `parse-markdown` | Frontmatter, sections, fenced blocks |
+| 2 | `text-metrics` | Entropy, compression ratio, counts |
+| 2 | `text-similarity` | Pairwise Jaccard / LCS |
+| 2 | `text-search-corpus` | Overlap clusters across documents |
+| 3 | `graph-reachability` | Reachable nodes from an edge list |
+| 3 | `graph-cycles` | Cycle enumeration |
+| 3 | `graph-topo-sort` | Topological order or cycle error |
+| 3 | `resolve-qnames-in-text` | Resolved / unresolved qname mentions |
+| 4 | `diff-text` | Line or word diff |
+| 4 | `json-validate` | JSON Schema validation |
+| 4 | `split-text` | Chunk prose for LLM context limits |
+
+**Non-goals:** automatic invocation from `hwfi check` or `hwfi run`; reads
+outside the workspace; embedding index in the first implementation tranche.
+
+Implementation checklist: [TASKS.md](TASKS.md).
 
 ## 14. Known implementation gaps
 

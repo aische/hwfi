@@ -1069,6 +1069,12 @@ See spec §13 and [TASKS.md](TASKS.md) for the open v1.1 backlog:
 - Step-keys (static classification) do not include workspace file contents
 - No arbitrary HTTP builtin (only LLM provider calls + allowlisted `exec`)
 
+**Planned (semantic review primitives, §13.1.8):** `check-project`,
+`parse-markdown`, `text-metrics`, `text-similarity`, `text-search-corpus`,
+`graph-reachability`, `graph-cycles`, `graph-topo-sort`,
+`resolve-qnames-in-text`, `diff-text`, `json-validate`, `split-text` — see
+[semantic-check-design.md](semantic-check-design.md).
+
 **Shipped in v1.1:** `try`/`catch`, `par(on_error = "collect")`, record
 merge/filter/map, `range(n)`, inline `while` bodies,
 `WorkflowRef`/`ToolRef` patterns — see [workflow-refs.md](workflow-refs.md).
@@ -1082,6 +1088,7 @@ merge/filter/map, `range(n)`, inline `while` bodies,
 | [tutorials/README.md](tutorials/README.md) | Hands-on learning path |
 | [spec.md](spec.md) | Full normative specification |
 | [caching-and-resume.md](caching-and-resume.md) | Cache and resume semantics |
+| [semantic-check-design.md](semantic-check-design.md) | Planned semantic review builtins |
 | [tool-use.md](tool-use.md) | Agent tool-loop design rationale (incl. `submit`) |
 | [examples/hello/README.md](../examples/hello/README.md) | Minimal file pipeline (no LLM) |
 | [examples/summarise/README.md](../examples/summarise/README.md) | LLM pipeline |
