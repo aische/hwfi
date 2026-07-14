@@ -15,7 +15,8 @@ Policy stays in `examples/semantic-check`; engine exposes general-purpose
 primitives only. Entropy and speech-act heuristics are **signals, not verdicts**.
 
 **Done foundation:** layers 0–2b + gated layer 3; Tier 1–2 builtins +
-`resolve-qnames-in-text`, `split-text`, `text-grep`.
+`resolve-qnames-in-text`, `list-concat`, `list-unique-by`; extended
+`record-filter` / `text-grep`.
 
 ### E4 — Graph layer *(parallel with E2/E3)*
 
@@ -46,6 +47,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **Semantic-check perf builtins (2026-07-15):** `builtin/list-unique-by`;
+  `record-filter` dot paths + nested `where`; `text-grep` multi-pattern `tags`;
+  rewired `review-gate-dedupe-cap`, speech-act align/scan tools.
 - **E3 layer 3 gated LLM (2026-07-14):** `tools/review-gate`, `tools/pragmatic-review`,
   `types/review-gate-item`, `pragmatic-schema.json`; workflow inputs `mode` +
   `schema`; report `mode`, `review_gate`, `pragmatic_findings`.

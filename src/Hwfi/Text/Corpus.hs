@@ -12,6 +12,8 @@ module Hwfi.Text.Corpus
     searchCorpus,
     splitText,
     grepTextLines,
+    grepTextTagged,
+    GrepTagPattern (..),
   )
 where
 
@@ -19,6 +21,7 @@ import Codec.Compression.Zlib (compress)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (foldl', sortOn)
+import Data.Maybe (catMaybes)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -109,6 +112,25 @@ grepTextLines rawPattern text =
           let lineMatches =
                 filter (matchTest regex . T.unpack) (T.lines text)
            in Right lineMatches
+
+data GrepTagPattern = GrepTagPattern
+  { gtpName :: !Text,
+    gtpPattern :: !Text,
+    gtpForce :: !Text
+  }
+  deriving stock (Eq, Show)
+
+-- | Return force/name pairs for every pattern that matches @text@.
+grepTextTagged :: Text -> [GrepTagPattern] -> Either Text [(Text, Text)]
+grepTextTagged text patterns =
+  fmap catMaybes (traverse (matchPattern text) patterns)
+  where
+    matchPattern body GrepTagPattern {..} =
+      case grepTextLines gtpPattern body of
+        Left err -> Left err
+        Right matches
+          | null matches -> Right Nothing
+          | otherwise -> Right (Just (gtpForce, gtpName))
 
 patternOpts :: Text -> (Text, CompOption)
 patternOpts pat =

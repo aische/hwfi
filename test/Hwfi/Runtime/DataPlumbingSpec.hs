@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
-import Hwfi.Check.Builtins (jsonGetQName, jsonValuesQName, recordFilterQName, recordMapQName, recordMergeQName)
+import Hwfi.Check.Builtins (jsonGetQName, jsonValuesQName, listUniqueByQName, recordFilterQName, recordMapQName, recordMergeQName)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (StepRef (..), renderRuntimeError)
@@ -131,6 +131,90 @@ spec = describe "data plumbing builtins (§13.1.2)" $ do
                 ]
             )
 
+    it "record-filter supports dot-path field equality" $
+      withRecordFilterPath $ \run -> do
+        let items =
+              VList
+                [ VRecord
+                    ( Map.fromList
+                        [ ("location", VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "flow")]))
+                        ]
+                    ),
+                  VRecord
+                    ( Map.fromList
+                        [ ("location", VRecord (Map.fromList [("file", VString "b.md"), ("section", VString "flow")]))
+                        ]
+                    )
+                ]
+        result <- run items "location.file" (VString "a.md")
+        result
+          `shouldBe` Right
+            ( VList
+                [ VRecord
+                    ( Map.fromList
+                        [ ("location", VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "flow")]))
+                        ]
+                    )
+                ]
+            )
+
+    it "record-filter supports nested where records" $
+      withRecordFilterWhere $ \run -> do
+        let items =
+              VList
+                [ VRecord
+                    ( Map.fromList
+                        [ ("force", VString "directive"),
+                          ("location", VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "agent")]))
+                        ]
+                    ),
+                  VRecord
+                    ( Map.fromList
+                        [ ("force", VString "assertive"),
+                          ("location", VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "agent")]))
+                        ]
+                    )
+                ]
+            whereClause =
+              VRecord
+                ( Map.fromList
+                    [ ("force", VString "directive"),
+                      ( "location",
+                        VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "agent")])
+                      )
+                    ]
+                )
+        result <- run items whereClause
+        result
+          `shouldBe` Right
+            ( VList
+                [ VRecord
+                    ( Map.fromList
+                        [ ("force", VString "directive"),
+                          ("location", VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "agent")]))
+                        ]
+                    )
+                ]
+            )
+
+    it "list-unique-by deduplicates by field paths and caps results" $
+      withListUniqueBy $ \run -> do
+        let items =
+              VList
+                [ VRecord (Map.fromList [("slice_id", VString "a"), ("n", VInt 1)]),
+                  VRecord (Map.fromList [("slice_id", VString "a"), ("n", VInt 2)]),
+                  VRecord (Map.fromList [("slice_id", VString "b"), ("n", VInt 3)]),
+                  VRecord (Map.fromList [("slice_id", VString "c"), ("n", VInt 4)])
+                ]
+        result <- run items ["slice_id"] 2
+        result
+          `shouldBe` Right
+            ( VList
+                [ VRecord (Map.fromList [("slice_id", VString "a"), ("n", VInt 1)]),
+                  VRecord (Map.fromList [("slice_id", VString "b"), ("n", VInt 3)])
+                ]
+            )
+
     it "record-map plucks a field from each record" $
       withRecordMap $ \run -> do
         let items =
@@ -233,6 +317,29 @@ withRecordFilter body = withRecordEnv recordFilterQName extractItems $ \benv par
           recordFilterQName
           parseOut
           (Map.fromList [("items", items), ("field", VString field), ("equals", equals)])
+  body run
+
+withRecordFilterPath :: ((RValue -> Text -> RValue -> IO (Either Text RValue)) -> IO a) -> IO a
+withRecordFilterPath = withRecordFilter
+
+withRecordFilterWhere :: ((RValue -> RValue -> IO (Either Text RValue)) -> IO a) -> IO a
+withRecordFilterWhere body = withRecordEnv recordFilterQName extractItems $ \benv parseOut -> do
+  let run items whereClause =
+        invokeRecord
+          benv
+          recordFilterQName
+          parseOut
+          (Map.fromList [("items", items), ("where", whereClause)])
+  body run
+
+withListUniqueBy :: ((RValue -> [Text] -> Int -> IO (Either Text RValue)) -> IO a) -> IO a
+withListUniqueBy body = withRecordEnv listUniqueByQName extractItems $ \benv parseOut -> do
+  let run items fields limit =
+        invokeRecord
+          benv
+          listUniqueByQName
+          parseOut
+          (Map.fromList [("items", items), ("fields", VList (map VString fields)), ("limit", VInt (fromIntegral limit))])
   body run
 
 withRecordMap :: ((RValue -> Text -> IO (Either Text RValue)) -> IO a) -> IO a

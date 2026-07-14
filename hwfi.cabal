@@ -81,6 +81,7 @@ library
         Hwfi.Runtime.MachineSnapshot
         Hwfi.Runtime.ParseMarkdown
         Hwfi.Runtime.ResolveQnames
+        Hwfi.Runtime.RecordPlumbing
         Hwfi.Runtime.TextCorpus
         Hwfi.Runtime.StepDriver
         Hwfi.Runtime.StepEnv

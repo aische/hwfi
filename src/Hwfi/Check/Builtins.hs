@@ -36,8 +36,10 @@ module Hwfi.Check.Builtins
     textGrepQName,
     resolveQnamesInTextQName,
     listConcatQName,
+    listUniqueByQName,
     isAgentBuiltin,
     isRecordPlumbingBuiltin,
+    isTextGrepBuiltin,
     isOneShotLlmBuiltin,
     engineVersion,
     builtinIdentity,
@@ -125,7 +127,14 @@ recordMapQName = qnameFromText "builtin/record-map"
 -- | Whether @q@ is a record-plumbing builtin needing bespoke type checking.
 isRecordPlumbingBuiltin :: QName -> Bool
 isRecordPlumbingBuiltin q =
-  q == recordMergeQName || q == recordFilterQName || q == recordMapQName || q == listConcatQName
+  q == recordMergeQName
+    || q == recordFilterQName
+    || q == recordMapQName
+    || q == listConcatQName
+    || q == listUniqueByQName
+
+isTextGrepBuiltin :: QName -> Bool
+isTextGrepBuiltin q = q == textGrepQName
 
 -- | Skill catalog discovery (§6.7.1).
 discoverSkillsQName :: QName
@@ -166,6 +175,9 @@ resolveQnamesInTextQName = qnameFromText "builtin/resolve-qnames-in-text"
 
 listConcatQName :: QName
 listConcatQName = qnameFromText "builtin/list-concat"
+
+listUniqueByQName :: QName
+listUniqueByQName = qnameFromText "builtin/list-unique-by"
 
 stepSummaryTy :: Type
 stepSummaryTy =
@@ -380,7 +392,11 @@ builtinCallees =
         [("record", TyJson)],
       builtin
         "builtin/record-filter"
-        [("items", TyJson), ("field", TyString), ("equals", TyJson)]
+        [ ("items", TyJson),
+          ("field", TyString),
+          ("equals", TyJson),
+          ("where", TyJson)
+        ]
         [("items", TyJson)],
       builtin
         "builtin/record-map"
@@ -494,7 +510,14 @@ builtinCallees =
       builtin
         "builtin/list-concat"
         [("lists", TyList (TyList TyJson))]
-        [("items", TyList TyJson)]
+        [("items", TyList TyJson)],
+      builtin
+        "builtin/list-unique-by"
+        [ ("items", TyJson),
+          ("fields", TyList TyString),
+          ("limit", TyInt)
+        ]
+        [("items", TyJson)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

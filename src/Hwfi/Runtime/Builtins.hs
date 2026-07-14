@@ -47,6 +47,7 @@ import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.ParseMarkdown (runParseMarkdown)
+import Hwfi.Runtime.RecordPlumbing (runListUniqueBy, runRecordFilter)
 import Hwfi.Runtime.ResolveQnames (runListConcat, runResolveQnamesInText)
 import Hwfi.Runtime.TextCorpus (runSplitText, runTextGrep, runTextMetrics, runTextSearchCorpus, runTextSimilarity)
 import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
@@ -123,7 +124,7 @@ runBuiltin env q args = case renderQName q of
   "builtin/json-values" -> jsonValuesTool args
   "builtin/concat" -> concatTool args
   "builtin/record-merge" -> recordMergeTool args
-  "builtin/record-filter" -> recordFilterTool args
+  "builtin/record-filter" -> runRecordFilter args
   "builtin/record-map" -> recordMapTool args
   "builtin/log" -> logTool env args
   "builtin/discover-skills" -> discoverSkillsTool env args
@@ -137,6 +138,7 @@ runBuiltin env q args = case renderQName q of
   "builtin/text-grep" -> runTextGrep args
   "builtin/resolve-qnames-in-text" -> runResolveQnamesInText args
   "builtin/list-concat" -> runListConcat args
+  "builtin/list-unique-by" -> runListUniqueBy args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------
@@ -765,30 +767,6 @@ recordMergeTool args =
         Right (record [("record", VRecord (Map.union overlay base))])
       _ ->
         Left (evalError "builtin/record-merge requires base and overlay records")
-
-recordFilterTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
-recordFilterTool args =
-  pure $
-    case (Map.lookup "items" args, argText args "field") of
-      (Just (VList items), Right field) ->
-        case Map.lookup "equals" args of
-          Nothing -> Left (evalError "builtin/record-filter requires equals")
-          Just wanted ->
-            Right
-              ( record
-                  [ ( "items",
-                      VList
-                        [ item
-                          | item@(VRecord m) <- items,
-                            case Map.lookup field m of
-                              Just v -> v == wanted
-                              Nothing -> False
-                        ]
-                    )
-                  ]
-              )
-      (Just (VList _), _) -> Left (evalError "builtin/record-filter requires field: String")
-      _ -> Left (evalError "builtin/record-filter requires items: List<Record>")
 
 recordMapTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
 recordMapTool args =

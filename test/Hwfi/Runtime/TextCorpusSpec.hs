@@ -100,6 +100,38 @@ spec = describe "Tier 2 text corpus builtins (§13.1.8)" $ do
               other -> fail ("unexpected matches: " <> show other)
           other -> fail ("unexpected result: " <> show other)
 
+    it "returns tags when patterns are provided" $
+      withHarness $ \run -> do
+        result <-
+          run
+            textGrepQName
+            ( Map.fromList
+                [ ("text", VString "You must verify the workspace."),
+                  ( "location",
+                    VRecord (Map.fromList [("file", VString "a.md"), ("section", VString "flow")])
+                  ),
+                  ( "patterns",
+                    VList
+                      [ VRecord
+                          ( Map.fromList
+                              [ ("name", VString "directive"),
+                                ("pattern", VString "\\bmust\\b"),
+                                ("force", VString "directive")
+                              ]
+                          )
+                      ]
+                  )
+                ]
+            )
+        case result of
+          Right (VRecord m) ->
+            case Map.lookup "tags" m of
+              Just (VList [VRecord tag]) -> do
+                Map.lookup "force" tag `shouldBe` Just (VString "directive")
+                Map.lookup "patterns" tag `shouldBe` Just (VList [VString "directive"])
+              other -> fail ("unexpected tags: " <> show other)
+          other -> fail ("unexpected result: " <> show other)
+
   describe "builtin/text-search-corpus" $ do
     it "returns overlap clusters for similar documents" $
       withHarness $ \run -> do

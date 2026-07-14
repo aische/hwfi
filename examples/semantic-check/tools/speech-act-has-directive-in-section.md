@@ -9,7 +9,6 @@ outputs:
 imports:
   - builtin/record-filter
   - tools/hit-nonempty
-  - tools/speech-act-tag-is-directive
 ---
 
 ## flow
@@ -17,28 +16,23 @@ imports:
 True when any tag is a directive in the given agent section.
 
 ```step
-rows <- foreach tag in ${inputs.tags} {
-  probe <- tools/speech-act-tag-is-directive(
-    tag = ${tag},
-    file = ${inputs.file},
-    section = ${inputs.section}
-  ) @probe
-  branch <- if ${probe.ok} {
-    return { hit = "yes" }
-  } else {
-    return { hit = "no" }
-  } @branch
+hits <- builtin/record-filter(
+  items = ${inputs.tags},
+  where = {
+    force = "directive",
+    location = {
+      file = ${inputs.file},
+      section = ${inputs.section}
+    }
+  }
+) @hits
+
+rows <- foreach tag in ${hits.items} {
+  return { hit = "yes" }
 } @rows
 
 pack <- try {
-  hits <- builtin/record-filter(
-    items = ${rows},
-    field = "hit",
-    equals = "yes"
-  ) @hits
-
-  _ <- tools/hit-nonempty(items = ${hits.items}) @count
-
+  _ <- tools/hit-nonempty(items = ${rows}) @count
   return { ok = true }
 } catch {
   return { ok = false }

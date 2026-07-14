@@ -65,8 +65,7 @@ speech_flat <- builtin/list-concat(lists = ${speech_layers.values}) @sf
 merged <- builtin/list-concat(lists = [${corpus_flat.items}, ${speech_flat.items}]) @merged
 
 capped <- tools/review-gate-dedupe-cap(
-  items = ${merged.items},
-  slices = ${inputs.slices}
+  items = ${merged.items}
 ) @cap
 
 return { items = ${capped.items} }

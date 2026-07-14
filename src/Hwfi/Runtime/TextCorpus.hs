@@ -18,12 +18,14 @@ import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Text.Corpus
   ( CorpusCluster (..),
     CorpusDocument (..),
+    GrepTagPattern (..),
     SimilarityMethod (..),
     SimilarityResult (..),
     SplitOn (..),
     TextMetrics (..),
     TokenizeMode (..),
     grepTextLines,
+    grepTextTagged,
     searchCorpus,
     splitText,
     textMetrics,
@@ -117,14 +119,44 @@ runSplitText args =
 
 runTextGrep :: Map Ident RValue -> IO (Either RuntimeError RValue)
 runTextGrep args =
-  case (argText args "text", argText args "pattern") of
-    (Left e, _) -> pure (Left e)
-    (_, Left e) -> pure (Left e)
-    (Right text, Right pattern) ->
-      case grepTextLines pattern text of
-        Left err -> pure (Left (evalError ("invalid text-grep pattern: " <> err)))
-        Right matches ->
-          pure (Right (record [("matches", VList (map VString matches))]))
+  case Map.lookup "patterns" args of
+    Just (VList ps) | not (null ps) ->
+      case (argText args "text", parseGrepPatterns ps) of
+        (Left e, _) -> pure (Left e)
+        (_, Left e) -> pure (Left e)
+        (Right text, Right patterns) ->
+          case grepTextTagged text patterns of
+            Left err -> pure (Left (evalError ("invalid text-grep pattern: " <> err)))
+            Right hits -> do
+              loc <- resolveLocation args
+              pure
+                ( Right
+                    ( record
+                        [ ( "matches",
+                            VList []
+                          ),
+                          ( "tags",
+                            VList (map (\hit -> tagRecord loc hit text) hits)
+                          )
+                        ]
+                    )
+                )
+    _ ->
+      case (argText args "text", argText args "pattern") of
+        (Left e, _) -> pure (Left e)
+        (_, Left e) -> pure (Left e)
+        (Right text, Right pattern) ->
+          case grepTextLines pattern text of
+            Left err -> pure (Left (evalError ("invalid text-grep pattern: " <> err)))
+            Right matches ->
+              pure
+                ( Right
+                    ( record
+                        [ ("matches", VList (map VString matches)),
+                          ("tags", VList [])
+                        ]
+                    )
+                )
 
 clusterValue :: CorpusCluster -> RValue
 clusterValue CorpusCluster {..} =
@@ -132,6 +164,39 @@ clusterValue CorpusCluster {..} =
     [ ("members", VList (map VString ccMembers)),
       ("score", VDouble ccScore),
       ("span", VString ccSpan)
+    ]
+
+parseGrepPatterns :: [RValue] -> Either RuntimeError [GrepTagPattern]
+parseGrepPatterns = traverse parseGrepPattern
+
+parseGrepPattern :: RValue -> Either RuntimeError GrepTagPattern
+parseGrepPattern (VRecord m) = do
+  name <- fieldText m "name"
+  pattern <- fieldText m "pattern"
+  force <- fieldText m "force"
+  pure GrepTagPattern {gtpName = name, gtpPattern = pattern, gtpForce = force}
+parseGrepPattern v =
+  Left (evalError ("text-grep pattern entry is not a record: " <> T.pack (show v)))
+
+resolveLocation :: Map Ident RValue -> IO RValue
+resolveLocation args =
+  case Map.lookup "location" args of
+    Just loc@(VRecord _) -> pure loc
+    _ ->
+      pure
+        ( record
+            [ ("file", VString ""),
+              ("section", VString "")
+            ]
+        )
+
+tagRecord :: RValue -> (Text, Text) -> Text -> RValue
+tagRecord loc (force, patternName) sentence =
+  record
+    [ ("force", VString force),
+      ("sentence", VString sentence),
+      ("patterns", VList [VString patternName]),
+      ("location", loc)
     ]
 
 record :: [(Ident, RValue)] -> RValue

@@ -28,7 +28,7 @@ import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, isRecordPlumbingBuiltin, listConcatQName, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, recordFilterQName, recordMapQName, recordMergeQName, traceSliceQName)
+import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, isRecordPlumbingBuiltin, isTextGrepBuiltin, listConcatQName, listRunsQName, listUniqueByQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, recordFilterQName, recordMapQName, recordMergeQName, traceSliceQName)
 import Hwfi.Check.Error (CheckWarning (..), TypeError, TypeErrorKind (..), checkWarning, typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Check.RefHints (bareCallTargetHints, refArgWarnings, toolsListElemHint)
@@ -597,6 +597,8 @@ checkStep ctx path sections st s =
       | isAgentBuiltin target = checkAgentCall ctx env path pos target (stepArgs s)
       | isRecordPlumbingBuiltin target =
           checkRecordPlumbingCall env path pos target (stepArgs s)
+      | isTextGrepBuiltin target =
+          checkTextGrepCall env path pos (stepArgs s)
       | otherwise = case mCallee of
           Nothing -> ([], [], Nothing)
           Just callee ->
@@ -682,6 +684,7 @@ checkRecordPlumbingCall env path pos target args =
     q | q == recordFilterQName -> checkRecordFilter env path pos args
     q | q == recordMapQName -> checkRecordMap env path pos args
     q | q == listConcatQName -> checkListConcat env path pos args
+    q | q == listUniqueByQName -> checkListUniqueBy env path pos args
     _ -> ([], [], Nothing)
 
 checkRecordMerge :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
@@ -713,33 +716,60 @@ checkRecordMerge env path pos args =
 
 checkRecordFilter :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
 checkRecordFilter env path pos args =
-  (missingExtra <> valueErrs <> equalsErrs, [], resultTy)
+  (modeErrs <> valueErrs <> equalsErrs, [], resultTy)
   where
-    expected = ["items", "field", "equals"]
-    (missingExtra, argMap) = plumbingArgErrors path pos args expected
+    allowed = ["items", "field", "equals", "where"]
+    argMap = Map.fromList [(argName a, a) | a <- args]
+    unexpectedErrs =
+      [ typeError path (spanStart (argSpan a)) ArgMismatch ("unexpected argument '" <> argName a <> "'")
+        | a <- args,
+          argName a `notElem` allowed
+      ]
     itemsArg = Map.lookup "items" argMap
     fieldArg = Map.lookup "field" argMap
     equalsArg = Map.lookup "equals" argMap
+    whereArg = Map.lookup "where" argMap
+    missingItems =
+      [ typeError path pos ArgMismatch "missing argument 'items'"
+        | Nothing <- [itemsArg]
+      ]
+    modeErrs =
+      unexpectedErrs
+        <> missingItems
+        <> case (whereArg, fieldArg, equalsArg) of
+          (Just _, _, _) -> []
+          (_, Just _, Just _) -> []
+          _ ->
+            [ typeError
+                path
+                pos
+                ArgMismatch
+                "record-filter requires either where: Record or field: String with equals"
+            ]
     valueErrs =
       maybe [] itemsErrs itemsArg
         <> maybe [] (\a -> fromLeft [] (checkExpr env (spanStart (argSpan a)) TyString (argValue a))) fieldArg
+        <> maybe [] (\a -> fromLeft [] (checkRecordArg env (argSpan a) (argValue a))) whereArg
     equalsErrs =
-      case (fieldArg >>= staticStringLit . argValue, itemsArg) of
-        (Just field, Just itemsA) ->
+      case (whereArg, fieldArg >>= staticStringLit . argValue, itemsArg) of
+        (Just _, _, _) -> []
+        (_, Just field, Just itemsA) ->
           case inferExpr env (spanStart (argSpan itemsA)) (argValue itemsA) of
-            Right (TyList (TyRecord fs)) ->
-              case (lookup field fs, equalsArg) of
-                (Just fieldTy, Just eqA) ->
-                  fromLeft []
-                    (checkExpr env (spanStart (argSpan eqA)) fieldTy (argValue eqA))
-                (Nothing, Just eqA) ->
-                  [ typeError
-                      path
-                      (spanStart (argSpan eqA))
-                      TypeMismatch
-                      ("record element type has no field '" <> field <> "'")
-                  ]
-                _ -> []
+            Right (TyList (TyRecord fs))
+              | "." `T.isInfixOf` field -> []
+              | otherwise ->
+                  case (lookup field fs, equalsArg) of
+                    (Just fieldTy, Just eqA) ->
+                      fromLeft []
+                        (checkExpr env (spanStart (argSpan eqA)) fieldTy (argValue eqA))
+                    (Nothing, Just eqA) ->
+                      [ typeError
+                          path
+                          (spanStart (argSpan eqA))
+                          TypeMismatch
+                          ("record element type has no field '" <> field <> "'")
+                      ]
+                    _ -> []
             _ -> []
         _ -> []
     resultTy =
@@ -838,6 +868,114 @@ checkListConcat env path pos args =
               (spanStart (argSpan a))
               TypeMismatch
               ("list-concat 'lists' must be List<List<_>>, got " <> renderType other)
+          ]
+
+checkListUniqueBy :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkListUniqueBy env path pos args =
+  (missingExtra <> valueErrs, [], resultTy)
+  where
+    expected = ["items", "fields", "limit"]
+    (missingExtra, argMap) = plumbingArgErrors path pos args expected
+    itemsArg = Map.lookup "items" argMap
+    fieldsArg = Map.lookup "fields" argMap
+    limitArg = Map.lookup "limit" argMap
+    valueErrs =
+      maybe [] itemsErrs itemsArg
+        <> maybe [] fieldsErrs fieldsArg
+        <> maybe [] (\a -> fromLeft [] (checkExpr env (spanStart (argSpan a)) TyInt (argValue a))) limitArg
+    resultTy =
+      case itemsArg of
+        Just itemsA ->
+          case inferExpr env (spanStart (argSpan itemsA)) (argValue itemsA) of
+            Right listTy -> Just (TyRecord [("items", listTy)])
+            _ -> Just (TyRecord [("items", TyList TyJson)])
+        Nothing -> Nothing
+    itemsErrs a =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left errs -> errs
+        Right (TyList (TyRecord _)) -> []
+        Right other ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              TypeMismatch
+              ("list-unique-by 'items' must be List<Record>, got " <> renderType other)
+          ]
+    fieldsErrs a =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left errs -> errs
+        Right (TyList TyString) -> []
+        Right other ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              TypeMismatch
+              ("list-unique-by 'fields' must be List<String>, got " <> renderType other)
+          ]
+
+speechActTagTy :: Type
+speechActTagTy =
+  TyRecord
+    [ ("force", TyString),
+      ("sentence", TyString),
+      ("patterns", TyList TyString),
+      ("location", TyRecord [("file", TyString), ("section", TyString)])
+    ]
+
+checkTextGrepCall :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkTextGrepCall env path pos args =
+  (modeErrs <> valueErrs, [], resultTy)
+  where
+    allowed = ["text", "pattern", "patterns", "location"]
+    argMap = Map.fromList [(argName a, a) | a <- args]
+    unexpectedErrs =
+      [ typeError path (spanStart (argSpan a)) ArgMismatch ("unexpected argument '" <> argName a <> "'")
+        | a <- args,
+          argName a `notElem` allowed
+      ]
+    textArg = Map.lookup "text" argMap
+    patternArg = Map.lookup "pattern" argMap
+    patternsArg = Map.lookup "patterns" argMap
+    locationArg = Map.lookup "location" argMap
+    missingText =
+      [ typeError path pos ArgMismatch "missing argument 'text'"
+        | Nothing <- [textArg]
+      ]
+    modeErrs =
+      unexpectedErrs
+        <> missingText
+        <> case (patternsArg, patternArg) of
+          (Just _, _) -> []
+          (_, Just _) -> []
+          _ ->
+            [ typeError
+                path
+                pos
+                ArgMismatch
+                "text-grep requires either pattern: String or patterns: List<Record>"
+            ]
+    valueErrs =
+      maybe [] (\a -> fromLeft [] (checkExpr env (spanStart (argSpan a)) TyString (argValue a))) textArg
+        <> maybe [] (\a -> fromLeft [] (checkExpr env (spanStart (argSpan a)) TyString (argValue a))) patternArg
+        <> maybe [] patternsErrs patternsArg
+        <> maybe [] (\a -> fromLeft [] (checkRecordArg env (argSpan a) (argValue a))) locationArg
+    resultTy =
+      Just
+        ( TyRecord
+            [ ("matches", TyList TyString),
+              ("tags", TyList speechActTagTy)
+            ]
+        )
+    patternsErrs a =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left errs -> errs
+        Right (TyList (TyRecord _)) -> []
+        Right other ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              TypeMismatch
+              ("text-grep 'patterns' must be List<Record>, got " <> renderType other)
           ]
 
 plumbingArgErrors :: FilePath -> Pos -> [Arg] -> [Ident] -> ([TypeError], Map Ident Arg)

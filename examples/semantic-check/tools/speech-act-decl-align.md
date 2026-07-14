@@ -7,12 +7,11 @@ outputs:
   hints: List<types/speech-act-hint>
 imports:
   - builtin/list-concat
+  - builtin/record-filter
   - builtin/record-map
-  - tools/empty-speech-act-hints
   - tools/speech-act-bare-directive-hint
   - tools/speech-act-declarative-hint
   - tools/speech-act-step-align
-  - tools/strings-equal
 ---
 
 ## flow
@@ -29,23 +28,16 @@ step_rows <- foreach step in ${inputs.decl.steps} {
   return { hints = ${pack.hints} }
 } @step_loop
 
-tag_rows <- foreach tag in ${inputs.tags} {
-  file <- tools/strings-equal(
-    left = ${tag.location.file},
-    right = ${inputs.decl.path}
-  ) @file_chk
+file_tags <- builtin/record-filter(
+  items = ${inputs.tags},
+  where = { location = { file = ${inputs.decl.path} } }
+) @file_tags
 
-  pack <- if ${file.equal} {
-    bare <- tools/speech-act-bare-directive-hint(tag = ${tag}) @bare
-    decl <- tools/speech-act-declarative-hint(tag = ${tag}) @decl_hint
-    merged <- builtin/list-concat(lists = [${bare.hints}, ${decl.hints}]) @merged
-    return { hints = ${merged.items} }
-  } else {
-    empty <- tools/empty-speech-act-hints() @skip
-    return { hints = ${empty.hints} }
-  } @scope
-
-  return { hints = ${pack.hints} }
+tag_rows <- foreach tag in ${file_tags.items} {
+  bare <- tools/speech-act-bare-directive-hint(tag = ${tag}) @bare
+  decl <- tools/speech-act-declarative-hint(tag = ${tag}) @decl_hint
+  merged <- builtin/list-concat(lists = [${bare.hints}, ${decl.hints}]) @merged
+  return { hints = ${merged.items} }
 } @tag_loop
 
 step_layers <- builtin/record-map(items = ${step_rows}, field = "hints") @step_map

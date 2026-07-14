@@ -6,8 +6,8 @@ inputs:
 outputs:
   tags: List<types/speech-act-tag>
 imports:
-  - builtin/list-concat
-  - tools/speech-act-grep-force
+  - builtin/text-grep
+  - tools/empty-speech-act-tags
 ---
 
 ## flow
@@ -15,44 +15,39 @@ imports:
 Apply all illocutionary force heuristics to one sentence.
 
 ```step
-directive <- tools/speech-act-grep-force(
-  sentence = ${inputs.sentence},
-  location = ${inputs.location},
-  force = "directive",
-  pattern = "(?i)\\b(must|always|never|shall|do not|ensure|verify|required|write|inspect|fix|re-run|keep)\\b",
-  pattern_name = "directive"
-) @directive
+pack <- try {
+  grep <- builtin/text-grep(
+    text = ${inputs.sentence},
+    location = ${inputs.location},
+    patterns = [
+      {
+        name = "directive",
+        pattern = "(?i)\\b(must|always|never|shall|do not|ensure|verify|required|write|inspect|fix|re-run|keep)\\b",
+        force = "directive"
+      },
+      {
+        name = "assertive",
+        pattern = "(?i)\\b(is|are|contains|will be|the workspace|the project)\\b",
+        force = "assertive"
+      },
+      {
+        name = "commissive",
+        pattern = "(?i)\\b(you will|I will|we will|I'll|you'll|I shall)\\b",
+        force = "commissive"
+      },
+      {
+        name = "declarative",
+        pattern = "(?i)\\b(consider yourself|authorized|you are the|your role is)\\b",
+        force = "declarative"
+      }
+    ]
+  ) @grep
 
-assertive <- tools/speech-act-grep-force(
-  sentence = ${inputs.sentence},
-  location = ${inputs.location},
-  force = "assertive",
-  pattern = "(?i)\\b(is|are|contains|will be|the workspace|the project)\\b",
-  pattern_name = "assertive"
-) @assertive
+  return { tags = ${grep.tags} }
+} catch {
+  empty <- tools/empty-speech-act-tags() @skip
+  return { tags = ${empty.tags} }
+} @probe
 
-commissive <- tools/speech-act-grep-force(
-  sentence = ${inputs.sentence},
-  location = ${inputs.location},
-  force = "commissive",
-  pattern = "(?i)\\b(you will|I will|we will|I'll|you'll|I shall)\\b",
-  pattern_name = "commissive"
-) @commissive
-
-declarative <- tools/speech-act-grep-force(
-  sentence = ${inputs.sentence},
-  location = ${inputs.location},
-  force = "declarative",
-  pattern = "(?i)\\b(consider yourself|authorized|you are the|your role is)\\b",
-  pattern_name = "declarative"
-) @declarative
-
-merged <- builtin/list-concat(lists = [
-  ${directive.tags},
-  ${assertive.tags},
-  ${commissive.tags},
-  ${declarative.tags}
-]) @merged
-
-return { tags = ${merged.items} }
+return { tags = ${pack.tags} }
 ```
