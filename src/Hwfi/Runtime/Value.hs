@@ -14,6 +14,9 @@ module Hwfi.Runtime.Value
   ( RValue (..),
     RefKind (..),
     valueToJson,
+    snapshotValueToJson,
+    snapshotValueFromJson,
+    snapshotValueFromJsonLegacy,
     redactedJson,
     canonicalJson,
     renderValue,
@@ -22,7 +25,8 @@ module Hwfi.Runtime.Value
   )
 where
 
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), object, withObject, (.:), (.:?), (.=))
+import Data.Aeson.Types (Parser, parseMaybe)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -36,7 +40,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
-import Hwfi.Ast.Name (Ident, QName, renderQName)
+import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
 import Hwfi.Type (Type (..))
 
 -- | Whether a first-class reference value targets a tool or a workflow (§3.2).
@@ -83,6 +87,123 @@ valueToJson = \case
   VJson v -> v
   VSecret _ inner -> valueToJson inner
   VRef _ q -> String (renderQName q)
+
+-- | Lossless JSON encoding for machine snapshots (@machine.json@). Wraps each
+-- 'RValue' constructor in a tagged object so resume can rebuild typed bindings
+-- (records with @String@ fields, @VRef@, @VJson@, etc.) instead of collapsing
+-- everything to 'VJson'.
+snapshotValueToJson :: RValue -> Value
+snapshotValueToJson = \case
+  VString t -> tagged "str" (object ["v" .= t])
+  VInt n -> tagged "int" (object ["v" .= n])
+  VDouble d -> tagged "dbl" (object ["v" .= d])
+  VBool b -> tagged "bool" (object ["v" .= b])
+  VNull -> object ["_hwfi" .= ("null" :: Text)]
+  VFileRef p -> tagged "file" (object ["v" .= p])
+  VList xs -> tagged "list" (object ["v" .= map snapshotValueToJson xs])
+  VRecord m ->
+    tagged
+      "rec"
+      ( object
+          [ "v"
+              .= object
+                [ K.fromText k .= snapshotValueToJson v
+                  | (k, v) <- Map.toList m
+                ]
+          ]
+      )
+  VJson j -> tagged "json" (object ["v" .= j])
+  VSecret mName inner ->
+    tagged
+      "secret"
+      ( object
+          [ "name" .= mName,
+            "v" .= snapshotValueToJson inner
+          ]
+      )
+  VRef kind q ->
+    tagged
+      "ref"
+      ( object
+          [ "kind" .= refKindTag kind,
+            "v" .= renderQName q
+          ]
+      )
+  where
+    tagged :: Text -> Value -> Value
+    tagged tag payload = object ["_hwfi" .= tag, "payload" .= payload]
+
+-- | Decode a tagged snapshot value written by 'snapshotValueToJson'. Returns
+-- 'Left' when @v@ is not a tagged snapshot object (call 'snapshotValueFromJsonLegacy').
+snapshotValueFromJson :: Value -> Either Text RValue
+snapshotValueFromJson v = case parseMaybe parseSnapshotValue v of
+  Nothing -> Left "not a tagged snapshot value"
+  Just r -> Right r
+
+parseSnapshotValue :: Value -> Parser RValue
+parseSnapshotValue =
+  withObject "snapshot value" $ \o -> do
+    tag <- o .: "_hwfi"
+    case tag of
+      "null" -> pure VNull
+      _ -> do
+        payload <- o .: "payload"
+        case tag of
+          "str" -> VString <$> withObject "str" (.: "v") payload
+          "int" -> withObject "int" (.: "v") payload >>= parseIntPayload
+          "dbl" -> VDouble <$> withObject "dbl" (.: "v") payload
+          "bool" -> VBool <$> withObject "bool" (.: "v") payload
+          "file" -> VFileRef <$> withObject "file" (.: "v") payload
+          "list" ->
+            withObject "list" (.: "v") payload >>= \arr ->
+              VList <$> traverse parseSnapshotValue (V.toList arr)
+          "rec" ->
+            withObject "rec" (.: "v") payload >>= \fields ->
+              VRecord . Map.fromList <$> traverse parseField (KM.toList fields)
+          "json" -> VJson <$> withObject "json" (.: "v") payload
+          "secret" -> withObject "secret" parseSecret payload
+          "ref" -> withObject "ref" parseRef payload
+          other -> fail ("unknown snapshot value tag: " <> T.unpack other)
+  where
+    parseField (k, v) = (K.toText k,) <$> parseSnapshotValue v
+    parseSecret p = do
+      inner <- p .: "v" >>= parseSnapshotValue
+      name <- p .:? "name"
+      pure (VSecret name inner)
+    parseRef p = do
+      kind <- p .: "kind"
+      qn <- p .: "v"
+      refKind <- case kind of
+        "tool" -> pure RTool
+        "workflow" -> pure RWorkflow
+        other -> fail ("unknown ref kind: " <> T.unpack other)
+      pure (VRef refKind (qnameFromText qn))
+    parseIntPayload = \case
+      Number n ->
+        case floatingOrInteger n :: Either Double Integer of
+          Right i -> pure (VInt i)
+          Left _ -> fail "int payload is not integral"
+      _ -> fail "int payload is not a number"
+
+refKindTag :: RefKind -> Text
+refKindTag = \case
+  RTool -> "tool"
+  RWorkflow -> "workflow"
+
+-- | Decode an untagged JSON value using the same shape rules as 'valueToJson'
+-- (objects become 'VRecord', arrays become 'VList', etc.). Used for
+-- @machine.json@ files written before tagged snapshot encoding.
+snapshotValueFromJsonLegacy :: Value -> RValue
+snapshotValueFromJsonLegacy = \case
+  Null -> VNull
+  Bool b -> VBool b
+  Number n ->
+    case floatingOrInteger n :: Either Double Integer of
+      Right i -> VInt i
+      Left d -> VDouble d
+  String t -> VString t
+  Array a -> VList (map snapshotValueFromJsonLegacy (V.toList a))
+  Object o -> VRecord (Map.fromList [(K.toText k, snapshotValueFromJsonLegacy v) | (k, v) <- KM.toList o])
 
 -- | Convert a runtime value to JSON, replacing every 'VSecret' with its
 -- @"\<secret:name>"@ placeholder (spec §8.3.4). Used everywhere a value is

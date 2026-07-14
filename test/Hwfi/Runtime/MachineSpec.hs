@@ -16,6 +16,8 @@ import Hwfi.Runtime.Machine
 import Hwfi.Runtime.MachinePar (allSlotsTerminal)
 import Hwfi.Runtime.MachinePath (StmtContext (..), advancePath, initialStmtPath, resolveStmtPath)
 import Hwfi.Runtime.MachineSnapshot (decodeMachine, encodeMachine)
+import Hwfi.Runtime.Eval (EvalEnv (..), resolveRefPath)
+import Hwfi.Ast.Expr (RefPath (..), Accessor (..))
 import Hwfi.Runtime.StepDriver (approveConfirm, pauseMachine, runMachine, stepMachine)
 import Hwfi.Runtime.StepEnv (ConfirmPolicy (..), StepEnv (..), StepOutcome (..), newStepEnv)
 import Hwfi.Runtime.Value (RValue (..))
@@ -112,6 +114,20 @@ spec = do
       case decodeMachine (encodeMachine m) of
         Left err -> expectationFailure (T.unpack err)
         Right m' -> encodeMachine m' `shouldBe` encodeMachine m
+
+    it "preserves record field types in bindings for resume" $ do
+      let headVal =
+            VRecord (Map.fromList [("line", VString "Task JSON: {\"id\":\"0\"}")])
+          m =
+            (initialMachine "" "hash" (qnameFromText "workflows/main") Map.empty)
+              { mBindings = Map.fromList [("head", headVal)]
+              }
+      case decodeMachine (encodeMachine m) of
+        Left err -> expectationFailure (T.unpack err)
+        Right decoded -> do
+          let env = EvalEnv (mBindings decoded) [] (\_ -> Nothing)
+          resolveRefPath env (RefPath "head" [AField "line"])
+            `shouldBe` Right (VString "Task JSON: {\"id\":\"0\"}")
 
   describe "MachinePath (M0)" $ do
     it "resolves the first statement of a fixture workflow" $ do

@@ -4,9 +4,11 @@ import Data.Aeson (Value (..), object)
 import Data.Either (isLeft)
 import Data.Map.Strict qualified as Map
 import Data.Vector (fromList)
+import Hwfi.Ast.Name (qnameFromText)
 import Hwfi.Runtime.Value
 import Hwfi.Type (Type (..))
 import Test.Hspec
+import Control.Monad (forM_)
 
 spec :: Spec
 spec = do
@@ -50,3 +52,33 @@ spec = do
     it "coerces JSON per declared type" $ do
       coerceFromJson TyFileRef (String "x") `shouldBe` Right (VFileRef "x")
       coerceFromJson TyJson (Number 1) `shouldBe` Right (VJson (Number 1))
+
+  describe "snapshot value encoding (machine.json)" $ do
+    it "round-trips every constructor losslessly" $ do
+      let values =
+            [ VString "hello",
+              VInt 42,
+              VDouble 1.5,
+              VBool True,
+              VNull,
+              VFileRef "src/main.ts",
+              VList [VString "a", VInt 1],
+              VRecord (Map.fromList [("line", VString "Task JSON: {}")]),
+              VJson (object [("id", String "0")]),
+              VSecret (Just "TOKEN") (VString "secret"),
+              VRef RTool (qnameFromText "tools/task-line")
+            ]
+      forM_ values $ \v ->
+        snapshotValueFromJson (snapshotValueToJson v) `shouldBe` Right v
+
+    it "legacy untagged objects decode as VRecord with typed fields" $ do
+      let legacy =
+            object
+              [ ("line", String "Task JSON: {\"id\":\"0\"}")
+              ]
+          headRec = snapshotValueFromJsonLegacy legacy
+      headRec
+        `shouldBe` VRecord (Map.fromList [("line", VString "Task JSON: {\"id\":\"0\"}")])
+      case headRec of
+        VRecord m -> Map.lookup "line" m `shouldBe` Just (VString "Task JSON: {\"id\":\"0\"}")
+        _ -> expectationFailure "expected VRecord"

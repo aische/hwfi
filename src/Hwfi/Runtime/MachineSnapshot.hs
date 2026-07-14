@@ -29,9 +29,14 @@ import Hwfi.Ast.Name (Ident, qnameFromText, renderQName)
 import Hwfi.Ast.Step (Binder (..), ParOnError (..), StepStmt (..))
 import Hwfi.Ast.Step qualified as Step
 import Hwfi.Runtime.Machine
-import Hwfi.Runtime.Value (RValue (..), RefKind (..), coerceFromJson, valueToJson)
+import Hwfi.Runtime.Value
+  ( RValue (..),
+    RefKind (..),
+    snapshotValueFromJson,
+    snapshotValueFromJsonLegacy,
+    snapshotValueToJson,
+  )
 import Hwfi.Source (Pos (..), singletonSpan)
-import Hwfi.Type (Type (TyJson))
 
 encodeMachine :: Machine -> Value
 encodeMachine m =
@@ -44,7 +49,7 @@ encodeMachine m =
       "current" .= encodeCurrent (mCurrent m),
       "frames" .= map encodeFrame (mFrames m),
       "bindings" .= encodeBindings (mBindings m),
-      "last_result" .= fmap valueToJson (mLastResult m),
+      "last_result" .= fmap snapshotValueToJson (mLastResult m),
       "error" .= mError m
     ]
 
@@ -71,9 +76,10 @@ parseFrames :: Value -> Parser [Frame]
 parseFrames = withArray "frames" $ \a -> traverse parseFrame (V.toList a)
 
 parseRValue :: Value -> Parser RValue
-parseRValue v = case coerceFromJson TyJson v of
-  Left e -> fail (T.unpack e)
-  Right r -> pure r
+parseRValue v =
+  case snapshotValueFromJson v of
+    Right r -> pure r
+    Left _ -> pure (snapshotValueFromJsonLegacy v)
 
 encodeStatus :: MachineStatus -> Value
 encodeStatus = \case
@@ -352,7 +358,7 @@ encodePar pjs =
       "binder" .= encodeBinder (pjsBinder pjs),
       "max_concurrency" .= pjsMaxConcurrency pjs,
       "on_error" .= encodeParOnError (pjsOnError pjs),
-      "items" .= map valueToJson (pjsItems pjs),
+      "items" .= map snapshotValueToJson (pjsItems pjs),
       "slots" .= map encodeParSlot (pjsSlots pjs),
       "active" .= encodeActive (pjsActive pjs),
       "next_index" .= pjsNextIndex pjs,
@@ -402,7 +408,7 @@ encodeParSlot :: ParSlot -> Value
 encodeParSlot = \case
   ParSlotPending -> object ["tag" .= ("pending" :: Text)]
   ParSlotRunning -> object ["tag" .= ("running" :: Text)]
-  ParSlotDone v -> object ["tag" .= ("done" :: Text), "value" .= valueToJson v]
+  ParSlotDone v -> object ["tag" .= ("done" :: Text), "value" .= snapshotValueToJson v]
   ParSlotFailed msg -> object ["tag" .= ("failed" :: Text), "error" .= msg]
   ParSlotAwaitingConfirm c -> object ["tag" .= ("awaiting_confirm" :: Text), "confirm" .= encodeConfirm c]
 
@@ -459,8 +465,8 @@ encodeWhile wf =
       "binder" .= encodeBinder (wfBinder wf),
       "iteration" .= wfIteration wf,
       "max_iterations" .= wfMaxIterations wf,
-      "acc" .= map valueToJson (wfAcc wf),
-      "carry" .= fmap valueToJson (wfCarry wf),
+      "acc" .= map snapshotValueToJson (wfAcc wf),
+      "carry" .= fmap snapshotValueToJson (wfCarry wf),
       "resume_path" .= encodePath (wfResumePath wf),
       "while_path" .= encodePath (wfWhilePath wf),
       "phase" .= encodeWhilePhase (wfPhase wf)
@@ -501,9 +507,9 @@ encodeForeach ff =
       "scope" .= ffScope ff,
       "binder" .= encodeBinder (ffBinder ff),
       "var" .= ffVar ff,
-      "items" .= map valueToJson (ffItems ff),
+      "items" .= map snapshotValueToJson (ffItems ff),
       "index" .= ffIndex ff,
-      "acc" .= map valueToJson (ffAcc ff),
+      "acc" .= map snapshotValueToJson (ffAcc ff),
       "resume_path" .= encodePath (ffResumePath ff),
       "body_entry" .= encodePath (ffBodyEntry ff)
     ]
@@ -569,7 +575,7 @@ decodeBinderText t
 
 encodeBindings :: Map Ident RValue -> Value
 encodeBindings bs =
-  object [K.fromText k .= valueToJson v | (k, v) <- Map.toList bs]
+  object [K.fromText k .= snapshotValueToJson v | (k, v) <- Map.toList bs]
 
 parseBindings :: Value -> Parser (Map Ident RValue)
 parseBindings = withObject "bindings" $ \o ->
