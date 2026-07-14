@@ -216,7 +216,7 @@ stepFromReady env machine =
     Left err -> pure (Left (internalStub err))
     Right ctx -> case scStmt ctx of
       SReturn args _ -> finishReturn env machine args
-      SStep step -> pure (Right (Stepped machine {mCurrent = CurDispatch step}))
+      SStep step -> stepDispatch env machine step
       SIf s -> startIf env machine ctx s
       SLoop s -> startLoop env machine ctx s
       SWhile s -> startWhile env machine ctx s

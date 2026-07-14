@@ -125,7 +125,7 @@ spec = do
       case decodeMachine (encodeMachine m) of
         Left err -> expectationFailure (T.unpack err)
         Right decoded -> do
-          let env = EvalEnv (mBindings decoded) [] (\_ -> Nothing)
+          let env = EvalEnv (mBindings decoded) [] (const Nothing)
           resolveRefPath env (RefPath "head" [AField "line"])
             `shouldBe` Right (VString "Task JSON: {\"id\":\"0\"}")
 
@@ -150,16 +150,30 @@ spec = do
         Right ctx -> scIndex ctx `shouldBe` 1
 
   describe "StepDriver (M0/M1)" $ do
-    it "moves CurReady to CurDispatch on the first step" $
+    it "dispatches the first statement in one stepMachine transition" $
       withSystemTempDirectory "hwfi-m0-ws" $ \ws -> do
         tp <- loadFixture
         workspace <- newWorkspace ws
         env <- newStepEnv tp workspace Map.empty "test" "workflows/main"
-        let m0 = initialMachine "" (projectContentHash tp) (qnameFromText "workflows/main") Map.empty
+        let m0 =
+              initialMachine
+                ""
+                (projectContentHash tp)
+                (qnameFromText "workflows/main")
+                ( Map.fromList
+                    [ ("path", VFileRef "in.txt"),
+                      ("name", VString "Ada")
+                    ]
+                )
         result <- stepMachine env m0
         case result of
           Left err -> expectationFailure (show err)
-          Right (Stepped m1) -> m1.mCurrent `shouldSatisfy` isDispatch
+          Right (Stepped m1) -> do
+            m1.mCurrent `shouldBe` CurReady
+            spQName (mPath m1) `shouldBe` qnameFromText "tools/greet"
+            case mFrames m1 of
+              FrSeq {} : _ -> pure ()
+              _ -> expectationFailure "expected caller frame after entering sub-workflow"
           Right other -> expectationFailure ("unexpected outcome: " <> show other)
 
     it "pauseMachine sets explicit paused status" $ do

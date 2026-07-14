@@ -4,6 +4,7 @@ module Hwfi.Runtime.StepEnv
     RunWorkflowSeam,
     ConfirmPolicy (..),
     StepOutcome (..),
+    checkpointMachine,
     newStepEnv,
     newRunStepEnv,
   )
@@ -20,7 +21,7 @@ import Hwfi.Runtime.Context (RunInfo (..), buildEnvRecord)
 import Hwfi.Runtime.Error (RuntimeError)
 import Hwfi.Runtime.Gateways (ModelStore)
 import Hwfi.Runtime.Machine (Machine)
-import Hwfi.Runtime.RunStore (RunStore, createRunStore)
+import Hwfi.Runtime.RunStore (createRunStore)
 import Hwfi.Runtime.RunUsage (emptyRunUsage)
 import Hwfi.Runtime.Trace (Tracer, newTracer)
 import Hwfi.Runtime.Usage (UsageSeam, newUsageSeam)
@@ -64,8 +65,19 @@ data StepEnv = StepEnv
     -- | Exec steps in @par@ branches require user confirm when 'ConfirmHold'.
     seConfirmPolicy :: ConfirmPolicy,
     -- | Confirm gates already approved this run (branch index, step id).
-    seConfirmApprovals :: IORef (Set (Int, Ident))
+    seConfirmApprovals :: IORef (Set (Int, Ident)),
+    -- | Persist @machine.json@ before long agent I/O (production runs only).
+    seCheckpoint :: Maybe (Machine -> IO ()),
+    -- | Latest machine state for crash/interrupt snapshot flush.
+    seMachineRef :: Maybe (IORef Machine)
   }
+
+-- | Write a checkpoint when the production run seam is wired.
+checkpointMachine :: StepEnv -> Machine -> IO ()
+checkpointMachine env m =
+  case seCheckpoint env of
+    Nothing -> pure ()
+    Just cp -> cp m
 
 -- | Build a minimal step environment for tests and local stepping.
 newStepEnv ::
@@ -101,7 +113,9 @@ newStepEnv tp ws envVars runId entrypoint = do
         seRunWorkflow = Nothing,
         seParBranchIndex = Nothing,
         seConfirmPolicy = ConfirmAuto,
-        seConfirmApprovals = approvals
+        seConfirmApprovals = approvals,
+        seCheckpoint = Nothing,
+        seMachineRef = Nothing
       }
 
 -- | Build a production step environment for CLI runs (persistent tracer).
@@ -110,13 +124,14 @@ newRunStepEnv ::
   Workspace ->
   ModelStore ->
   Map Text Text ->
-  RunStore ->
   Tracer ->
   UsageSeam ->
   RunInfo ->
   ConfirmPolicy ->
+  Maybe (Machine -> IO ()) ->
+  Maybe (IORef Machine) ->
   IO StepEnv
-newRunStepEnv tp ws models _envVars _store tracer usage runInfo confirmPolicy = do
+newRunStepEnv tp ws models _envVars tracer usage runInfo confirmPolicy checkpoint machineRef = do
   approvals <- newIORef Set.empty
   pure
     StepEnv
@@ -129,5 +144,7 @@ newRunStepEnv tp ws models _envVars _store tracer usage runInfo confirmPolicy = 
         seRunWorkflow = Nothing,
         seParBranchIndex = Nothing,
         seConfirmPolicy = confirmPolicy,
-        seConfirmApprovals = approvals
+        seConfirmApprovals = approvals,
+        seCheckpoint = checkpoint,
+        seMachineRef = machineRef
       }

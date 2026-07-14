@@ -13,6 +13,7 @@ where
 
 import Control.Exception (SomeException, displayException)
 import Control.Monad (join, void, when)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (find)
 import Data.Maybe (listToMaybe)
 import Data.Map.Strict (Map)
@@ -138,9 +139,13 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
       let ri = runInfo runId startedAt entry rootInputs envVars
           m0 = initialMachine "" ph entry rootInputs
       _ <- emit tracer (RunStart runId (renderQName entry) (redactedJson (VRecord rootInputs)) ph)
-      env <- newRunStepEnv tp ws models envVars store tracer usageSeam ri ConfirmAuto
+      machineRef <- newIORef m0
+      let checkpoint m = do
+            writeMachineSnapshot store m
+            writeIORef machineRef m
+      env <- newRunStepEnv tp ws models envVars tracer usageSeam ri ConfirmAuto (Just checkpoint) (Just machineRef)
       writeMachineSnapshot store m0
-      guardedFinish env store tracer =<< tryAny (drive env store m0 DriveToEnd)
+      guardedFinish env store tracer machineRef =<< tryAny (drive env store machineRef m0 DriveToEnd)
 
 -- | Continue a v2 run from its persisted machine snapshot.
 performContinue ::
@@ -267,8 +272,13 @@ resumeMachine tp ws models envVars runId store meta approve mode = do
                   if mode == DriveOneBatch
                     then ConfirmHold
                     else ConfirmAuto
-            env <- newRunStepEnv tp ws models envVars store tracer usageSeam ri confirmPolicy
+            machineRef <- newIORef machine0
+            let checkpoint m = do
+                  writeMachineSnapshot store m
+                  writeIORef machineRef m
+            env <- newRunStepEnv tp ws models envVars tracer usageSeam ri confirmPolicy (Just checkpoint) (Just machineRef)
             let (machineR, rewoundTry) = rewindTryIfErroredTrace tp priorEvents machine0 rootInputs
+            writeIORef machineRef machineR
             _ <- emit tracer (Resumed runId lastSeq)
             when rewoundTry $
               case trailingTryError priorEvents of
@@ -278,34 +288,53 @@ resumeMachine tp ws models envVars runId store meta approve mode = do
               if approve
                 then approveConfirm env machineR
                 else pure machineR
-            exResult <- tryAny (drive env store machine mode)
-            Right <$> guardedFinish env store tracer exResult
+            exResult <- tryAny (drive env store machineRef machine mode)
+            Right <$> guardedFinish env store tracer machineRef exResult
 
-drive :: StepEnv -> RunStore -> Machine -> DriveMode -> IO (Either RuntimeError StepOutcome)
-drive env store machine mode = loop machine
+drive :: StepEnv -> RunStore -> IORef Machine -> Machine -> DriveMode -> IO (Either RuntimeError StepOutcome)
+drive env store machineRef machine mode = loop machine
   where
+    track m =
+      case seMachineRef env of
+        Just ref -> writeIORef ref m
+        Nothing -> writeIORef machineRef m
     loop m
       | isTerminal m = pure (terminalOutcome m)
       | mode == DriveOneBatch, isStepHalt m = pure (Right (StepHalted m))
       | otherwise = do
+          track m
           outcome <-
             if isParWave m
               then stepParWave env m
               else stepMachine env m
-          persistSnapshot store outcome
+          persistSnapshot store machineRef env outcome
           case outcome of
             Left err -> pure (Left err)
             Right done -> case done of
               Stepped m' -> loop m'
               finished -> pure (Right finished)
 
-persistSnapshot :: RunStore -> Either RuntimeError StepOutcome -> IO ()
-persistSnapshot store outcome =
+persistSnapshot :: RunStore -> IORef Machine -> StepEnv -> Either RuntimeError StepOutcome -> IO ()
+persistSnapshot store machineRef env outcome =
   case outcome of
     Left _ -> pure ()
-    Right (Stepped m) -> writeMachineSnapshot store m
-    Right (StepHalted m) -> writeMachineSnapshot store m
+    Right (Stepped m)
+      | shouldPersist m -> checkpointRun store machineRef env m
+      | otherwise -> pure ()
+    Right (StepHalted m) -> checkpointRun store machineRef env m
     Right (RunCompleted _) -> pure ()
+  where
+    shouldPersist m = case mCurrent m of
+      CurDispatch _ -> False
+      _ -> True
+
+checkpointRun :: RunStore -> IORef Machine -> StepEnv -> Machine -> IO ()
+checkpointRun store machineRef env m = do
+  writeMachineSnapshot store m
+  writeIORef machineRef m
+  case seMachineRef env of
+    Just ref -> writeIORef ref m
+    Nothing -> pure ()
 
 isTerminal :: Machine -> Bool
 isTerminal m = case mStatus m of
@@ -337,11 +366,12 @@ guardedFinish ::
   StepEnv ->
   RunStore ->
   Tracer ->
+  IORef Machine ->
   Either SomeException (Either RuntimeError StepOutcome) ->
   IO RunResult
-guardedFinish env store tracer = \case
+guardedFinish env store tracer machineRef = \case
   Right outcome -> finish env store tracer outcome
-  Left exc -> finishCrash env store tracer exc
+  Left exc -> finishCrash env store tracer machineRef exc
 
 finish ::
   StepEnv ->
@@ -380,9 +410,12 @@ finishCrash ::
   StepEnv ->
   RunStore ->
   Tracer ->
+  IORef Machine ->
   SomeException ->
   IO RunResult
-finishCrash env store tracer exc = do
+finishCrash env store tracer machineRef exc = do
+  m <- readIORef machineRef
+  writeMachineSnapshot store m
   let msg = T.pack (displayException exc)
       runId = riRunId (seRunInfo env)
   _ <- emit tracer (ErrorEvent (qnameFromText (riEntrypoint (seRunInfo env))) "" msg KInternal)

@@ -12,13 +12,13 @@ local filesystem mode.
 
 ## Done recently
 
+- **Resume robustness** — Collapse step dispatch into one transition; skip
+  persisting `CurDispatch`; checkpoint before agent LLM/tool I/O; flush snapshot
+  on crash/interrupt.
 - **Resume snapshot fix** — Tagged `RValue` encoding in `machine.json` preserves
   typed bindings (`VRecord`/`VString`/…).
 - **M6 cleanup** — Purged stale step-cache docs/examples; fixed runtime
-  comments; wired `cacheable` trace flags from checker; removed dead
-  `aeStepKey` / `atFingerprint` fields.
-- **M6** — Removed step-key cache path, `Executor`, `hwfi cache *`; resume via
-  snapshot; while-pred pinning from trace; trace parity (if/try/par/while).
+  comments; wired `cacheable` trace flags from checker.
 
 ## Blockers
 

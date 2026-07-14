@@ -73,7 +73,7 @@ import Hwfi.Runtime.Machine
     ToolRound (..),
   )
 import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
-import Hwfi.Runtime.StepEnv (StepEnv (..))
+import Hwfi.Runtime.StepEnv (StepEnv (..), checkpointMachine)
 import Hwfi.Runtime.Trace (EventBody (..), emit)
 import Hwfi.Runtime.Usage (checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), RefKind (..), canonicalJson, redactedJson, valueToJson)
@@ -196,6 +196,7 @@ stepModel env machine ag
               case budget of
                 Left err -> pure (Left (atStep (agentErrRef ag') err))
                 Right _ -> do
+                  checkpointMachine env (agentMachine machine ag')
                   result <- generateTextWithFallbacks (genReq agentSpec' active messages) (asModel agentSpec')
                   case result of
                     Left gerr ->
@@ -288,24 +289,28 @@ startNextTool env machine ag tr =
       executeActiveTool env machine ag (tr {trPending = rest, trActive = Just tc}) tc
 
 executeActiveTool :: StepEnv -> Machine -> AgentState -> ToolRound -> ToolCall -> IO (Either RuntimeError (Maybe RValue, Machine))
-executeActiveTool env machine ag tr tc
-  | isSubmit tc = runSubmit env machine ag tr tc
-  | tc.tcName == sanitizeToolName loadSkillQName = runLoadSkill env machine ag tr tc
-  | otherwise = do
-      spec <- case agentSpec env ag of
-        Left e -> pure (Left (atStep (agentErrRef ag) e))
-        Right s -> pure (Right s)
-      case spec of
-        Left e -> pure (Left e)
-        Right agentSpec' -> do
-          case activeTools env (agPending ag) of
+executeActiveTool env machine ag tr tc = do
+  checkpointMachine env (agentMachineTool machine ag tr)
+  if isSubmit tc
+    then runSubmit env machine ag tr tc
+    else
+      if tc.tcName == sanitizeToolName loadSkillQName
+        then runLoadSkill env machine ag tr tc
+        else do
+          spec <- case agentSpec env ag of
             Left e -> pure (Left (atStep (agentErrRef ag) e))
-            Right active ->
-              case lookupTool active tc.tcName of
-                Nothing -> do
-                  emitToolCall env ag (agRound ag) (callIndex tr) tc.tcName tc.tcArguments
-                  recoverable env machine ag tr tc ("unknown tool '" <> tc.tcName <> "'; it is not one of the advertised tools")
-                Just tool -> runAdvertised env machine ag tr tc tool agentSpec'
+            Right s -> pure (Right s)
+          case spec of
+            Left e -> pure (Left e)
+            Right agentSpec' -> do
+              case activeTools env (agPending ag) of
+                Left e -> pure (Left (atStep (agentErrRef ag) e))
+                Right active ->
+                  case lookupTool active tc.tcName of
+                    Nothing -> do
+                      emitToolCall env ag (agRound ag) (callIndex tr) tc.tcName tc.tcArguments
+                      recoverable env machine ag tr tc ("unknown tool '" <> tc.tcName <> "'; it is not one of the advertised tools")
+                    Just tool -> runAdvertised env machine ag tr tc tool agentSpec'
 
 runAdvertised ::
   StepEnv ->
@@ -689,6 +694,12 @@ emitLlmCall env ag messages resp cost =
       )
   where
     usage = fromMaybe (Usage 0 0 0) resp.respUsage
+
+agentMachine :: Machine -> AgentState -> Machine
+agentMachine machine ag = machine {mCurrent = CurAgent ag}
+
+agentMachineTool :: Machine -> AgentState -> ToolRound -> Machine
+agentMachineTool machine ag tr = agentMachine machine (ag {agToolRound = Just tr})
 
 renderConversation :: [Turn] -> Text
 renderConversation = T.intercalate "\n" . map render
