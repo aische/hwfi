@@ -81,8 +81,8 @@ cabal run hwfi -- show /tmp/webapp-ws <run-id>
 - **`max_rounds`** bounds the write → check → fix loop; exhausting it fails the
   step (spec §6.1.4).
 
-## Resume behaviour (spec §8.2.1)
+## Resume behaviour (spec §8)
 
-The agent step is a non-cacheable black box, but each model round and tool call is
-content-addressed. A resumed run replays the model's prior choices and file writes
-without re-paying the LLM or re-applying the mutations.
+The agent step is a non-cacheable black box (static classification). Resume
+continues from `CurAgent` state in `machine.json` — prior rounds and tool
+calls are not replayed from a step cache.

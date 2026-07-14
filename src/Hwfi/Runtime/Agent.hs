@@ -74,15 +74,13 @@ import Hwfi.Type (Type (..))
 import LLM (defaultDebugHooks)
 
 -- | One tool advertised to the model: the resolved ref's qname, its provider
--- 'ToolDef' (schema-translated inputs, ?6.1.1), the declared input\/output
--- types (for coercion), and its Merkle fingerprint (for the tool-call sub-key,
--- ?8.2.1).
+-- 'ToolDef' (schema-translated inputs, §6.1.1), and the declared input/output
+-- types (for coercion).
 data AdvertisedTool = AdvertisedTool
   { atQName :: QName,
     atToolDef :: ToolDef,
     atInputs :: [(Ident, Type)],
-    atOutputs :: [(Ident, Type)],
-    atFingerprint :: Text
+    atOutputs :: [(Ident, Type)]
   }
 
 -- | The terminating @submit@ tool of @builtin/llm-agent-object@ (?6.1.3): the
@@ -117,7 +115,7 @@ data AgentSpec = AgentSpec
     asPrompt :: Text,
     asModelName :: Text,
     asModel :: ModelWithFallbacks,
-    -- | Catalog fingerprint of 'asModelName' for the model-call sub-key (?8.2.1).
+    -- | Catalog fingerprint of 'asModelName' (observability; §8.2.1).
     asModelFingerprint :: Text,
     asTools :: [AdvertisedTool],
     asMaxRounds :: Int,
@@ -126,7 +124,7 @@ data AgentSpec = AgentSpec
     asSubmit :: Maybe SubmitSpec
   }
 
--- | The effectful seams the loop needs from the executor.
+-- | The effectful seams the loop needs from the test harness.
 data AgentEnv = AgentEnv
   { aeTracer :: Tracer,
     aeStore :: RunStore,
@@ -134,7 +132,6 @@ data AgentEnv = AgentEnv
     aeUsage :: UsageSeam,
     aeQName :: QName,
     aeStepId :: Ident,
-    aeStepKey :: Text,
     aeDispatch :: QName -> Ident -> Map Ident RValue -> IO (Either RuntimeError RValue),
     aeSkillPolicy :: SkillPolicy,
     aeSkillCatalog :: SkillCatalog,
@@ -171,9 +168,8 @@ driveRounds env spec skillState messages roundIx
           <> tshow (asMaxRounds spec)
           <> ") without terminating (?6.1.3, ?6.1.4)"
   | otherwise = do
-      -- 'AgentRoundStart'/'AgentRoundEnd' are emitted lazily: a round whose
-      -- model call and tool calls are all served from cache on resume emits no
-      -- new events (?8.3.3.7), so the marker is written on the first real event.
+      -- 'AgentRoundStart'/'AgentRoundEnd' are emitted lazily: a round that
+      -- produces no new events skips the markers (§8.3.3.7).
       startedRef <- newIORef False
       let ensureStart = do
             started <- readIORef startedRef
@@ -622,7 +618,7 @@ toolResult :: ToolCall -> Text -> ToolResult
 toolResult tc = ToolResult tc.tcId tc.tcName
 
 -- | JSON tool-result text for the model: redact secrets using the callee output
--- type when the cached value can be coerced (D3).
+-- type when the value can be coerced (D3).
 toolModelJson :: AdvertisedTool -> Value -> Text
 toolModelJson tool cachedJson =
   case coerceFromJson (toolOutputType tool) cachedJson of

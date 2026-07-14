@@ -31,8 +31,7 @@ Tests: `WorkspaceSpec` → `symlink containment`.
 ### C3. Model-catalog change not invalidating one-shot LLM cache — **fixed (H1.3)**
 
 `stepKeyFor` folds `oneShotLlmCtxProjection` / `modelCatalogFingerprint` into
-step-keys for one-shot LLM builtins. Tests: `GatewaysSpec`, `ExecutorSpec` →
-`Model-catalog invalidation`.
+step-keys for one-shot LLM builtins. Tests: `GatewaysSpec`, `StepKeySpec`.
 
 ## 3. Design / architecture — status
 
@@ -58,7 +57,7 @@ Cache stores actual `valueToJson`; trace/events redact; model receives
 ### D5. No crash handler — **fixed (H1.5)**
 
 `guardedFinish` / `finishCrash` emit `internal` + `run-end` `crashed` +
-`PhaseCrashed`. Tests: `ExecutorSpec` → `Crash handling`.
+`PhaseCrashed`. Tests: `MachineRun` / `ControlFlowSpec` resume paths.
 
 ### D6. Partial functions — **open (minor)**
 

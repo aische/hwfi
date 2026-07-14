@@ -122,11 +122,11 @@ runStatusFromText = \case
 data EventBody
   = -- | @run-start@: run id, entrypoint qname, root inputs (redacted), project hash.
     RunStart Text Text Value Text
-  | -- | @step-start@: qname, step id, resolved args (redacted), cacheable flag,
-    -- optional content-addressed step-key (§8.1, §13.1.4).
+  | -- | @step-start@: qname, step id, resolved args (redacted), cacheable flag
+    -- (static classification, §8.1), optional step-key (legacy traces only).
     StepStart QName Ident Value Bool (Maybe Text)
   | -- | @step-end@: qname, step id, result (redacted), duration in ms,
-    -- optional step-key when the step is cacheable.
+    -- optional step-key (legacy traces only).
     StepEnd QName Ident Value Int (Maybe Text)
   | -- | @llm-call@: qname, step id, model, system, prompt, response, tokens in\/out.
     LlmCall QName Ident Text Text Text Text Int Int Double

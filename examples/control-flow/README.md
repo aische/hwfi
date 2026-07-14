@@ -27,19 +27,15 @@ Control-flow constructs are **value-producing**, uniform with step calls:
 - Scoping is **block-local** (§4.2): the outer scope is visible inside a block,
   inner bindings do not escape, and **no shadowing** of outer names is allowed.
   Step `@id`s must be unique **within a block**; sibling `if` branches and
-  unrelated loops may reuse the same `@id` (the executor disambiguates via the
-  step-key scope prefix, e.g. `mode?then/notify` vs `mode?else/notify`). That is
+  unrelated loops may reuse the same `@id` (the runtime disambiguates via the
+  scope prefix, e.g. `mode?then/notify` vs `mode?else/notify`). That is
   why the `then`/`else` arms here both bind `msg` with `@notify`.
 
-## Resume behaviour (durable workspace, spec §8.2)
+## Resume behaviour (durable workspace, spec §8)
 
-Each `builtin/exec` inside a loop or branch is an ordinary cacheable step, but its
-cache key is **iteration/branch-scoped** — the executor threads a scope prefix
-(e.g. `check#2/c`, `mode?then/s`) into the step key so that dynamically-distinct
-occurrences of the same static step get distinct keys. On resume a completed
-iteration's command is **not** re-run; its result is served from the cache, so
-per-iteration side effects (like the manifest appends) apply **exactly once**
-across a run + resume.
+Each `builtin/exec` inside a loop or branch records progress in `machine.json`.
+On resume, completed iterations are not re-run — per-iteration side effects
+(like the manifest appends) apply **exactly once** across a run + resume.
 
 The trace records the control flow explicitly: `loop-start`/`loop-iter`/`loop-end`
 bracket each loop with its kind (`foreach`/`par`) and count, and `if-branch`
@@ -91,8 +87,8 @@ Flip `strict` to `false` in the inputs to take the `else` branch, or point
 cabal run hwfi -- resume /tmp/cf-ws <run-id>
 ```
 
-The manifest still contains exactly three lines and no command is re-run — every
-iteration's result is served from the cache.
+The manifest still contains exactly three lines and no command is re-run —
+completed iterations are reflected in the machine snapshot.
 
 ## `while` (predicate/body loop, §4.3)
 

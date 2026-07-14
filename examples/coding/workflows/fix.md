@@ -36,10 +36,8 @@ before you edit.
 An LLM-driven coding loop (spec §6.1): instead of a fixed script, `builtin/llm-agent`
 advertises the read/navigation/mutation/exec builtins to the model and lets it
 decide which to call, and in what order, until the build passes. The agent step
-is a non-cacheable black box to the enclosing workflow (spec §8.1), but every
-model round and tool call inside it is content-addressed, so a resumed run
-replays the model's prior choices and tool results — and does not re-run the
-mutations or commands — without re-paying the LLM (spec §8.2.1).
+is a non-cacheable black box to the enclosing workflow (spec §8.1). Resume
+continues from `CurAgent` state in `machine.json` (spec §8).
 
 ```step
 result <- builtin/llm-agent(

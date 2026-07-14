@@ -387,19 +387,37 @@ evaluator but over hwfi's dynamically-typed `RValue` (avoiding the
 
 ## 5. The hard problems
 
-### 5.1 Determinism vs. the step cache
+### 5.1 Determinism vs. resume (v2)
 
-hwfi's caching and resume assume a **statically known call graph**. A
-step's identity is its step-key:
+> **Note (M6):** The v2 runtime resumes from `machine.json`, not a
+> content-addressed `steps/` cache. Step-keys remain for static classification
+> and trace metadata. The design rationale below describes the agent-loop
+> problem; intra-step sub-key caching was removed with the v2 cutover.
 
-```315:322:src/Hwfi/Runtime/Executor.hs
--- | Execute a single step, honouring the step cache (§8.1, §8.2):
---
---   1. evaluate arguments (with the ambient @ctx@ injected);
---   2. if cacheable, compute the step-key and — when resuming — try the cache;
---      a hit binds the reconstructed result and emits /no/ events (§8.3.4);
---   3. otherwise emit @step-start@, dispatch, emit @step-end@, and (if
---      cacheable) persist the result under its step-key.
+hwfi's resume model assumes a **statically known call graph**. A step's static
+identity is its step-key (§8.1):
+
+```54:80:src/Hwfi/Runtime/StepKey.hs
+computeStepKey ::
+  (QName -> Maybe Text) ->
+  QName ->
+  Ident ->
+  Map Ident RValue ->
+  [(Text, Text)] ->
+  Text ->
+  Text
+computeStepKey refFp q sid args ctxProjection calleeFp =
+  sha256Hex payload
+  where
+    payload =
+      T.intercalate
+        "\n"
+        [ "qname:" <> renderQName q,
+          "step:" <> sid,
+          "args:" <> canonicalJson (argsToJson refFp args),
+          "ctx:" <> renderProjection ctxProjection,
+          "callee:" <> calleeFp
+        ]
 ```
 
 An agent step's behaviour — which tools it calls, in what order, with what
@@ -409,90 +427,39 @@ is not determined by its inputs. `classifyCacheable` must therefore treat
 `builtin/llm-agent` like `builtin/introspect` (spec §6/§8.2) — the *step as
 a whole* is non-cacheable.
 
-But that is not the end of the story, and "non-cacheable step" must **not**
-mean "re-do everything on resume." The decision (see §5.2) is that the agent
-step is opaque at the step level while its **internal units — each model
-call and each tool call — are individually content-addressed and cached.**
-This is a firm requirement, not an option: without it a crash mid-loop would
-re-pay every prior LLM call and re-run every prior side effect on resume.
+On resume, agent progress is carried in **`CurAgent` state in `machine.json`**
+(see [execution-model.md](execution-model.md)), not by replaying per-round
+sub-keys from `steps/`.
 
-### 5.2 Resume semantics
+### 5.2 Resume semantics (v2)
 
-Resume replays the trace, skips cacheable steps with a persisted result, and
-re-runs non-cacheable steps:
+The v2 runtime (M6+) persists agent state in the machine snapshot:
 
-```364:374:src/Hwfi/Runtime/Executor.hs
-cacheHit :: Runtime -> Type -> Maybe Text -> IO (Maybe RValue)
-cacheHit rt resultTy mKey
-  | not (rtResume rt) = pure Nothing
-  | otherwise = case mKey of
-      Nothing -> pure Nothing
-      Just key -> do
-        mJson <- lookupCachedResult (rtStore rt) key
-        pure (mJson >>= either (const Nothing) Just . coerceFromJson resultTy)
+- `CurAgent` holds round index, message history, pending tool calls, and skill
+  state.
+- `stepAgent` performs one transition per machine step (model call, one tool
+  call, or submit recovery).
+- Resume loads `machine.json` and continues from the saved agent state — no
+  `steps/` lookup, no intra-step sub-key replay.
+
+```1:9:src/Hwfi/Runtime/MachineAgent.hs
+-- | Agent stepping for the v2 machine runtime (M2).
+--
+-- One 'stepAgent' call performs exactly one transition: a model call, one tool
+-- call, or mixed-submit recovery. Agent state lives in the machine snapshot;
+-- intra-step sub-key cache replay is not used (see @docs/execution-model.md@).
 ```
 
-If an agent step were merely non-cacheable, resuming after a crash would
-re-run the **entire** loop — re-issuing every model call (cost) and
-re-executing every tool call (side effects like `builtin/write-file`). That
-is unacceptable, so **intra-step content-addressed caching is required.**
+Legacy v1 used content-addressed sub-keys under `steps/` for each model round
+and tool call. That path was removed with M6 in favour of explicit snapshot
+state. The design trade-off: simpler persistence, but the snapshot must encode
+everything needed to continue the loop (including message history).
 
-#### Design
+#### Consequence: serialized machine state is required
 
-Two kinds of unit inside an agent step are cached, both reusing the existing
-content-addressed store (`RunStore`'s `cacheStepResult` /
-`lookupCachedResult` — the sub-keys are simply more entries under `steps/`,
-so no new storage layer is needed):
-
-- **Tool calls.** A model-chosen tool call is essentially a nested step, so
-  it reuses the normal step-key machinery (`computeStepKey`) namespaced
-  under the agent step:
-  `hash(agent-step-key, round-index, call-index-in-round, callee-fingerprint,
-  canonical(resolved-args))`. The `call-index-in-round` disambiguates
-  multiple tool calls in one assistant turn (provider order is stable).
-- **Model calls.** Each round's LLM generation is keyed by
-  `hash(agent-step-key, round-index, canonical(messages-so-far),
-  model-catalog-fingerprint, advertised-tools-fingerprint)`. The
-  `messages-so-far` already encode every prior round's assistant turn and
-  tool results, so the key chain is self-consistent. Caching a model call is
-  consistent with hwfi treating `llm-call` steps as cacheable today.
-
-  **Canonicalization caveat.** `canonical(messages-so-far)` must hash the
-  **actual** message content, not the trace's redacted form. hwfi already
-  splits these: `steps/*.json` and `run.json.inputs` store actual
-  (non-redacted) values because resume must re-evaluate with real data,
-  while `trace.jsonl` redacts secrets (§8.3.4, A8; STATUS.md). Sub-keys are
-  computed from the actual conversation exactly as `computeStepKey` hashes
-  actual resolved args today — never from `redactedJson`. The canonical form
-  must also be stable across the concerns that don't affect meaning: turn
-  ordering, tool-result serialization, and JSON field order (reuse
-  `canonicalJson`). Any instability here silently breaks the key chain and
-  turns cache hits into misses on resume.
-
-#### Resume behaviour
-
-Resume re-drives the loop from round 0, but consults the cache (only on
-resume, per §8.2 / STATUS.md):
-
-- Each **model call**: compute its sub-key; on a hit, reuse the cached
-  assistant turn *including the tool calls it chose*, without paying the
-  provider. This is what makes the replay follow the **same branch**
-  deterministically even though the model is nondeterministic.
-- Each **tool call**: on a hit, reuse the cached result without re-running
-  its side effects.
-- A **miss** anywhere (e.g. a non-deterministic tool read changed) re-runs
-  from that point; every downstream key then changes and re-runs too —
-  exactly hwfi's existing "cacheable ⇒ skip, else re-run" rule, applied one
-  level down.
-
-#### Consequence: serialized machine state is an optimization, not a requirement
-
-Because a cached replay does no provider calls and no tool side effects — it
-only re-walks the loop, hashing and looking up — the cost of reconstructing
-the continuation stack (§3.4) by replay is negligible next to the LLM calls
-it avoids. So persisting the reified `Stack` to disk is a *possible later
-optimization* (skip the re-walk entirely), **not** a prerequisite for
-correct, cheap resume. Intra-step caching alone gives us both.
+Unlike the v1 sub-key replay model, v2 **must** persist `CurAgent` (and the
+full machine cursor/frames) to resume cheaply. Re-walking the trace alone is
+not sufficient for agent loops.
 
 ### 5.3 Tracing
 
@@ -556,15 +523,10 @@ Ordered so each step is independently testable:
    `builtin/llm-gen-object` as the zero-tool case.
 5. **Trace events** for rounds/tool-calls/results, with redaction, plus
    `hwfi show` rendering and `eventFromJson` round-trip.
-6. **Intra-step content-addressed caching** (§5.1–§5.2) — *required*, not
-   optional: sub-key each model call and each tool call under the agent
-   step-key, reuse `RunStore`, and consult the cache on resume so a crash
-   mid-loop replays without re-paying LLM calls or re-running side effects.
-   The hardest and most important item.
+6. **Machine snapshot resume** (§5.2) — *implemented (M2/M6):* `CurAgent` and
+   full machine state in `machine.json`; `stepAgent` one transition per step.
 7. **Docs**: promote the relevant part of spec §13 into a real §6 entry and
    an A-series assertion for the loop behaviour.
-8. *(Optional, later.)* Serialized machine state to skip the replay re-walk
-   (§5.2) — a performance optimization only.
 
 ## 7. Recommendation
 
@@ -577,7 +539,7 @@ Two firm positions, both reinforced by the prior art:
 
 1. **Do not adopt `llm-simple`'s `LLM.Agent` loop or FS tools wholesale.**
    Synthesize `ToolDef`s from hwfi signatures, and route every model-chosen
-   call back through `Hwfi.Runtime.Executor`. The FS tools bypass hwfi's
+   call through `StepDriver` / nested dispatch. The FS tools bypass hwfi's
    sandbox/trace/typing; the fixed recursive loop bypasses the reified
    state that resume needs.
 2. **Build one evaluator, not a bolted-on loop.** Model step execution as a
@@ -587,18 +549,11 @@ Two firm positions, both reinforced by the prior art:
    agent tool loop, sub-workflow calls, and the M6 control-flow constructs
    (`if`/`foreach`/`par`) are one mechanism.
 
-The genuine cost is **not** the loop — `llm-workflow` shows it is small. It
-is reconciling nondeterministic model-driven calls with hwfi's deterministic
-caching/resume contract (§5.1–§5.2), which `llm-workflow` does *not* solve
-because it has no persistence. The settled answer is **intra-step
-content-addressed caching** (required): the agent step is black-box
-non-cacheable, but every model call and tool call inside it is individually
-content-addressed under the agent step-key and reuses `RunStore`, so a
-resumed loop replays deterministically — reusing cached model choices and
-tool results — without re-paying LLM calls or re-running side effects. This
-also makes serialized machine state an optional later optimization rather
-than a prerequisite. That caching design is the thing to get right before
-writing code.
+The genuine cost was reconciling nondeterministic model-driven calls with
+hwfi's resume contract. **v2 answer (M6):** the agent step is black-box
+non-cacheable at the workflow level, but `CurAgent` state in `machine.json`
+carries everything needed to continue the loop without re-paying prior rounds.
+Legacy v1 intra-step sub-key caching under `steps/` was removed.
 
 ## 8. Mutating tools and command execution (coding workflows)
 

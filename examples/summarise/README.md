@@ -49,4 +49,4 @@ cabal run hwfi -- show /tmp/summarise-ws <run-id>
 
 - [Tutorials](../../docs/tutorials/README.md) — hello → check → agent → show/resume
 - [`../coding`](../coding) — agent loop with `exec` and resume
-- [Caching and resume](../../docs/caching-and-resume.md) — how step cache works
+- [Caching and resume](../../docs/caching-and-resume.md) — snapshot resume semantics

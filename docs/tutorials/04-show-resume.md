@@ -1,6 +1,6 @@
 # Tutorial 4: Show and resume
 
-Inspect durable runs, understand step caching, and resume without redoing
+Inspect durable runs, understand machine snapshots, and resume without redoing
 completed work.
 
 **Time:** ~15 minutes  
@@ -11,8 +11,8 @@ without an API key; agent `fix` optional)
 
 - Where run state lives in the workspace
 - Reading traces with `hwfi show`
-- Resume behaviour for cacheable steps
-- When to use `hwfi cache clear`
+- Resume behaviour via `machine.json`
+- When to start a new run id instead of resuming
 
 Normative detail: [caching-and-resume.md](../caching-and-resume.md).
 
@@ -38,8 +38,7 @@ export RUN_ID=$(ls /tmp/resume-ws/.hwfi/runs/ | head -1)
 echo $RUN_ID
 ```
 
-Each run directory contains `run.json`, `trace.jsonl`, and cached step results
-under `steps/`.
+Each run directory contains `run.json`, `machine.json`, and `trace.jsonl`.
 
 ## 2. Inspect the trace
 
@@ -51,30 +50,33 @@ Look for:
 
 | Event kind | Meaning |
 |------------|---------|
-| `step-start` | Cacheable step beginning (may show `[cacheable]`) |
+| `step-start` | Step beginning (may show `[cacheable]` from static classification) |
 | `file-io` | `read-file`, `write-file`, `edit-file` |
 | `exec` | Allowlisted command (`sh`, …) with exit code |
 | `loop-start` / `loop-end` | Control-flow loops (in other examples) |
 
-The trace **redacts secrets**; step result files under `steps/` hold actual
-values used on resume.
+The trace **redacts secrets**. Actual values used at runtime live in
+`run.json.inputs` and on the workspace filesystem.
 
 ## 3. Resume an interrupted run
 
-`hwfi resume` only works when the run did **not** finish cleanly. Resumable
-statuses: `running` (process killed or crashed mid-run), `aborted` (workflow
-error), `crashed`. A **`completed`** run returns an error — that is expected.
+`hwfi resume` (alias for `hwfi continue`) only works when the run did **not**
+finish cleanly. Resumable statuses: `running` (process killed or crashed
+mid-run), `aborted` (workflow error), `crashed`. A **`completed`** run returns
+an error — that is expected.
 
 ### What resume does
 
-Resume re-executes orchestration but **reuses cached step results** for
-cacheable steps. For `workflows/render` that means:
+Resume loads `machine.json` and continues via `stepMachine`. Completed
+transitions are reflected in the snapshot; mid-flight work is re-run from the
+saved cursor and frames.
 
-- A cached `edit-file` step is **not** re-applied
-- A cached `exec` step is **not** re-run
+For `workflows/render` that means:
 
-Mutations and command results stay on disk; the cache stores step *outputs* so
-resume does not repeat side effects.
+- A completed `edit-file` step is **not** re-applied (workspace already mutated)
+- A completed `exec` step is **not** re-run
+
+Mutations stay on disk; the snapshot records orchestration progress.
 
 ### Hands-on (optional, needs API key)
 
@@ -94,56 +96,48 @@ export RUN_ID=$(ls /tmp/coding-ws/.hwfi/runs/ | head -1)
 cabal run hwfi -- resume /tmp/coding-ws $RUN_ID
 ```
 
-On resume, prior model rounds and tool calls replay from cache — the agent does
-not re-pay for LLM calls or re-apply edits it already made.
+On resume, the agent continues from `CurAgent` state in `machine.json` — prior
+rounds and tool calls are not replayed from a step cache.
 
-### Inspect cache without resume
+### Inspect the snapshot
 
-After any completed run, cached step results live under the run directory:
-
-```bash
-ls /tmp/resume-ws/.hwfi/runs/$RUN_ID/steps/
-```
-
-Use `hwfi show` to correlate trace events with those files. See
-[caching-and-resume.md](../caching-and-resume.md) for semantics.
-
-## 4. Cache clear during development
-
-Automatic invalidation handles **workflow source edits** (Merkle fingerprints).
-You may need manual busting when:
-
-- Workspace files changed outside the workflow but step inputs did not
-- You are re-running tutorial steps against an old run directory
-- You suspect a corrupted `steps/` entry after a crash
+After any run (completed or interrupted):
 
 ```bash
-cabal run hwfi -- cache clear /tmp/resume-ws $RUN_ID
-
-# Or invalidate from a specific step onward (keeps upstream cache):
-cabal run hwfi -- cache invalidate /tmp/resume-ws $RUN_ID --from-step workflows/main#edit
+ls /tmp/resume-ws/.hwfi/runs/$RUN_ID/
+# run.json  machine.json  trace.jsonl
 ```
 
-Then `resume` recomputes cleared steps. For a clean slate, use a new workspace
-directory instead.
+Use `hwfi show` for the event log. See [caching-and-resume.md](../caching-and-resume.md)
+for semantics.
 
-## 5. Workspace vs cache
+## 4. Fresh retries during development
+
+Resume refuses to continue when the **project** changed since the run started
+(`project_hash` in `run.json` no longer matches). Edit workflow source and
+start a new run id.
+
+For a clean slate without project edits, use a new workspace directory or a new
+`run-id` under the same workspace.
+
+`hwfi cache clear` and `hwfi cache invalidate` were removed in the v2 runtime.
+
+## 5. Workspace vs snapshot
 
 | Situation | Behaviour |
 |-----------|-----------|
-| Cached `write-file` / `edit-file` | File on disk; write not re-applied on resume |
-| Cached `read-file` | Returns cached text; does **not** re-read disk |
-| You edit a file **outside** the workflow | Cached `read-file` may return stale content |
+| Completed `write-file` / `edit-file` | File on disk; write not re-applied on resume |
+| Completed `read-file` before pause | Snapshot holds progress; read not repeated if step finished |
+| You edit a file **outside** the workflow | Reads see live disk on the next `read-file` |
 
-**Rule:** treat the workspace as source of truth for mutations; treat the cache
-as memoization for unchanged code and inputs.
+**Rule:** treat the workspace as source of truth for mutations; treat
+`machine.json` as source of truth for orchestration progress.
 
 ## 6. Try control-flow resume
 
-[`examples/control-flow`](../../examples/control-flow) loops cache per iteration.
-Interrupt a run or resume after a workflow error to see per-iteration cache
-behaviour — a completed run is not resumable. See
-[`examples/control-flow/README.md`](../../examples/control-flow/README.md).
+[`examples/control-flow`](../../examples/control-flow) exercises foreach/par/while
+resume. Interrupt a run or resume after a workflow error — a completed run is
+not resumable. See [`examples/control-flow/README.md`](../../examples/control-flow/README.md).
 
 ## 7. Done
 

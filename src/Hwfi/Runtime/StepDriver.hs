@@ -250,6 +250,7 @@ enterAgent ::
   IO (Either RuntimeError StepOutcome)
 enterAgent env machine stepRef target binder argMap =
   let mRef = StepRef (Err.srQName stepRef) (Err.srStepId stepRef)
+      cacheable = cacheableForStep env (Err.srQName stepRef) (Err.srStepId stepRef)
    in case initAgentState env mRef binder target argMap of
     Left e -> pure (Left (atStep stepRef e))
     Right ag -> do
@@ -260,7 +261,7 @@ enterAgent env machine stepRef target binder argMap =
               (Err.srQName stepRef)
               (Err.srStepId stepRef)
               (redactedJson (VRecord argMap))
-              False
+              cacheable
               Nothing
           )
       pure . Right . Stepped $
@@ -321,10 +322,11 @@ runBuiltinDispatch ::
 runBuiltinDispatch env machine stepRef argMap realTarget binder = do
   let q = Err.srQName stepRef
       sid = Err.srStepId stepRef
+      cacheable = cacheableForStep env q sid
   _ <-
     emit
       (seTracer env)
-      (StepStart q sid (redactedJson (VRecord argMap)) False Nothing)
+      (StepStart q sid (redactedJson (VRecord argMap)) cacheable Nothing)
   r <- runBuiltin (builtinEnv env stepRef (mBindings machine) (mScope machine)) realTarget argMap
   case r of
     Left e -> handleStepError env machine (atStep stepRef e)
@@ -841,6 +843,12 @@ workflowSections env q = fst <$> requireWorkflowDecl env q
 
 typedStepsFor :: TypedDecl -> Map Ident TypedStep
 typedStepsFor td = Map.fromList [(stepId (tsStmt ts), ts) | ts <- tdSteps td]
+
+cacheableForStep :: StepEnv -> QName -> Ident -> Bool
+cacheableForStep env q sid =
+  case lookupTyped q (seProject env) of
+    Nothing -> False
+    Just td -> maybe False tsCacheable (Map.lookup sid (typedStepsFor td))
 
 mkEvalEnv :: StepEnv -> [Section] -> Map Ident RValue -> EvalEnv
 mkEvalEnv env sections bindings =

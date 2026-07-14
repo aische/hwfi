@@ -22,10 +22,9 @@ answer it directly in prose. Do not fabricate sources.
 
 An LLM-driven step (spec §6.1): instead of a fixed script, `builtin/llm-agent`
 advertises the two read-only tools above to the model and lets it decide which to
-call, and in what order, until it produces a final answer. Every model round and
-tool call is content-addressed under this step, so a resumed run replays the same
-choices without re-paying the LLM or re-running the tools (spec §8.2.1). The step
-is a non-cacheable black box to the enclosing workflow (spec §8.1).
+call, and in what order, until it produces a final answer. Resume continues from
+`CurAgent` state in `machine.json` (spec §8). The step is a non-cacheable black
+box to the enclosing workflow (spec §8.1).
 
 ```step
 result <- builtin/llm-agent(

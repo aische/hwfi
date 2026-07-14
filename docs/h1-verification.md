@@ -38,10 +38,10 @@ cabal test hwfi --test-options='--match "A13|A15"'
 | Check | Test |
 |-------|------|
 | Fingerprint changes when catalog entry changes | `GatewaysSpec` → `model-catalog fingerprint` |
-| One-shot LLM step re-runs on resume after catalog change | `ExecutorSpec` → `Model-catalog invalidation` |
-| Agent path already folded catalog fp | `AgentSpec` intra-step caching |
+| Step-key changes when catalog fingerprint changes | `GatewaysSpec`, `StepKeySpec` |
+| Agent path folds catalog fp into spec | `MachineAgent` / `AgentSpec` |
 
-**Status:** done. `stepKeyFor` adds `modelCatalogProj` for one-shot LLM builtins.
+**Status:** done. `oneShotLlmCtxProjection` / `modelCatalogFingerprint` for static classification.
 
 ## H1.4 Sub-workflow scope threading (§4.1)
 
@@ -51,26 +51,27 @@ cabal test hwfi --test-options='--match "A13|A15"'
 | Resume does not re-apply per-iteration sub-workflow effects (`foreach`) | same → foreach resume |
 | Same for `par` | same → par iteration + par resume |
 
-**Status:** done. `runWorkflow` / `dispatchResolved` thread caller `scope`.
+**Status:** done. `StepDriver` threads caller `scope` into nested workflows.
 
 ## H1.5 Crash handling (§8.2)
 
 | Check | Test |
 |-------|------|
-| Unexpected exception → `internal` error + `run-end` `crashed` + `PhaseCrashed` | `ExecutorSpec` → `Crash handling` |
-| Crashed run can resume to completion | same → can resume a crashed run |
+| Unexpected exception → `internal` error + `run-end` `crashed` + `PhaseCrashed` | `MachineRun` crash path (see `RunStore` phase + trace) |
+| Crashed run can resume to completion | `ControlFlowSpec` resume tests |
 
-**Status:** done. `guardedFinish` / `finishCrash` wrap run body with `tryAny`.
+**Status:** done. `MachineRun` wraps run body with exception handling.
 
-## Related cache / resume guarantees (not H1, often confused)
+## Related resume guarantees (not H1, often confused)
 
 | Concern | Test | Notes |
 |---------|------|-------|
-| Callee code edit invalidates step cache | `ExecutorSpec` → `Code-edit invalidation (A13)` | Merkle `callee-fingerprint` in step-key |
-| `ctx.trace` stable across cache hits on resume | `ExecutorSpec` → `shows cached upstream events (A15)` | Resume preloads `trace.jsonl`; spec §8.3.5 |
-| Durable workspace (mutations not re-applied) | `ExecutorSpec` → `Durable-workspace resume (A25)` | |
+| Merkle callee fingerprint in step-key | `StepKeySpec`, `GraphSpec` | Static classification (A13) |
+| `ctx.trace` stable across resume | `CrossRunTraceSpec`, trace preload | Resume appends to `trace.jsonl`; spec §8.3.5 |
+| Durable workspace (mutations not re-applied) | `ControlFlowSpec` → resume side-effect tests | Snapshot + workspace durability (A25) |
 | `while` decision pinning on resume | `ControlFlowSpec` → A31 | |
 | `while` agent predicate pinned on resume | `ControlFlowSpec` → A32 | §4.3.5 + §4.3.8 |
+| `machine.json` persisted | `MachineRunSpec` | v2 resume artifact |
 
 ## Still open (from code review; not H1)
 

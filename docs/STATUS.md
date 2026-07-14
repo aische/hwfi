@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 ## Current focus
 
@@ -12,11 +12,11 @@ local filesystem mode.
 
 ## Done recently
 
+- **M6 cleanup** — Purged stale step-cache docs/examples; fixed runtime
+  comments; wired `cacheable` trace flags from checker; removed dead
+  `aeStepKey` / `atFingerprint` fields.
 - **M6** — Removed step-key cache path, `Executor`, `hwfi cache *`; resume via
   snapshot; while-pred pinning from trace; trace parity (if/try/par/while).
-- **M4** — CLI `continue` / `step` / `resume`; `MachineRun`.
-- **M3** — real `par`, cooperative confirm, per-branch snapshots.
-- **M2** — agent `CurAgent` stepping; snapshot resume.
 
 ## Blockers
 

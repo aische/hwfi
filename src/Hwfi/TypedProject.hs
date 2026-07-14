@@ -1,7 +1,7 @@
 -- | The checked-project artifact produced by 'Hwfi.Check.checkProject' and
 -- consumed by the runtime (M4/M5). It carries the resolved signatures,
--- per-step static classifications (§8.1), and Merkle fingerprints (§8.1) that
--- the executor and cache need.
+-- per-step static classifications (§8.1), and Merkle fingerprints (§8.1) for
+-- trace metadata and callee-change detection at check time.
 module Hwfi.TypedProject
   ( Fingerprint (..),
     ResolvedSignature (..),
@@ -38,7 +38,7 @@ data ResolvedSignature = ResolvedSignature
   deriving stock (Eq, Show)
 
 -- | A checked step statement with its static cache classification and the
--- fingerprint of its call target (both needed for step-key hashing in M5).
+-- fingerprint of its call target (for step-key hashing and trace metadata).
 data TypedStep = TypedStep
   { tsStmt :: StepStmt,
     -- | Whether this step is cacheable (§8.1): 'False' if it references a
@@ -51,9 +51,7 @@ data TypedStep = TypedStep
     -- (§8.1).
     tsCalleeFingerprint :: Maybe Fingerprint,
     -- | The step's statically-inferred result type (the callee's outputs
-    -- record). Used to reconstruct a cached result 'RValue' from its persisted
-    -- JSON on resume (§8.2), preserving @FileRef@\/@Secret@ distinctions that
-    -- plain JSON conflates.
+    -- record).
     tsResultType :: Type
   }
   deriving stock (Eq, Show)

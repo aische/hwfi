@@ -209,8 +209,7 @@ searchTool =
     { atQName = searchQ,
       atToolDef = advertisedToolDef searchQ [("query", TyString)],
       atInputs = [("query", TyString)],
-      atOutputs = [("hits", TyList TyString)],
-      atFingerprint = "search-fp-v1"
+      atOutputs = [("hits", TyList TyString)]
     }
 
 textSpec :: LLMGateway -> AgentSpec
@@ -254,8 +253,7 @@ execTool =
           ("stdout", TyString),
           ("stderr", TyString),
           ("timed_out", TyBool)
-        ],
-      atFingerprint = "exec-fp-v1"
+        ]
     }
 
 editTool :: AdvertisedTool
@@ -264,8 +262,7 @@ editTool =
     { atQName = editQ,
       atToolDef = advertisedToolDef editQ editInputs,
       atInputs = editInputs,
-      atOutputs = [],
-      atFingerprint = "edit-fp-v1"
+      atOutputs = []
     }
 
 codingPolicy :: ExecPolicy
@@ -360,8 +357,7 @@ discoverSkillTool =
         [ ("ok", TyBool),
           ("skills", TyList TyJson),
           ("error", TyString)
-        ],
-      atFingerprint = "discover-skills-fp"
+        ]
     }
 
 loadSkillTool :: AdvertisedTool
@@ -376,8 +372,7 @@ loadSkillTool =
           ("loaded", TyBool),
           ("content", TyString),
           ("error", TyString)
-        ],
-      atFingerprint = "load-skill-fp"
+        ]
     }
 
 fixShellTool :: AdvertisedTool
@@ -386,8 +381,7 @@ fixShellTool =
     { atQName = fixShellQ,
       atToolDef = advertisedToolDef fixShellQ [("path", TyString)],
       atInputs = [("path", TyString)],
-      atOutputs = [("ok", TyBool)],
-      atFingerprint = "fix-shell-fp"
+      atOutputs = [("ok", TyBool)]
     }
 
 skillToolboxSpec :: LLMGateway -> AgentSpec
@@ -597,7 +591,6 @@ env store tracer usageSeam resume dispatch skillState =
       aeUsage = usageSeam,
       aeQName = mainQ,
       aeStepId = "agent",
-      aeStepKey = "step-key-fixed",
       aeDispatch = dispatch,
       aeSkillPolicy = defaultSkillPolicy,
       aeSkillCatalog = emptySkillCatalog defaultSkillPolicy,

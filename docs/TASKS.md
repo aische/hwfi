@@ -22,6 +22,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **M6 cleanup (2026-07-14):** Stale step-cache artifacts in docs/examples;
+  runtime comment fixes; `cacheable` from checker in traces; removed unused agent
+  fields (`aeStepKey`, `atFingerprint`).
 - **M6 (2026-07-13):** Dropped step-key cache resume (`Executor`, `steps/`,
   `hwfi cache clear|invalidate`); single v2 path via `MachineRun` +
   `machine.json`; migrated tests; rewrote spec §8 / caching docs; while-pred

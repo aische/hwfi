@@ -2,7 +2,7 @@
 --
 -- Parses runtime-synthesized markdown, merges it into the enclosing checked
 -- project, type-checks the synthetic project, coerces inputs, and executes the
--- dynamic workflow through the normal executor. Parse, type-check, and input
+-- dynamic workflow through the v2 machine runtime. Parse, type-check, and input
 -- coercion failures return @{ ok = false, errors = [...] }@ without aborting
 -- the enclosing run; runtime errors during execution of a checked workflow
 -- propagate as fatal failures (§6.4.3).
@@ -30,7 +30,8 @@ import Hwfi.Source (Diagnostic (..), Pos (..), renderDiagnostic)
 import Hwfi.TypedProject (ResolvedSignature (..), TypedDecl (..), TypedProject (..), lookupTyped)
 
 -- | Effectful seam for executing a checked dynamic workflow without importing
--- the executor module (avoids a cycle).
+-- Effectful seam for executing a checked dynamic workflow without importing
+-- 'Hwfi.Runtime.StepDriver' (avoids a cycle).
 data EvalWorkflowSeam = EvalWorkflowSeam
   { ewsProject :: TypedProject,
     ewsScope :: Text,

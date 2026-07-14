@@ -18,17 +18,14 @@ A **scripted** workflow that exercises the M8 control-flow constructs (spec §13
 like step calls: a block's value is the value of its last statement, so a loop binds
 a `List<U>` and a conditional binds the common type of its two branches.
 
-Every `builtin/exec` call inside the loops and branches is an ordinary cacheable
-step, individually content-addressed with an iteration/branch-scoped key. On resume
-(spec §8.2) a completed iteration's command is **not** re-run: its result is served
-from the cache, so per-iteration side effects apply exactly once across a
-run + resume.
+Every `builtin/exec` call inside the loops and branches records progress in
+`machine.json`. On resume (spec §8) a completed iteration's command is **not**
+re-run, so per-iteration side effects apply exactly once across a run + resume.
 
 ```step
 -- Syntax-check every script concurrently, at most 4 at a time. `par` preserves
 -- input order in the result list regardless of completion order, and aborts on
--- the lowest-index failure. Each iteration's exec step gets a distinct,
--- iteration-scoped cache key.
+-- the lowest-index failure. Each iteration's exec step is scoped under the loop.
 checks <- par(max = 4) path in ${inputs.scripts} {
   c <- builtin/exec(
     program = "sh",

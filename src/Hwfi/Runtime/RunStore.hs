@@ -124,8 +124,8 @@ data RunMeta = RunMeta
   { rmRunId :: Text,
     rmEntrypoint :: Text,
     -- | The project directory this run was launched from, so @hwfi resume@ can
-    -- re-parse and re-check the project (a code edit invalidates dependent step
-    -- keys, A13) without the user re-supplying the path.
+    -- re-parse and re-check the project (staleness gate on continue) without
+    -- the user re-supplying the path.
     rmProjectDir :: Text,
     rmStartedAt :: Text,
     rmProjectHash :: Text,

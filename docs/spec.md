@@ -665,9 +665,8 @@ iteration `i` is **not** re-invoked; the stored `continue`/`reason` are used
 and a `while-pred` event is not re-emitted (same “no duplicate events on cache
 hit” rule as §8.2). If the key is absent, the predicate runs normally.
 
-Body invocations use ordinary sub-workflow / step caching under scope
-`P/w#i/b/`. A partially completed body resumes from the first uncached step
-inside it.
+Body invocations use nested sub-workflow dispatch under scope `P/w#i/b/`. A
+partially completed body resumes from the machine snapshot inside it (§8.2).
 
 **Durable-workspace invariant** (§8.2) applies unchanged: a completed body
 iteration's mutating steps are not re-applied on resume.
@@ -857,14 +856,14 @@ done:
 
 | Prior attempt state | On resume |
 |---------------------|-----------|
-| Try arm in progress, catch not started | Re-run try arm from first uncached step |
-| Try arm failed, catch not started | Re-run try arm (failure is not cached) |
-| Catch arm in progress | Continue catch arm from first uncached step |
-| Construct completed | Skip (cached inner steps; no re-entry) |
+| Try arm in progress, catch not started | Re-run try arm from snapshot |
+| Try arm failed, catch not started | Re-run try arm |
+| Catch arm in progress | Continue catch arm from snapshot |
+| Construct completed | Skip (snapshot reflects completion) |
 
-Completed steps in either arm are skipped via cache (no duplicate events,
-§8.2). Resume never skips directly to `catch` without re-running the try
-arm when catch did not complete in the prior attempt.
+Completed steps in either arm are not re-run when the snapshot shows they
+finished (§8.2). Resume never skips directly to `catch` without re-running the
+try arm when catch did not complete in the prior attempt.
 
 #### 4.4.7 Trace
 
@@ -1230,19 +1229,16 @@ When the model emits `ToolCall { name, arguments }`:
    types via the same `coerceFromJson` used to reconstruct inputs on resume.
    A parse/type failure is likewise recoverable — fed back as a tool
    message, not a run abort.
-3. The callee is run through `Hwfi.Runtime.Executor` as a **nested step**,
-   so its `step-start`/`step-end`, `llm-call`, and `file-io` events nest
-   under the agent step (§8.3.3.6) and its effects go through the sandboxed
-   `Workspace` (§7.1). The model never touches the filesystem directly.
+3. The callee is run as a **nested step** via `StepDriver`, so its
+   `step-start`/`step-end`, `llm-call`, and `file-io` events nest under the
+   agent step (§8.3.3.6) and its effects go through the sandboxed `Workspace`
+   (§7.1). The model never touches the filesystem directly.
 4. The result `RValue` is consumed in three ways:
-   - **Tool message to the model** — redacted JSON (§8.3.4), including on
-     resume when served from the intra-step cache (`toolModelJson`).
-   - **Intra-step tool cache** (`steps/*.json`) — actual non-redacted JSON
-     (`valueToJson`), so resume can reconstruct the typed value and re-apply
-     redaction for the model without re-running the callee (§8.2.1).
+   - **Tool message to the model** — redacted JSON (§8.3.4), via `toolModelJson`.
+   - **Agent state in `machine.json`** — `CurAgent` carries message history and
+     pending tool calls for resume (M6).
    - **Trace** (`agent-tool-result`, nested `step-end`) — redacted JSON as
-     persisted (§8.3.4). Scripted (non-agent) steps cache the actual `RValue`
-     at the step level instead (§8.1).
+     persisted (§8.3.4).
 
 #### 6.1.3 Terminating `submit` tool for typed output
 
@@ -2624,12 +2620,12 @@ call** and receives a response (including a provider error that still
 returned usage metadata).
 
 The following are **free** — they add `0` to the running total and emit
-**no** new `llm-call` event (consistent with §8.3.3.7):
+**no** new `llm-call` event when the transition is not re-run on resume
+(consistent with §8.3.3.7):
 
-- A cacheable step served from the step cache on resume.
-- An agent model round served from an intra-step model sub-cache (§8.2.1).
-- An agent tool call served from an intra-step tool sub-cache (§8.2.1).
-- Replaying a prior attempt's cached units during a resume re-walk.
+- A completed step whose LLM call already finished before pause/crash.
+- An agent round already recorded in `CurAgent` state when resume continues
+  mid-loop (M6).
 
 Summing `cost_usd` over all `llm-call` events in `trace.jsonl` must equal
 the final `run.json` total for the logical run. Nested agents (an outer
@@ -2899,9 +2895,8 @@ A32. A `while` whose predicate workflow contains `builtin/llm-agent` replays the
 A33. `${carry}` in `predicate_args`/`body_args` is rejected at `hwfi check`
     when it would be in scope for iteration 0 (§4.3.4).
 A27. A live `builtin/llm-generate` call increments `run.json` `usage.cost_usd`
-    and `ctx.run.usage.cost_usd`; a cache hit on resume does not.
-A28. An agent model round served from intra-step cache on resume emits no
-    new `llm-call` and does not increment the running total.
+    and `ctx.run.usage.cost_usd`; a completed step not re-run on resume does not.
+A28. *(removed M6)* — v2 resume uses `machine.json`; no intra-step cache.
 A29. With `project.json` `budget.max_cost_usd` set, a provider call that
     would exceed the ceiling aborts before the request is sent.
 A34. `builtin/eval-workflow` with ill-typed `source` returns

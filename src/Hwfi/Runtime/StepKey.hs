@@ -1,5 +1,6 @@
--- | Step-key hashing (spec §8.1): the content address under which a cacheable
--- step's result is persisted so it can be skipped on resume.
+-- | Step-key hashing (spec §8.1): static classification and trace metadata.
+-- The v2 runtime does not persist step results under these keys; resume uses
+-- @machine.json@ (see @docs/execution-model.md@).
 --
 -- @
 -- step-key = hash( qname, step-id, resolved-args, ctx-projection, callee-fingerprint )

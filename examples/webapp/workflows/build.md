@@ -40,9 +40,8 @@ An LLM-driven builder (spec §6.1): the app is authored **at runtime** from the
 user's `spec` input — nothing is copied. `builtin/llm-agent` advertises the
 read/write/edit/exec builtins and lets the model create `index.html` from
 nothing, then self-check it with an allowlisted command, editing until it passes.
-The agent step is a non-cacheable black box (spec §8.1), but every model round and
-tool call is content-addressed, so a resumed run replays the model's prior choices
-and file writes without re-running them (spec §8.2.1).
+The agent step is a non-cacheable black box (spec §8.1). Resume continues from
+`CurAgent` state in `machine.json` (spec §8).
 
 ```step
 result <- builtin/llm-agent(

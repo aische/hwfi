@@ -90,15 +90,14 @@ sh -n /tmp/coding-ws/broken.sh && echo "syntax OK"
 The model drives the loop: it runs `sh -n broken.sh`, sees the error, reads and
 edits the file, and re-runs until the check exits 0.
 
-## Resume behaviour (durable workspace, spec §8.2)
+## Resume behaviour (durable workspace, spec §8)
 
-Mutation and `exec` steps are cacheable. If a run is interrupted and resumed:
+If a run is interrupted and resumed:
 
 ```bash
 cabal run hwfi -- resume /tmp/coding-ws <run-id>
 ```
 
-a completed edit is **not** re-applied and a completed command is **not** re-run
-— their results are served from the cache. Inside the agent loop the same holds
-per tool call (spec §8.2.1): a resumed loop replays the model's prior choices and
-tool results without re-running the mutations or commands.
+completed transitions are reflected in `machine.json` — edits and commands are
+not re-applied if the snapshot shows they already finished. Inside the agent
+loop, resume continues from `CurAgent` state (not a step cache).

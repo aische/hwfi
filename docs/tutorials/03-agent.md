@@ -118,5 +118,5 @@ agent loop. See [`examples/summarise/README.md`](../../examples/summarise/README
 
 ## Next
 
-- [Tutorial 4: Show and resume](04-show-resume.md) — traces, resume, cache clear
+- [Tutorial 4: Show and resume](04-show-resume.md) — traces, snapshot resume
 - [tool-use.md](../tool-use.md) — design rationale for agent tool loops

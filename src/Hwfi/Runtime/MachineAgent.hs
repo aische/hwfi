@@ -85,8 +85,7 @@ import Hwfi.SkillCatalog
   )
 import Hwfi.Type (Type (..))
 import Hwfi.TypedProject
-  ( Fingerprint (..),
-    ResolvedSignature (..),
+  ( ResolvedSignature (..),
     TypedDecl (..),
     TypedProject (..),
     lookupTyped,
@@ -328,7 +327,7 @@ runAdvertised env machine ag tr tc tool _agentSpec' =
       void $
         emit
           (seTracer env)
-          (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) True Nothing)
+          (StepStart (atQName tool) sid (redactedJson (VRecord resolved)) False Nothing)
       dr <- dispatchTool env machine ag (atQName tool) sid resolved
       case dr of
         Left err
@@ -568,8 +567,7 @@ buildTool env = \case
         { atQName = q,
           atToolDef = advertisedToolDef q ins,
           atInputs = ins,
-          atOutputs = outs,
-          atFingerprint = maybe "" fpText (fingerprintOfQName (seProject env) q)
+          atOutputs = outs
         }
   _ -> Left (internalError "agent 'tools' element is not a ref value")
 
@@ -590,14 +588,6 @@ calleeOutputTypes env q
   | otherwise = case lookupTyped q (seProject env) of
       Just td -> Right (rsigOutputs (tdSignature td))
       Nothing -> Left (internalError ("advertised tool not found: " <> renderQName q))
-
-fingerprintOfQName :: TypedProject -> QName -> Maybe Fingerprint
-fingerprintOfQName tp q = case lookupTyped q tp of
-  Just td -> Just (tdFingerprint td)
-  Nothing -> Nothing
-
-fpText :: Fingerprint -> Text
-fpText (Fingerprint t) = t
 
 activeTools env pa =
   case (traverse (buildTool env) (paInitialTools pa), mapMaybe (buildToolFromId env) (paActiveToolIds pa)) of

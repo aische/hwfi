@@ -70,9 +70,8 @@ a fixed script — decides which of the project's own declarations to call:
 Only agent-eligible declarations may be advertised: a candidate tool's inputs
 must not contain `Secret<_>`, `ToolRef`/`WorkflowRef`, or `Bytes`, and it must
 not (transitively) reach `builtin/introspect` (spec §6.1.1, §6.1.5). The agent
-step itself is a non-cacheable black box (§8.1), but each model round and tool
-call inside it is content-addressed, so a resumed run replays the model's prior
-choices and tool results without re-paying the LLM (§8.2.1).
+step itself is a non-cacheable black box (§8.1). Resume continues from
+`CurAgent` state in `machine.json` (§8).
 
 ```bash
 # Free-text agent (choose the entrypoint with --entry):
@@ -141,7 +140,7 @@ On success the workflow prints its output record as JSON
 digest.md                 # the rendered research digest
 audit/introspection.json  # builtin/introspect dump
 audit/trace.txt           # ctx.trace snapshot
-.hwfi/runs/<run-id>/       # run.json, steps/, trace.jsonl
+.hwfi/runs/<run-id>/       # run.json, machine.json, trace.jsonl
 ```
 
 ## Inspecting a run

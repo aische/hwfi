@@ -77,7 +77,8 @@ machine.
 ## Running it
 
 Use a **clean** scratch workspace — leftover files from a prior run can confuse
-agents, and step cache keys do not include workspace file contents (spec §8).
+agents, and step-keys (static classification) do not include workspace file
+contents (spec §8).
 
 ```bash
 rm -rf /tmp/ship-ws && mkdir -p /tmp/ship-ws
@@ -118,10 +119,10 @@ cabal run hwfi -- show /tmp/ship-ws <run-id>
 cabal run hwfi -- resume /tmp/ship-ws <run-id>
 ```
 
-Agent steps are non-cacheable black boxes, but inner tool calls replay from cache
-(§8.2.1). Audit and `builtin/log` steps re-execute on resume (§8.1). Re-running
-on a workspace that already has generated files may behave unexpectedly because
-cache keys ignore file contents.
+Agent steps are non-cacheable black boxes. Resume continues from `CurAgent`
+state in `machine.json`. Audit and `builtin/log` steps may re-execute on
+resume (§8.1). Re-running on a workspace that already has generated files may
+behave unexpectedly — reads see live disk.
 
 ## Distill a skill (optional, advanced)
 

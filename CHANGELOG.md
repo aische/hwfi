@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- v2 resume cleanup: removed stale step-cache docs/comments; runtime emits
+  static `cacheable` flags from checker classification; dropped unused
+  `aeStepKey` / `atFingerprint` agent fields.
+
 ## [0.1.0.0] - 2026-07-10
 
 First release of **hwfi**: a markdown-defined, type-checked workflow engine with

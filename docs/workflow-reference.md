@@ -9,7 +9,7 @@ see [spec.md](spec.md).
 **Related guides**
 
 - [tutorials/README.md](tutorials/README.md) — hands-on learning path
-- [caching-and-resume.md](caching-and-resume.md) — step cache, resume, agent replay
+- [caching-and-resume.md](caching-and-resume.md) — snapshot resume, agent state, while pinning
 - [tool-use.md](tool-use.md) — design rationale for agent tool loops
 - Example projects under `examples/` — runnable patterns from minimal to full
 
@@ -49,7 +49,7 @@ Set `DEEPSEEK_API_KEY` (or the key for your catalog provider) via
 [Provider keys](#provider-keys-and-env).
 
 On success, the workspace contains `summary.txt` and
-`.hwfi/runs/<run-id>/` with trace and cache.
+`.hwfi/runs/<run-id>/` with trace and machine snapshot.
 
 ---
 
@@ -195,7 +195,7 @@ Inside a ` ```step ` fenced block, **one statement per line** (comments with
   `@step-id` is required).
 - `<qname>` — tool, workflow, builtin, or a `ToolRef`/`WorkflowRef` in scope.
 - `<args>` — `key = expr` pairs, comma-separated; newlines allowed inside `(...)`.
-- `@<step-id>` — optional but recommended; used in traces and cache keys.
+- `@<step-id>` — optional but recommended; used in traces and static step-key classification.
   Defaults to the bind name when omitted.
 
 ### Return
@@ -348,8 +348,8 @@ Engine-provided callees at `builtin/<name>`. Import them in `imports:`.
   `expect` is the asserted occurrence count; a mismatch fails the step (no
   silent partial edit). Returns how many replacements were made.
 
-All mutation builtins are cacheable; on resume a cache hit means the effect
-is already in the workspace.
+On resume, completed mutation steps are not re-applied — effects remain on the
+workspace; progress is tracked in `machine.json`.
 
 ### Command execution
 
@@ -454,9 +454,9 @@ includes nested sub-workflow and agent-tool events.
 
 `builtin/llm-agent` and `builtin/llm-agent-object` hand the model a list of
 **project tools and workflows**. The model chooses calls in a loop until it
-terminates or hits `max_rounds`. Each model-chosen call runs through the normal
-executor as a **nested step** (nested trace, sandboxed workspace, content-addressed
-cache). The model never touches the filesystem directly.
+terminates or hits `max_rounds`. Each model-chosen call runs as a nested step
+(nested trace, sandboxed workspace). Agent state for resume lives in
+`machine.json` (`CurAgent`). The model never touches the filesystem directly.
 
 ### Free-text agent (`llm-agent`)
 
@@ -548,7 +548,7 @@ Use bare qnames where a `ToolRef` is expected:
 tools = [ builtin/read-file, tools/search, workflows/extract ]
 ```
 
-Sub-workflows run like tools: nested executor step, nested trace, result fed
+Sub-workflows run like tools: nested step, nested trace, result fed
 back to the model as JSON. Same eligibility rules apply.
 
 **Limitation:** Step call targets are qnames (or a bare bind name holding a
@@ -576,16 +576,15 @@ Non-zero `exec` exit codes are **values**, not agent-loop errors — branch on
 | **Scripted steps** | Fixed pipeline (read → LLM → write) |
 | **`llm-agent`** | Model picks tools; free-text answer |
 | **`llm-agent-object`** | Model picks tools; **typed JSON** via `submit` |
-| **`while`** | Discrete cacheable rounds (check → fix → check) |
+| **`while`** | Discrete rounds (check → fix → check); predicate pinning on resume |
 | **`llm-gen-object`** | Structured output, **no tools** (zero-tool degenerate case) |
 
 ### Resume inside agents
 
 Both `llm-agent` and `llm-agent-object` steps are **non-cacheable** at the
-workflow level, but each internal model round and tool call is
-content-addressed. Resume replays prior choices without re-calling the provider
-or re-running tool side effects. Tool results are cached as actual values;
-traces redact secrets. See [caching-and-resume.md](caching-and-resume.md).
+workflow level (static classification). Resume continues from `CurAgent` state
+in `machine.json` — prior rounds and tool calls are not replayed from a step
+cache. See [caching-and-resume.md](caching-and-resume.md).
 
 ---
 
@@ -606,7 +605,7 @@ summary <- if ${inputs.strict} {
 - Condition must be `Bool`.
 - `else` is **required** when the result is bound.
 - Both arms must yield the same result type.
-- Step `@id`s may repeat across arms; the executor scopes them in cache keys.
+- Step `@id`s may repeat across arms; the runtime disambiguates them via scope.
 
 ### `foreach`
 
@@ -656,8 +655,8 @@ out <- try {
 ```
 
 - Both arms must yield the same result type.
-- Failed try-arm steps are not cached; resume re-runs the try arm unless the
-  catch arm already completed (see [caching-and-resume.md](caching-and-resume.md)).
+- Failed try-arm steps may be re-run on resume depending on snapshot progress
+  (see [caching-and-resume.md](caching-and-resume.md)).
 - Trace emits `try-branch` for the taken arm.
 
 ### `while`
@@ -697,7 +696,7 @@ Reaching `max_iterations` without `continue = false` aborts the run with a
 `user` error.
 
 **Resume** — predicate `continue` decisions are pinned per iteration (`while-pred`
-events). On resume, a cached decision skips re-running the predicate workflow for
+events). On resume, a pinned decision skips re-running the predicate workflow for
 that iteration. See [caching-and-resume.md](caching-and-resume.md).
 
 ### Scoping in blocks
@@ -873,7 +872,9 @@ hwfi run <project-dir> --workspace <dir> \
 hwfi resume <workspace-dir> <run-id>
 ```
 
-Re-executes from the last incomplete point, reusing cached step results.
+Continues from the `machine.json` snapshot. Completed transitions are not
+re-run; mid-flight work resumes from the saved cursor and frames. See
+[caching-and-resume.md](caching-and-resume.md).
 
 ### Show trace
 
@@ -882,27 +883,6 @@ hwfi show <workspace-dir> <run-id>
 ```
 
 Pretty-prints the trace and usage summary. Secrets are redacted.
-
-### Clear cache
-
-```bash
-hwfi cache clear <workspace-dir> <run-id>
-```
-
-Deletes all cached step results so the next resume recomputes every cacheable
-step.
-
-### Invalidate from step
-
-```bash
-hwfi cache invalidate <workspace-dir> <run-id> --from-step workflows/main#read
-hwfi cache invalidate <workspace-dir> <run-id> --step-key <hex-prefix>
-```
-
-Drops cached results from the chosen step **onward in trace order**, leaving
-upstream cache intact. Use when a workspace file changed but workflow code did
-not, or when you want to re-run a suffix without a full wipe. `hwfi show`
-displays a truncated `key=` suffix; the full `step_key` is in `trace.jsonl`.
 
 ---
 
@@ -915,8 +895,8 @@ displays a truncated `key=` suffix; the full `step_key` is in `trace.jsonl`.
     runs/
       <run-id>/
         run.json          # inputs, usage, metadata
+        machine.json      # v2 machine snapshot for resume
         trace.jsonl       # append-only event log
-        steps/            # content-addressed step results
 ```
 
 - All file builtins resolve paths **inside** the workspace (no traversal).
@@ -949,7 +929,8 @@ Every project needs `model-catalog.json` at the root:
 Use `model = "default"` (or any `modelConfigName`) in LLM builtins. Unknown
 names fail at runtime with a list of available entries.
 
-Editing catalog fields (except `pricing`) invalidates cached LLM step keys.
+Editing catalog fields (except `pricing`) changes the model-catalog fingerprint
+used in static step-key classification (§8.1).
 
 ---
 
@@ -972,21 +953,21 @@ in v1.
 
 ---
 
-## Caching (essentials)
+## Resume (essentials)
 
-- Cacheable steps skip re-execution on resume when inputs, code fingerprint,
-  and relevant `ctx` fields match.
-- **Non-cacheable:** `llm-agent`, `llm-agent-object`, `introspect`, `log`,
-  `eval-workflow`, `load-skill`, trace builtins (`list-runs`,
+- Resume loads `machine.json` and continues via `stepMachine`.
+- Completed transitions are reflected in the snapshot; mid-flight work is
+  re-run from the saved cursor and frames.
+- **Non-cacheable (static):** `llm-agent`, `llm-agent-object`, `introspect`,
+  `log`, `eval-workflow`, `load-skill`, trace builtins (`list-runs`,
   `read-run-trace`, `trace-slice`), steps referencing `ctx.trace` or
   `ctx.run.started_at`.
-- **Workspace vs cache:** cache stores step *outputs*, not a snapshot of all
-  files. A cached `read-file` does not re-read disk.
-- **Code edits** invalidate via Merkle fingerprints — no manual busting needed
-  for declaration changes.
-- **Agent replay** — agent steps re-walk the loop on resume; cached model rounds
-  and tool calls replay without provider calls or side effects.
-- **`while` pinning** — predicate `continue` decisions are cached per iteration.
+- **Workspace durability:** file mutations from completed steps remain on disk.
+- **Project staleness:** resume refuses when `project_hash` in `run.json` no
+  longer matches the current project — start a new run id.
+- **Agent resume** — `CurAgent` state in `machine.json` continues the loop.
+- **`while` pinning** — predicate `continue` decisions are recorded in the trace
+  and replayed on resume (§4.3.5).
 - Full detail: [caching-and-resume.md](caching-and-resume.md).
 
 ---
@@ -1085,11 +1066,11 @@ See spec §13 and [TASKS.md](TASKS.md) for the open v1.1 backlog:
 - `Bytes`-typed file I/O; `trace.jsonl` rotation
 - `builtin/extract-skill` Mode B stub writer (A40)
 - OS-level `exec` isolation beyond allowlist + empty env
-- Step cache does not include workspace file contents
+- Step-keys (static classification) do not include workspace file contents
 - No arbitrary HTTP builtin (only LLM provider calls + allowlisted `exec`)
 
 **Shipped in v1.1:** `try`/`catch`, `par(on_error = "collect")`, record
-merge/filter/map, `range(n)`, inline `while` bodies, cache invalidation UX,
+merge/filter/map, `range(n)`, inline `while` bodies,
 `WorkflowRef`/`ToolRef` patterns — see [workflow-refs.md](workflow-refs.md).
 
 ---
