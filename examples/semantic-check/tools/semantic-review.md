@@ -47,7 +47,7 @@ entry_pack <- tools/entry-finding(
   catalog = ${catalog_pack.catalog}
 ) @entry
 
-prose_pack <- tools/prose-hints() @prose
+prose_pack <- tools/prose-hints(catalog = ${catalog_pack.catalog}) @prose
 
 ref_pack <- tools/referential-scan(
   declarations = ${inputs.project.declarations},

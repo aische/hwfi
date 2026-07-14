@@ -4,8 +4,8 @@ Last updated: 2026-07-14
 
 ## Current focus
 
-**Semantic review example** — `examples/semantic-check` workflow (layers 0–1)
-ships. Next: Tier 3 graph/reference builtins (`resolve-qnames-in-text` first).
+**Semantic review example** — `examples/semantic-check` layers 0–1 complete with
+`resolve-qnames-in-text` prose pass (no grep noise). Next Tier 3 graph builtins.
 
 **v2 runtime (cursor + frames)** — M6 done. Design:
 [execution-model.md](execution-model.md).
@@ -15,19 +15,14 @@ local filesystem mode.
 
 ## Done recently
 
-- **Eval errors in `try`/`catch`** — catchable eval failures (including sub-tool
-  `return` expressions) route through `handleStepError`; stack scan skips
-  `FrSeq`/loop frames to find enclosing `try` (§4.4.3).
-- **`return` in control-flow blocks** — checker allows nested `return { … }` as
-  iteration/branch tail (runtime already supported). Tests in ControlFlowSpec;
-  semantic-check example simplified (removed spread/error/warning helper tools).
-- **Semantic review example** — `examples/semantic-check`: layer 0
-  (`check-project`, entrypoint coverage) + layer 1 (nested `foreach` step-metadata
-  scan + grep prose hints). Nested-loop docs/tests in workflow-reference /
-  ControlFlowSpec.
-- **Semantic review Tier 2** — entropy/compression metrics, Jaccard/LCS
-  similarity, corpus overlap clustering.
-- **Semantic review Tier 1** — `check-project`, `parse-markdown`.
+- **`resolve-qnames-in-text` + prose layer rewrite** — engine builtin classifies
+  qname mentions in markdown prose; `examples/semantic-check` scans `**/*.md`
+  via `parse-markdown` + section scan; `list-concat` flattens nested findings.
+  Ship report: `prose_hints` 142 → 2 (real README dead refs only).
+- **Eval errors in `try`/`catch`** — catchable eval failures route through
+  `handleStepError`; stack scan skips `FrSeq`/loop frames (§4.4.3).
+- **`return` in control-flow blocks** — checker allows nested `return { … }`.
+- **Semantic review Tier 2** — text metrics, similarity, corpus clustering.
 
 ## Blockers
 
@@ -35,4 +30,4 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) — Tier 3 builtins, layer 2+ review passes, or v1.1 backlog.
+[TASKS.md](TASKS.md) — remaining Tier 3 graph builtins, layer 2+ review passes.

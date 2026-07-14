@@ -1,32 +1,41 @@
 ---
 name: tools/prose-hints
-inputs: {}
+inputs:
+  catalog: List<types/catalog-entry>
 outputs:
   findings: List<types/finding>
 imports:
-  - builtin/grep
+  - builtin/find-files
+  - builtin/list-concat
+  - builtin/record-map
+  - tools/empty-findings
+  - tools/prose-file-scan
 ---
 
 ## flow
 
-Layer 1 (interim): flag lines that contain qname-like text for manual review.
+Layer 1: flag unresolved qname mentions in project markdown prose.
 
 ```step
-hits <- builtin/grep(
-  pattern = "(workflows|tools|skills|types|builtin)/[a-zA-Z0-9._-]+",
-  path = "."
-) @grep
+paths <- builtin/find-files(path = ".", glob = "**/*.md") @paths
 
-findings <- foreach hit in ${hits.matches} {
-  return {
-    severity = "info",
-    category = "dead_reference",
-    location = { file = ${hit.file}, section = "" },
-    claim = "Prose or step block mentions a qname-like token",
-    evidence = ${hit.text},
-    suggestion = "Confirm the mention resolves; replace grep hints with resolve-qnames-in-text when available"
-  }
-} @rows
+qnames <- builtin/record-map(items = ${inputs.catalog}, field = "qname") @qmap
 
-return { findings = ${findings} }
+file_rows <- foreach path in ${paths.paths} {
+  result <- try {
+    pack <- tools/prose-file-scan(
+      file = ${path},
+      catalog = ${qnames.values}
+    ) @file
+    return { findings = ${pack.findings} }
+  } catch {
+    empty <- tools/empty-findings() @skip
+    return { findings = ${empty.findings} }
+  } @scan
+} @files
+
+layers <- builtin/record-map(items = ${file_rows}, field = "findings") @pick
+flat <- builtin/list-concat(lists = ${layers.values}) @flat
+
+return { findings = ${flat.items} }
 ```

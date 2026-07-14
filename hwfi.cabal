@@ -80,6 +80,7 @@ library
         Hwfi.Runtime.MachinePath
         Hwfi.Runtime.MachineSnapshot
         Hwfi.Runtime.ParseMarkdown
+        Hwfi.Runtime.ResolveQnames
         Hwfi.Runtime.TextCorpus
         Hwfi.Runtime.StepDriver
         Hwfi.Runtime.StepEnv
@@ -100,6 +101,7 @@ library
         Hwfi.Runtime.Workspace
         Hwfi.Source
         Hwfi.Text.Corpus
+        Hwfi.Text.QnameResolve
         Hwfi.Type
         Hwfi.Ast.Tool
         Hwfi.TypedProject
@@ -172,8 +174,10 @@ test-suite hwfi-test
         Hwfi.Runtime.DataPlumbingSpec
         Hwfi.Runtime.CheckProjectSpec
         Hwfi.Runtime.ParseMarkdownSpec
+        Hwfi.Runtime.ResolveQnamesSpec
         Hwfi.Runtime.TextCorpusSpec
         Hwfi.Text.CorpusSpec
+        Hwfi.Text.QnameResolveSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec

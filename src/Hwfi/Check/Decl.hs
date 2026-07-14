@@ -28,7 +28,7 @@ import Hwfi.Ast.Project (Declaration (..))
 import Hwfi.Ast.Step
 import Hwfi.Ast.Tool (Tool (..))
 import Hwfi.Ast.Workflow (Section, Workflow (..))
-import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, isRecordPlumbingBuiltin, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, recordFilterQName, recordMapQName, recordMergeQName, traceSliceQName)
+import Hwfi.Check.Builtins (Callee (..), discoverSkillsQName, evalWorkflowQName, introspectQName, isAgentBuiltin, isRecordPlumbingBuiltin, listConcatQName, listRunsQName, llmAgentObjectQName, loadSkillQName, logQName, readRunTraceQName, recordFilterQName, recordMapQName, recordMergeQName, traceSliceQName)
 import Hwfi.Check.Error (CheckWarning (..), TypeError, TypeErrorKind (..), checkWarning, typeError)
 import Hwfi.Check.Expr (Env (..), checkExpr, checkExprWithCarry, inferExpr)
 import Hwfi.Check.RefHints (bareCallTargetHints, refArgWarnings, toolsListElemHint)
@@ -681,6 +681,7 @@ checkRecordPlumbingCall env path pos target args =
     q | q == recordMergeQName -> checkRecordMerge env path pos args
     q | q == recordFilterQName -> checkRecordFilter env path pos args
     q | q == recordMapQName -> checkRecordMap env path pos args
+    q | q == listConcatQName -> checkListConcat env path pos args
     _ -> ([], [], Nothing)
 
 checkRecordMerge :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
@@ -810,6 +811,33 @@ checkRecordMap env path pos args =
               (spanStart (argSpan a))
               TypeMismatch
               ("record-map 'items' must be List<Record>, got " <> renderType other)
+          ]
+
+checkListConcat :: Env -> FilePath -> Pos -> [Arg] -> ([TypeError], [CheckWarning], Maybe Type)
+checkListConcat env path pos args =
+  (missingExtra <> valueErrs, [], resultTy)
+  where
+    expected = ["lists"]
+    (missingExtra, argMap) = plumbingArgErrors path pos args expected
+    listsArg = Map.lookup "lists" argMap
+    valueErrs = maybe [] listsErrs listsArg
+    resultTy =
+      case listsArg of
+        Just listsA ->
+          case inferExpr env (spanStart (argSpan listsA)) (argValue listsA) of
+            Right (TyList (TyList inner)) -> Just (TyRecord [("items", TyList inner)])
+            _ -> Just (TyRecord [("items", TyList TyJson)])
+        Nothing -> Nothing
+    listsErrs a =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left errs -> errs
+        Right (TyList (TyList _)) -> []
+        Right other ->
+          [ typeError
+              path
+              (spanStart (argSpan a))
+              TypeMismatch
+              ("list-concat 'lists' must be List<List<_>>, got " <> renderType other)
           ]
 
 plumbingArgErrors :: FilePath -> Pos -> [Arg] -> [Ident] -> ([TypeError], Map Ident Arg)

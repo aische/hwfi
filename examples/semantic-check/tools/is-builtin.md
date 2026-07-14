@@ -53,7 +53,9 @@ rows <- foreach name in [
   "builtin/parse-markdown",
   "builtin/text-metrics",
   "builtin/text-similarity",
-  "builtin/text-search-corpus"
+  "builtin/text-search-corpus",
+  "builtin/resolve-qnames-in-text",
+  "builtin/list-concat"
 ] {
   row <- tools/catalog-row(qname = ${name}) @row
 } @builtins

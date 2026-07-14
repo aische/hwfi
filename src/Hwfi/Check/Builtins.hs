@@ -32,6 +32,8 @@ module Hwfi.Check.Builtins
     textMetricsQName,
     textSimilarityQName,
     textSearchCorpusQName,
+    resolveQnamesInTextQName,
+    listConcatQName,
     isAgentBuiltin,
     isRecordPlumbingBuiltin,
     isOneShotLlmBuiltin,
@@ -121,7 +123,7 @@ recordMapQName = qnameFromText "builtin/record-map"
 -- | Whether @q@ is a record-plumbing builtin needing bespoke type checking.
 isRecordPlumbingBuiltin :: QName -> Bool
 isRecordPlumbingBuiltin q =
-  q == recordMergeQName || q == recordFilterQName || q == recordMapQName
+  q == recordMergeQName || q == recordFilterQName || q == recordMapQName || q == listConcatQName
 
 -- | Skill catalog discovery (§6.7.1).
 discoverSkillsQName :: QName
@@ -150,6 +152,12 @@ textSimilarityQName = qnameFromText "builtin/text-similarity"
 -- | Corpus overlap clustering for semantic review (§13.1.8).
 textSearchCorpusQName :: QName
 textSearchCorpusQName = qnameFromText "builtin/text-search-corpus"
+
+resolveQnamesInTextQName :: QName
+resolveQnamesInTextQName = qnameFromText "builtin/resolve-qnames-in-text"
+
+listConcatQName :: QName
+listConcatQName = qnameFromText "builtin/list-concat"
 
 stepSummaryTy :: Type
 stepSummaryTy =
@@ -203,6 +211,14 @@ corpusClusterTy =
     [ ("members", TyList TyString),
       ("score", TyDouble),
       ("span", TyString)
+    ]
+
+qnameMentionTy :: Type
+qnameMentionTy =
+  TyRecord
+    [ ("text", TyString),
+      ("kind", TyString),
+      ("qname", TyString)
     ]
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
@@ -445,7 +461,20 @@ builtinCallees =
           ("threshold", TyDouble),
           ("ngram", TyInt)
         ]
-        [("clusters", TyList corpusClusterTy)]
+        [("clusters", TyList corpusClusterTy)],
+      builtin
+        "builtin/resolve-qnames-in-text"
+        [ ("text", TyString),
+          ("catalog", TyList TyString),
+          ("include_builtins", TyBool),
+          ("unresolved_only", TyBool),
+          ("exclude_step_fences", TyBool)
+        ]
+        [("mentions", TyList qnameMentionTy)],
+      builtin
+        "builtin/list-concat"
+        [("lists", TyList (TyList TyJson))]
+        [("items", TyList TyJson)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

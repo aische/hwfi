@@ -12,8 +12,8 @@ Given a target project root in the workspace:
    warnings; entrypoint coverage check against declared qnames.
 2. **Layer 1 — Referential:** nested `foreach` over declaration step metadata
    (`bare_qnames`, static `agent_tools`) resolved against the project catalog
-   plus shipped builtins; interim `grep` prose hints until
-   `resolve-qnames-in-text` ships.
+   plus shipped builtins; prose scan via `resolve-qnames-in-text` on markdown
+   sections (skips ` ```step ` fences and shipped builtins).
 
 Writes `semantic-report.json` into the workspace.
 
@@ -56,7 +56,7 @@ and the workspace contains `semantic-report.json`.
 | `structural_errors` | Type/parse failures (layer 0) |
 | `structural_warnings` | Checker warnings |
 | `entry_findings` | Entrypoint not in declarations |
-| `prose_hints` | Grep hits for qname-like lines (interim) |
+| `prose_hints` | Unresolved qname mentions in markdown prose (layer 1) |
 | `step_referential` | Nested per-decl/per-step referential scan (`bare` / `agent` matrices) |
 
 Each finding uses `types/finding`: severity, category, location, claim,
@@ -71,8 +71,6 @@ their result (`inner <- foreach …`), not appear as bare statements — see
 
 ## Limitations (v0)
 
-- Prose qname resolution still uses `grep` hints; `resolve-qnames-in-text` will
-  replace the interim pass.
 - Corpus quality (layer 2) and LLM pragmatics (layer 3) are not wired here.
 
 ## Related

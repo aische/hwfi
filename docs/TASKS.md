@@ -30,7 +30,8 @@ a **workflow**, not engine logic. Builtins are general-purpose primitives.
 - [ ] `builtin/graph-reachability`
 - [ ] `builtin/graph-cycles`
 - [ ] `builtin/graph-topo-sort`
-- [ ] `builtin/resolve-qnames-in-text` — resolved / unresolved / ambiguous mentions
+- [x] `builtin/resolve-qnames-in-text` — resolved / unresolved / builtin mentions
+- [x] `builtin/list-concat` — flatten `List<List<T>>` (typed plumbing for workflows)
 
 ### Tier 4 — convenience
 
@@ -56,6 +57,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **`resolve-qnames-in-text` (2026-07-14):** Pure resolver + runtime builtin;
+  semantic-check prose layer uses `find-files` + `parse-markdown` + section scan;
+  ship `prose_hints` noise eliminated (142 grep hits → 2 real dead refs).
 - **Eval errors in `try`/`catch` (2026-07-14):** `routeStepOutcome` +
   `breakCatchableTry` in StepDriver; T8/T9 tests; semantic-check runs on ship.
 - **`return` in control-flow blocks (2026-07-14):** Nested loop/branch bodies
