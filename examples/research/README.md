@@ -158,7 +158,7 @@ grep -c "does-not-matter-for-ollama" /tmp/research-ws/.hwfi/runs/*/trace.jsonl  
 If a run is interrupted, resume it:
 
 ```bash
-cabal run hwfi -- resume /tmp/research-ws <run-id>
+cabal run hwfi -- continue /tmp/research-ws <run-id>
 ```
 
 Cacheable steps with a persisted result are skipped and emit no new trace

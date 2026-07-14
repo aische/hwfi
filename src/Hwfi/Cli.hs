@@ -7,19 +7,17 @@
 -- hwfi run      \<project-dir> --workspace \<dir> ...
 -- hwfi continue \<workspace-dir> \<run-id> [--approve]
 -- hwfi step     \<workspace-dir> \<run-id> [--approve]
--- hwfi resume   \<workspace-dir> \<run-id>   (alias for continue)
 -- hwfi show    \<workspace-dir> \<run-id>
 -- @
 --
 -- @hwfi check@ parses and type-checks the project (spec §9, §7.3, A1/A2).
--- @run@, @continue@, @step@, @resume@ (alias), and @show@ are fully implemented.
+-- @run@, @continue@, @step@, and @show@ are fully implemented.
 module Hwfi.Cli
   ( Command (..),
     CheckOpts (..),
     RunOpts (..),
     ContinueOpts (..),
     StepOpts (..),
-    ResumeOpts (..),
     ShowOpts (..),
     InputArg (..),
     commandParserInfo,
@@ -95,7 +93,6 @@ data Command
   | Run RunOpts
   | Continue ContinueOpts
   | Step StepOpts
-  | Resume ResumeOpts
   | Show ShowOpts
   deriving stock (Eq, Show)
 
@@ -127,13 +124,6 @@ data ContinueOpts = ContinueOpts
 -- | @hwfi step \<workspace-dir> \<run-id>@ — one step-batch (v2 runtime).
 newtype StepOpts = StepOpts
   { stepContinue :: ContinueOpts
-  }
-  deriving stock (Eq, Show)
-
--- | @hwfi resume \<workspace-dir> \<run-id>@ (alias for @continue@).
-data ResumeOpts = ResumeOpts
-  { workspaceDir :: FilePath,
-    runId :: Text
   }
   deriving stock (Eq, Show)
 
@@ -182,7 +172,6 @@ commandParser =
         <> command "run" (info (Run <$> runOpts) (progDesc "Run a workflow project"))
         <> command "continue" (info (Continue <$> continueOpts) (progDesc "Continue a v2 run from its machine snapshot"))
         <> command "step" (info (Step <$> stepOpts) (progDesc "Advance a v2 run until the next halt point"))
-        <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume an interrupted run (alias for continue)"))
         <> command "show" (info (Show <$> showOpts) (progDesc "Pretty-print a run's trace"))
     )
 
@@ -205,12 +194,6 @@ runOpts =
     <*> optional (strOption (long "input-json" <> metavar "FILE" <> help "Supply the whole inputs record as JSON"))
     <*> optional (fmap T.pack (strOption (long "entry" <> metavar "QNAME" <> help "Override project.json entrypoint")))
 
-resumeOpts :: Parser ResumeOpts
-resumeOpts =
-  ResumeOpts
-    <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run")
-    <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to resume"))
-
 continueOpts :: Parser ContinueOpts
 continueOpts =
   ContinueOpts
@@ -229,7 +212,8 @@ showOpts =
 
 -- | Parse @argv@ and dispatch. Entry point for the executable.
 defaultMain :: IO ()
-defaultMain = execParser commandParserInfo >>= dispatch
+defaultMain =
+  customExecParser (prefs showHelpOnEmpty) commandParserInfo >>= dispatch
 
 -- | Dispatch a parsed 'Command'.
 dispatch :: Command -> IO ()
@@ -238,7 +222,6 @@ dispatch = \case
   Run opts -> runRun opts
   Continue opts -> runContinue opts
   Step opts -> runStep opts
-  Resume opts -> runResume opts
   Show opts -> runShow opts
 
 -- | Run @hwfi check@ (spec §9): parse the project, require a parseable
@@ -336,6 +319,7 @@ runChecked opts dir tp catalog = do
                   Right rootInputs -> do
                     workspace <- newWorkspace opts.workspace
                     runId <- genRunId
+                    TIO.hPutStrLn stderr ("run-id: " <> runId)
                     outcome <- performRun tp workspace models envVars dir runId entry rootInputs
                     finishRun outcome
 
@@ -381,17 +365,6 @@ runContinueMode opts stepBatch = do
       case eMeta of
         Left e -> failMsgs ["error: " <> e]
         Right meta -> continueChecked workspace meta opts.continueApprove stepBatch
-
--- | Run @hwfi resume@ (alias for @continue@, v2 runtime).
-runResume :: ResumeOpts -> IO ()
-runResume opts =
-  runContinueMode
-    ContinueOpts
-      { continueWorkspace = opts.workspaceDir,
-        continueRunId = opts.runId,
-        continueApprove = False
-      }
-    False
 
 continueChecked :: Workspace -> RunMeta -> Bool -> Bool -> IO ()
 continueChecked workspace meta approve stepBatch = do

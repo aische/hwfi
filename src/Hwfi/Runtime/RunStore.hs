@@ -118,7 +118,7 @@ isResumable = \case
 data RunMeta = RunMeta
   { rmRunId :: Text,
     rmEntrypoint :: Text,
-    -- | The project directory this run was launched from, so @hwfi resume@ can
+    -- | The project directory this run was launched from, so @hwfi continue@ can
     -- re-parse and re-check the project (staleness gate on continue) without
     -- the user re-supplying the path.
     rmProjectDir :: Text,

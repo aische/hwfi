@@ -2739,8 +2739,7 @@ hwfi run     <project-dir> --workspace <dir>
              [--input <k>=<v>]... [--input <k>=@<file.json>]...
              [--input-json <file.json>]
              [--entry <qname>]
-hwfi resume  <workspace-dir> <run-id>          # alias for continue
-hwfi continue <workspace-dir> <run-id>         # resume from machine.json
+hwfi continue  <workspace-dir> <run-id>         # resume from machine.json
 hwfi step    <workspace-dir> <run-id>          # one transition batch, then pause
 hwfi show    <workspace-dir> <run-id>          # pretty-print trace + usage
 ```

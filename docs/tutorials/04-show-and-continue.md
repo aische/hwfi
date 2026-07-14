@@ -1,6 +1,6 @@
-# Tutorial 4: Show and resume
+# Tutorial 4: Show and continue
 
-Inspect durable runs, understand machine snapshots, and resume without redoing
+Inspect durable runs, understand machine snapshots, and continue without redoing
 completed work.
 
 **Time:** ~15 minutes  
@@ -11,8 +11,8 @@ without an API key; agent `fix` optional)
 
 - Where run state lives in the workspace
 - Reading traces with `hwfi show`
-- Resume behaviour via `machine.json`
-- When to start a new run id instead of resuming
+- Continue behaviour via `machine.json`
+- When to start a new run id instead of continuing
 
 Normative detail: [caching-and-resume.md](../caching-and-resume.md).
 
@@ -21,20 +21,20 @@ Normative detail: [caching-and-resume.md](../caching-and-resume.md).
 Use a fresh scratch workspace:
 
 ```bash
-rm -rf /tmp/resume-ws
-cp -r examples/coding/sample-workspace /tmp/resume-ws
+rm -rf /tmp/continue-ws
+cp -r examples/coding/sample-workspace /tmp/continue-ws
 
 cabal run hwfi -- run examples/coding \
-  --workspace /tmp/resume-ws \
+  --workspace /tmp/continue-ws \
   --input name="Bob"
 ```
 
-The CLI prints result JSON. The run id is also the directory name under
-`.hwfi/runs/`:
+The CLI prints the run id on stderr (`run-id: …`) and result JSON on stdout.
+You can also read it from the directory name under `.hwfi/runs/`:
 
 ```bash
-ls /tmp/resume-ws/.hwfi/runs/
-export RUN_ID=$(ls /tmp/resume-ws/.hwfi/runs/ | head -1)
+ls /tmp/continue-ws/.hwfi/runs/
+export RUN_ID=$(ls /tmp/continue-ws/.hwfi/runs/ | head -1)
 echo $RUN_ID
 ```
 
@@ -43,7 +43,7 @@ Each run directory contains `run.json`, `machine.json`, and `trace.jsonl`.
 ## 2. Inspect the trace
 
 ```bash
-cabal run hwfi -- show /tmp/resume-ws $RUN_ID
+cabal run hwfi -- show /tmp/continue-ws $RUN_ID
 ```
 
 Look for:
@@ -58,16 +58,16 @@ Look for:
 The trace **redacts secrets**. Actual values used at runtime live in
 `run.json.inputs` and on the workspace filesystem.
 
-## 3. Resume an interrupted run
+## 3. Continue an interrupted run
 
-`hwfi resume` (alias for `hwfi continue`) only works when the run did **not**
-finish cleanly. Resumable statuses: `running` (process killed or crashed
+`hwfi continue` only works when the run did **not**
+finish cleanly. Continuable statuses: `running` (process killed or crashed
 mid-run), `aborted` (workflow error), `crashed`. A **`completed`** run returns
 an error — that is expected.
 
-### What resume does
+### What continue does
 
-Resume loads `machine.json` and continues via `stepMachine`. Completed
+`hwfi continue` loads `machine.json` and drives via `stepMachine`. Completed
 transitions are reflected in the snapshot; mid-flight work is re-run from the
 saved cursor and frames.
 
@@ -93,10 +93,10 @@ cabal run hwfi -- run examples/coding \
 # Ctrl+C once tool calls appear
 
 export RUN_ID=$(ls /tmp/coding-ws/.hwfi/runs/ | head -1)
-cabal run hwfi -- resume /tmp/coding-ws $RUN_ID
+cabal run hwfi -- continue /tmp/coding-ws $RUN_ID
 ```
 
-On resume, the agent continues from `CurAgent` state in `machine.json` — prior
+On continue, the agent picks up from `CurAgent` state in `machine.json` — prior
 rounds and tool calls are not replayed from a step cache.
 
 ### Inspect the snapshot
@@ -104,7 +104,7 @@ rounds and tool calls are not replayed from a step cache.
 After any run (completed or interrupted):
 
 ```bash
-ls /tmp/resume-ws/.hwfi/runs/$RUN_ID/
+ls /tmp/continue-ws/.hwfi/runs/$RUN_ID/
 # run.json  machine.json  trace.jsonl
 ```
 
@@ -113,7 +113,7 @@ for semantics.
 
 ## 4. Fresh retries during development
 
-Resume refuses to continue when the **project** changed since the run started
+`hwfi continue` refuses when the **project** changed since the run started
 (`project_hash` in `run.json` no longer matches). Edit workflow source and
 start a new run id.
 
@@ -126,18 +126,18 @@ For a clean slate without project edits, use a new workspace directory or a new
 
 | Situation | Behaviour |
 |-----------|-----------|
-| Completed `write-file` / `edit-file` | File on disk; write not re-applied on resume |
+| Completed `write-file` / `edit-file` | File on disk; write not re-applied on continue |
 | Completed `read-file` before pause | Snapshot holds progress; read not repeated if step finished |
 | You edit a file **outside** the workflow | Reads see live disk on the next `read-file` |
 
 **Rule:** treat the workspace as source of truth for mutations; treat
 `machine.json` as source of truth for orchestration progress.
 
-## 6. Try control-flow resume
+## 6. Try control-flow continue
 
 [`examples/control-flow`](../../examples/control-flow) exercises foreach/par/while
-resume. Interrupt a run or resume after a workflow error — a completed run is
-not resumable. See [`examples/control-flow/README.md`](../../examples/control-flow/README.md).
+continue. Interrupt a run or continue after a workflow error — a completed run is
+not continuable. See [`examples/control-flow/README.md`](../../examples/control-flow/README.md).
 
 ## 7. Done
 
@@ -146,7 +146,7 @@ You have walked through the core path:
 1. [Hello](01-hello.md) — file pipeline, no keys
 2. [Check](02-check.md) — static validation
 3. [Agent](03-agent.md) — tool loop with exec
-4. **Show and resume** — observability and durability
+4. **Show and continue** — observability and durability
 
 Continue with the [workflow author reference](../workflow-reference.md) or the
 advanced examples on the [tutorial hub](README.md).

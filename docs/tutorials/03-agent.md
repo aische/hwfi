@@ -96,7 +96,7 @@ sh -n /tmp/coding-ws/broken.sh && echo "syntax OK"
 The agent step is a **non-cacheable black box** at the workflow level, but each
 model round and tool call inside it has its own sub-key. See
 [caching-and-resume.md](../caching-and-resume.md) and
-[Tutorial 4](04-show-resume.md).
+[Tutorial 4](04-show-and-continue.md).
 
 ## 4. Read the agent workflow
 
@@ -118,5 +118,5 @@ agent loop. See [`examples/summarise/README.md`](../../examples/summarise/README
 
 ## Next
 
-- [Tutorial 4: Show and resume](04-show-resume.md) — traces, snapshot resume
+- [Tutorial 4: Show and continue](04-show-and-continue.md) — traces, snapshot continue
 - [tool-use.md](../tool-use.md) — design rationale for agent tool loops

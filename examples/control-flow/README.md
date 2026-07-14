@@ -84,7 +84,7 @@ Flip `strict` to `false` in the inputs to take the `else` branch, or point
 ## Resume
 
 ```bash
-cabal run hwfi -- resume /tmp/cf-ws <run-id>
+cabal run hwfi -- continue /tmp/cf-ws <run-id>
 ```
 
 The manifest still contains exactly three lines and no command is re-run —

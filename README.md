@@ -72,7 +72,7 @@ running).
 ```bash
 hwfi check <project-dir>
 hwfi run <project-dir> --workspace <dir> [--input K=V]... [--entry <qname>]
-hwfi resume <workspace-dir> <run-id>
+hwfi continue <workspace-dir> <run-id>
 hwfi show <workspace-dir> <run-id>
 ```
 

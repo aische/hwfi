@@ -116,7 +116,7 @@ cabal run hwfi -- show /tmp/ship-ws <run-id>
 ## Resume
 
 ```bash
-cabal run hwfi -- resume /tmp/ship-ws <run-id>
+cabal run hwfi -- continue /tmp/ship-ws <run-id>
 ```
 
 Agent steps are non-cacheable black boxes. Resume continues from `CurAgent`
