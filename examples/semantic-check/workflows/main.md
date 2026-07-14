@@ -26,7 +26,7 @@ step metadata with nested `foreach` and scans prose via
 slices, and emits corpus hints (entropy/compression outliers, redundancy).
 Layer 2b tags illocutionary force in prose and aligns agent steps to section
 directives. Layer 3 (`mode=exploratory`) runs gated `llm-gen-object` pragmatics
-on slices flagged by layers 2 / 2b.
+on high-signal slices (redundancy, divergence, coverage gaps, dead references).
 
 ## flow
 

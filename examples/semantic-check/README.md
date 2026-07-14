@@ -20,8 +20,9 @@ Given a target project root in the workspace:
 4. **Layer 2b — Speech acts:** `split-text` + `text-grep` tag illocutionary
    force per sentence; align `llm-agent` tool lists to agent-section directives;
    emit `speech_act_hints` (bare directives, coverage gaps, declarative role cues).
-5. **Layer 3 — Pragmatics (optional):** when `mode=exploratory`, union gate
-   signals from layers 2 / 2b → bounded `llm-gen-object` review per slice.
+5. **Layer 3 — Pragmatics (optional):** when `mode=exploratory`, high-signal gate
+   items (redundancy clusters, divergence pairs, coverage gaps, dead references)
+   → bounded `llm-gen-object` review with post-filtered felicity output.
 
 Writes `.hwfi/runs/<run-id>/semantic-report.json` in the workspace
 (`semantic-report/v1`). Each run keeps its own report alongside `trace.jsonl`.
@@ -93,7 +94,7 @@ stderr / `hwfi show`).
 | Field | Content |
 |-------|---------|
 | `mode` | `strict` or `exploratory` |
-| `review_gate` | Slice ids selected for layer 3 (exploratory only) |
+| `review_gate` | Slice ids selected for layer 3 (exploratory only; high-signal gates) |
 | `structural_errors` | Type/parse failures (layer 0) |
 | `structural_warnings` | Checker warnings |
 | `entry_findings` | Entrypoint not in declarations |

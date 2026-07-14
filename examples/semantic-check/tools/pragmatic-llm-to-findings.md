@@ -7,10 +7,8 @@ outputs:
   findings: List<types/finding>
 imports:
   - builtin/list-concat
-  - tools/pragmatic-clarity-finding
   - tools/pragmatic-contradiction-findings
   - tools/pragmatic-felicity-findings
-  - tools/pragmatic-force-finding
 ---
 
 ## flow
@@ -18,11 +16,6 @@ imports:
 Convert one `llm-gen-object` pragmatic review into `types/finding` rows.
 
 ```step
-force <- tools/pragmatic-force-finding(
-  value = ${inputs.value},
-  location = ${inputs.location}
-) @force
-
 felicity <- tools/pragmatic-felicity-findings(
   value = ${inputs.value},
   location = ${inputs.location}
@@ -33,16 +26,9 @@ contradiction <- tools/pragmatic-contradiction-findings(
   location = ${inputs.location}
 ) @contradiction
 
-clarity <- tools/pragmatic-clarity-finding(
-  value = ${inputs.value},
-  location = ${inputs.location}
-) @clarity
-
 merged <- builtin/list-concat(lists = [
-  ${force.findings},
   ${felicity.findings},
-  ${contradiction.findings},
-  ${clarity.findings}
+  ${contradiction.findings}
 ]) @merged
 
 return { findings = ${merged.items} }

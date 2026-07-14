@@ -31,7 +31,11 @@ rows <- foreach cand in ${inputs.candidates} {
         slice_id = ${inputs.slice.id},
         body = ${inputs.slice.body},
         gate_source = ${cand.gate_source},
-        trigger_claim = ${cand.trigger_claim}
+        review_task = ${cand.review_task},
+        peer_location = ${cand.peer_location},
+        peer_body = ${cand.peer_body},
+        context = ${cand.context},
+        priority = ${cand.priority}
       }]
     }
   } else {
@@ -58,7 +62,11 @@ pack <- try {
       slice_id = ${inputs.slice.id},
       body = "",
       gate_source = "",
-      trigger_claim = ""
+      review_task = "",
+      peer_location = { file = "", section = "" },
+      peer_body = "",
+      context = "",
+      priority = 0
     }
   }
 } @probe

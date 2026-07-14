@@ -47,6 +47,10 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **Layer 3 gate noise mitigation (2026-07-15):** high-signal review gates
+  (redundancy, divergence, coverage_gap, dead_reference); structured
+  `review-gate-item`; pragmatic prompt rewrite + felicity post-filter; removed
+  entropy-outlier gating.
 - **Semantic-check workflow perf (2026-07-15):** engine builtins (`list-unique-by`,
   extended `record-filter` / `text-grep`) plus workflow rewrite: merged review-gate
   rows, single-step `is-builtin`, record-filter replaces `strings-equal` loops.

@@ -98,7 +98,8 @@ mode_pack <- tools/mode-is-exploratory(mode = ${inputs.mode}) @mode
 
 layer3 <- if ${mode_pack.exploratory} {
   gate_pack <- tools/review-gate(
-    corpus_hints = ${hint_pack.findings},
+    clusters = ${cluster_pack.clusters},
+    prose_hints = ${prose_pack.findings},
     speech_act_hints = ${align_pack.hints},
     slices = ${corpus_pack.slices}
   ) @gate

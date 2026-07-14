@@ -163,11 +163,20 @@ Workflow tools: `speech-act-scan`, `speech-act-align`.
 
 ### Gated pragmatics (layer 3)
 
-Union gates from layer 2 and 2b feed `llm-gen-object` on **bounded slices** only:
+High-signal gates feed `llm-gen-object` on **bounded slices** only (max 8).
+Entropy/compression outliers and unguarded-directive hints are **excluded** from
+layer 3 — they remain layer-2 info signals.
 
-- Entropy outliers (top/bottom N or z-score threshold).
-- High-similarity pairs with divergent metrics.
-- Speech-act mismatches (step vs agent section).
+Gate priority (first wins per slice id):
+
+1. Redundancy clusters (`check_redundancy` — both member bodies in prompt).
+2. Cluster divergence pairs (`check_contradiction`).
+3. Speech-act coverage gaps (`check_coverage_gap`).
+4. Dead-reference prose warnings (`check_dead_reference`).
+
+Prompt puts slice bodies first; `review_task` + `context` are selection metadata,
+not prose under review. `pragmatic-filter-findings` drops felicity strings that
+repeat layer-2 trigger boilerplate (e.g. Shannon entropy outlier claims).
 
 Suggested LLM output fields (workflow schema, not engine):
 
