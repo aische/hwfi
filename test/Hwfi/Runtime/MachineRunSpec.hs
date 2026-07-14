@@ -6,7 +6,7 @@ import Hwfi.Ast.Name (Ident, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.RunCommon (RunResult (..))
-import Hwfi.Runtime.MachineRun (performContinueToEnd, performRun)
+import Hwfi.Runtime.MachineRun (DriveMode (..), performContinueToEnd, performRun, performRunMode)
 import Hwfi.Runtime.RunStore (hasMachineSnapshot, openRunStore, rsRunDir)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
@@ -52,6 +52,30 @@ spec =
               case r2 of
                 Left err -> err `shouldSatisfy` ("not resumable" `T.isInfixOf`)
                 Right _ -> expectationFailure "completed run should not be continuable"
+
+    it "performRunMode DriveOneBatch completes a simple sequential workflow" $
+      withSystemTempDirectory "hwfi-m4-proj" $ \proj ->
+        withSystemTempDirectory "hwfi-m4-ws" $ \ws -> do
+          createDirectoryIfMissing True (proj </> "workflows")
+          writeFile (proj </> "project.json") projectJson
+          writeFile (proj </> "model-catalog.json") "[]\n"
+          writeFile (proj </> "workflows" </> "main.md") mainMd
+          writeFile (ws </> "input.txt") "hello"
+          tp <- loadChecked proj
+          workspace <- newWorkspace ws
+          let runId = "m4-step-run"
+              entry = qnameFromText "workflows/main"
+          r1 <- performRunMode tp workspace Map.empty Map.empty proj runId entry inputs DriveOneBatch
+          case r1 of
+            Left err -> expectationFailure (T.unpack err)
+            Right res
+              | rrHalted res -> expectationFailure "expected completed run for single-step workflow"
+              | otherwise ->
+                  case rrOutcome res of
+                    Left e -> expectationFailure (show e)
+                    Right (VRecord outs) ->
+                      Map.lookup "content" outs `shouldBe` Just (VString "hello")
+                    Right _ -> expectationFailure "unexpected output shape"
 
 projectJson :: String
 projectJson =

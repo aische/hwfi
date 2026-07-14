@@ -40,6 +40,25 @@ echo $RUN_ID
 
 Each run directory contains `run.json`, `machine.json`, and `trace.jsonl`.
 
+### Stepping from the start
+
+To drive a run one batch at a time (without interrupting a full `run`):
+
+```bash
+cabal run hwfi -- run examples/coding \
+  --workspace /tmp/resume-ws \
+  --input name="Bob" \
+  --step
+# run-id: … on stderr; stdout: run halted (status: paused)
+
+export RUN_ID=$(ls /tmp/resume-ws/.hwfi/runs/ | head -1)
+cabal run hwfi -- step /tmp/resume-ws $RUN_ID    # repeat until done
+# or: cabal run hwfi -- resume /tmp/resume-ws $RUN_ID
+```
+
+A step-batch runs until the next halt point (confirm gate, `par` join boundary,
+or run end). Simple sequential workflows may finish in the first batch.
+
 ## 2. Inspect the trace
 
 ```bash

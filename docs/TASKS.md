@@ -22,6 +22,8 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **`hwfi run --step` (2026-07-14):** `performRunMode` + `--step` flag; start
+  stepping without interrupting a full `run`.
 - **M6 cleanup (2026-07-14):** Stale step-cache artifacts in docs/examples;
   runtime comment fixes; `cacheable` from checker in traces; removed unused agent
   fields (`aeStepKey`, `atFingerprint`).

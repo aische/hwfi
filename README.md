@@ -18,7 +18,8 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
   (`llm-agent`, `llm-agent-object`)
 - Sandboxed file I/O, mutation tools, and allowlisted `exec`
 - Control flow: `if`/`else`, `foreach`, `par`, `while`, `try`/`catch`
-- Machine snapshot resume via `hwfi resume` / `hwfi step`
+- Machine snapshot resume via `hwfi resume` / `hwfi step`; start stepping with
+  `hwfi run --step`
 - Cross-run trace reading and skill extraction (Mode A)
 - Agent skill discovery and loading (`discover-skills`, `load-skill`) — §6.7
 
@@ -71,9 +72,9 @@ running).
 
 ```bash
 hwfi check <project-dir>
-hwfi run <project-dir> --workspace <dir> [--input K=V]... [--entry <qname>]
+hwfi run <project-dir> --workspace <dir> [--step] [--input K=V]... [--entry <qname>]
 hwfi resume <workspace-dir> <run-id>
-hwfi show <workspace-dir> <run-id>
+hwfi step <workspace-dir> <run-id>
 ```
 
 ## Examples

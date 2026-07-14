@@ -76,10 +76,16 @@ Shows the trace with secrets redacted.
 ## CLI
 
 ```bash
-hwfi run <project-dir> <workspace-dir> <run-id> ...
+hwfi run <project-dir> --workspace <workspace-dir>
+             [--step] ...
 hwfi resume <workspace-dir> <run-id>    # run to completion from snapshot
 hwfi step <workspace-dir> <run-id>      # one transition batch, then pause
 ```
+
+`hwfi run --step` creates a new run (prints `run-id` on stderr) and halts after
+the first step-batch — the same stop condition as `hwfi step`. Use it to start
+stepping without interrupting a full `run`. Repeat with `hwfi step` until done, or
+use `hwfi resume` to finish in one go.
 
 `hwfi cache clear` and `hwfi cache invalidate` were removed with the v2
 cutover (M6). To force a clean retry, use a new `run-id`.

@@ -4,7 +4,7 @@
 --
 -- @
 -- hwfi check   \<project-dir>
--- hwfi run      \<project-dir> --workspace \<dir> ...
+-- hwfi run      \<project-dir> --workspace \<dir> ... [--step]
 -- hwfi resume   \<workspace-dir> \<run-id> [--approve]
 -- hwfi step     \<workspace-dir> \<run-id> [--approve]
 -- hwfi show    \<workspace-dir> \<run-id>
@@ -49,9 +49,10 @@ import Hwfi.Parse.Project (loadProject)
 import Hwfi.Project.Manifest (ProjectManifest (..), validateEnvPresence)
 import Hwfi.Runtime.Error (renderRuntimeError)
 import Hwfi.Runtime.MachineRun
-  ( RunResult (..),
+  ( DriveMode (..),
+    RunResult (..),
     performContinueToEnd,
-    performRun,
+    performRunMode,
     performStep,
   )
 import Hwfi.Runtime.Gateways (buildGateways, buildModelStore)
@@ -109,7 +110,8 @@ data RunOpts = RunOpts
     envFile :: Maybe FilePath,
     inputs :: [InputArg],
     inputJson :: Maybe FilePath,
-    entry :: Maybe Text
+    entry :: Maybe Text,
+    stepOnce :: Bool
   }
   deriving stock (Eq, Show)
 
@@ -193,6 +195,7 @@ runOpts =
       )
     <*> optional (strOption (long "input-json" <> metavar "FILE" <> help "Supply the whole inputs record as JSON"))
     <*> optional (fmap T.pack (strOption (long "entry" <> metavar "QNAME" <> help "Override project.json entrypoint")))
+    <*> switch (long "step" <> help "Create the run and halt after the first transition batch")
 
 resumeOpts :: Parser ResumeOpts
 resumeOpts =
@@ -320,7 +323,9 @@ runChecked opts dir tp catalog = do
                     workspace <- newWorkspace opts.workspace
                     runId <- genRunId
                     TIO.hPutStrLn stderr ("run-id: " <> runId)
-                    outcome <- performRun tp workspace models envVars dir runId entry rootInputs
+                    let mode = if opts.stepOnce then DriveOneBatch else DriveToEnd
+                    outcome <-
+                      performRunMode tp workspace models envVars dir runId entry rootInputs mode
                     finishRun outcome
 
 -- | Look up the declared inputs of the entrypoint (in signature order).

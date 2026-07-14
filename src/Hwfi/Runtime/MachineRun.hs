@@ -3,8 +3,10 @@
 -- Replaces cache-as-resume 'performResume' for the default runtime path. See
 -- @docs/execution-model.md@ (M4).
 module Hwfi.Runtime.MachineRun
-  ( RunResult (..),
+  ( DriveMode (..),
+    RunResult (..),
     performRun,
+    performRunMode,
     performContinue,
     performContinueToEnd,
     performStep,
@@ -116,11 +118,30 @@ performRun ::
   Map Ident RValue ->
   IO (Either Text RunResult)
 performRun tp ws models envVars projectDir runId entry rootInputs =
+  performRunMode tp ws models envVars projectDir runId entry rootInputs DriveToEnd
+
+-- | Start a fresh v2 run and drive until @mode@ says to stop.
+performRunMode ::
+  TypedProject ->
+  Workspace ->
+  ModelStore ->
+  Map Text Text ->
+  FilePath ->
+  Text ->
+  QName ->
+  Map Ident RValue ->
+  DriveMode ->
+  IO (Either Text RunResult)
+performRunMode tp ws models envVars projectDir runId entry rootInputs mode =
   withWorkspaceLock (workspaceRoot ws) $ do
     store <- createRunStore (workspaceRoot ws) runId
     startedAt <- nowIso
     let ph = projectContentHash tp
         budget = budgetMaxCostUsd (tpManifest tp)
+        confirmPolicy =
+          if mode == DriveOneBatch
+            then ConfirmHold
+            else ConfirmAuto
     writeRunMeta
       store
       RunMeta
@@ -143,9 +164,9 @@ performRun tp ws models envVars projectDir runId entry rootInputs =
       let checkpoint m = do
             writeMachineSnapshot store m
             writeIORef machineRef m
-      env <- newRunStepEnv tp ws models envVars tracer usageSeam ri ConfirmAuto (Just checkpoint) (Just machineRef)
+      env <- newRunStepEnv tp ws models envVars tracer usageSeam ri confirmPolicy (Just checkpoint) (Just machineRef)
       writeMachineSnapshot store m0
-      guardedFinish env store tracer machineRef =<< tryAny (drive env store machineRef m0 DriveToEnd)
+      guardedFinish env store tracer machineRef =<< tryAny (drive env store machineRef m0 mode)
 
 -- | Continue a v2 run from its persisted machine snapshot.
 performContinue ::

@@ -12,6 +12,8 @@ local filesystem mode.
 
 ## Done recently
 
+- **`hwfi run --step`** — start a new run and halt after the first step-batch
+  (same stop condition as `hwfi step`); no Ctrl+C needed to begin stepping.
 - **CLI UX** — `hwfi run` prints `run-id` on stderr; bare `hwfi` shows help;
   resume command is `hwfi resume` (replaces `continue`).
 - **Resume robustness** — Collapse step dispatch into one transition; skip
