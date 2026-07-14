@@ -56,6 +56,8 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **Eval errors in `try`/`catch` (2026-07-14):** `routeStepOutcome` +
+  `breakCatchableTry` in StepDriver; T8/T9 tests; semantic-check runs on ship.
 - **`return` in control-flow blocks (2026-07-14):** Nested loop/branch bodies
   may end with `return { … }`; top-level return rule unchanged. semantic-check
   loops inlined; helper tools removed.

@@ -15,6 +15,9 @@ local filesystem mode.
 
 ## Done recently
 
+- **Eval errors in `try`/`catch`** — catchable eval failures (including sub-tool
+  `return` expressions) route through `handleStepError`; stack scan skips
+  `FrSeq`/loop frames to find enclosing `try` (§4.4.3).
 - **`return` in control-flow blocks** — checker allows nested `return { … }` as
   iteration/branch tail (runtime already supported). Tests in ControlFlowSpec;
   semantic-check example simplified (removed spread/error/warning helper tools).

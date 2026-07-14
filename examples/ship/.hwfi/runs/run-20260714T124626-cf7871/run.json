@@ -1,0 +1,1 @@
+{"entrypoint":"workflows/main","inputs":{"entry":"workflows/main","path":"."},"project_dir":"examples/semantic-check","project_hash":"aff17854ab52628f878f5b8e892100f6c5659b31affec2765a5caf55b8438b5d","run_id":"run-20260714T124626-cf7871","started_at":"2026-07-14T12:46:26.987Z","status":"completed","usage":{"cost_usd":0,"tokens_in":0,"tokens_out":0}}

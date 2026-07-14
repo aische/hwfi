@@ -20,7 +20,7 @@ import Data.IORef (modifyIORef', readIORef)
 import Data.Set qualified as Set
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Expr (Expr (..), RefPath (..))
@@ -166,9 +166,9 @@ stepDraining env machine =
 stepRunning :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
 stepRunning env machine =
   maybeReplayPinnedWhilePred env machine >>= \case
-    Just outcome -> pure outcome
+    Just outcome -> routeStepOutcome env machine outcome
     Nothing ->
-      case mCurrent machine of
+      routeStepOutcome env machine =<< case mCurrent machine of
         CurReady -> stepFromReady env machine
         CurDispatch step -> stepDispatch env machine step
         CurAgent ag -> stepAgentTransition env machine ag
@@ -182,6 +182,11 @@ stepRunning env machine =
                 else pure (Right (Stepped machine))
             Nothing ->
               pure (Right (StepHalted machine {mStatus = MsPaused (PauseAwaitingConfirm c)}))
+
+-- | Route catchable runtime errors through active @try@ frames (§4.4.3).
+routeStepOutcome :: StepEnv -> Machine -> Either RuntimeError StepOutcome -> IO (Either RuntimeError StepOutcome)
+routeStepOutcome _ _ (Right ok) = pure (Right ok)
+routeStepOutcome env machine (Left err) = handleStepError env machine err
 
 maybeReplayPinnedWhilePred :: StepEnv -> Machine -> IO (Maybe (Either RuntimeError StepOutcome))
 maybeReplayPinnedWhilePred env machine =
@@ -328,7 +333,7 @@ runBuiltinDispatch env machine stepRef argMap realTarget binder = do
       (StepStart q sid (redactedJson (VRecord argMap)) cacheable Nothing)
   r <- runBuiltin (builtinEnv env stepRef (mBindings machine) (mScope machine)) realTarget argMap
   case r of
-    Left e -> handleStepError env machine (atStep stepRef e)
+    Left e -> pure (Left (atStep stepRef e))
     Right result -> do
       _ <-
         emit
@@ -796,10 +801,16 @@ emitStepError env err =
     Nothing -> pure ()
 
 handleStepError :: StepEnv -> Machine -> RuntimeError -> IO (Either RuntimeError StepOutcome)
-handleStepError env machine err =
-  case (mFrames machine, isCatchable (reKind err)) of
-    (FrTry tf : rest, True)
-      | tfPhase tf == TryInTry -> do
+handleStepError env machine err
+  | not (isCatchable (reKind err)) = do
+      emitStepError env err
+      pure (Left err)
+  | otherwise =
+      case breakCatchableTry (mFrames machine) of
+        Nothing -> do
+          emitStepError env err
+          pure (Left err)
+        Just (mCallerSeq, tf, rest) -> do
           emitStepError env err
           case resolveStmtPath (seProject env) (tfTryPath tf) of
             Left e -> pure (Left (internalStub e))
@@ -810,19 +821,36 @@ handleStepError env machine err =
                       q = spQName (tfTryPath tf)
                       scope' = tryScope (tfScope tf) (tryId s) "catch"
                       bodyEntry = enterChildBlock (tfTryPath tf) idx BkTryCatch
+                      savedBindings =
+                        maybe (mBindings machine) fsBindings mCallerSeq
                   void $ emit (seTracer env) (TryBranch q (tryId s) "catch")
                   pure . Right . Stepped $
                     machine
                       { mFrames = FrTry (tf {tfPhase = TryInCatch}) : rest,
                         mScope = scope',
                         mPath = bodyEntry,
+                        mBindings = savedBindings,
                         mCurrent = CurReady,
                         mError = Just (reMessage err)
                       }
                 _ -> pure (Left (internalError "try path does not point at a try statement"))
-    _ -> do
-      emitStepError env err
-      pure (Left err)
+
+-- | Locate the innermost @try@ arm still in @TryInTry@, skipping continuation
+-- frames (@FrSeq@ from sub-workflows, loops, etc.) above it on the stack.
+breakCatchableTry :: [Frame] -> Maybe (Maybe Frame, TryFrame, [Frame])
+breakCatchableTry frames =
+  case span isSkippablePrefix frames of
+    (prefix, FrTry tf : rest)
+      | tfPhase tf == TryInTry ->
+          Just (listToMaybe [s | s@FrSeq {} <- prefix], tf, rest)
+    _ -> Nothing
+  where
+    isSkippablePrefix = \case
+      FrSeq {} -> True
+      FrForeach {} -> True
+      FrWhile {} -> True
+      FrPar {} -> True
+      _ -> False
 
 -- Environment ----------------------------------------------------------------
 

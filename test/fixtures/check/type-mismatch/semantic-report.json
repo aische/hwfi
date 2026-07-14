@@ -1,0 +1,11 @@
+{
+  "schema": "semantic-report/v0",
+  "entry": "workflows/main",
+  "ok": false,
+  "check_error": "1 type error(s)",
+  "structural_errors": [{"category":"policy","claim":"Project failed structural type check","evidence":"workflows/main.md:10:55: type mismatch: expected String, got Int\n   |\n10 | c <- builtin/llm-generate(system = \"s\", prompt = \"p\", model = 42)\n   |                                                       ^","location":{"file":"","section":""},"severity":"error","suggestion":"Fix the parse or type error reported by hwfi check"}],
+  "structural_warnings": [],
+  "entry_findings": [],
+  "prose_hints": [{"category":"dead_reference","claim":"Prose or step block mentions a qname-like token","evidence":"{ \"name\": \"type-mismatch\", \"version\": \"0.1.0\", \"entrypoint\": \"workflows/main\" }","location":{"file":"project.json","section":""},"severity":"info","suggestion":"Confirm the mention resolves; replace grep hints with resolve-qnames-in-text when available"},{"category":"dead_reference","claim":"Prose or step block mentions a qname-like token","evidence":"name: workflows/main","location":{"file":"workflows/main.md","section":""},"severity":"info","suggestion":"Confirm the mention resolves; replace grep hints with resolve-qnames-in-text when available"},{"category":"dead_reference","claim":"Prose or step block mentions a qname-like token","evidence":"c <- builtin/llm-generate(system = \"s\", prompt = \"p\", model = 42)","location":{"file":"workflows/main.md","section":""},"severity":"info","suggestion":"Confirm the mention resolves; replace grep hints with resolve-qnames-in-text when available"}],
+  "step_referential": [[{"agent":[],"bare":[]}]]
+}

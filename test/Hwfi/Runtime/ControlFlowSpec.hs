@@ -25,7 +25,7 @@ import Hwfi.TypedProject (TypedProject)
 import LLM.Core.Types (ChatResponse (..), ContentBlock (..), LLMError (..), LLMGateway (..))
 import LLM.Core.Usage (PricingInfo (..), Usage (..))
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -58,10 +58,20 @@ writeProjectWithSub dir mainMd mSubMd = writeProjectWithSubs dir mainMd (maybe M
 writeProjectWithSubs :: FilePath -> Text -> Map.Map Text Text -> IO ()
 writeProjectWithSubs dir mainMd subs = do
   createDirectoryIfMissing True (dir </> "workflows")
+  createDirectoryIfMissing True (dir </> "tools")
   TIO.writeFile (dir </> "project.json") projectJson
   TIO.writeFile (dir </> "model-catalog.json") "[]\n"
   TIO.writeFile (dir </> "workflows" </> "main.md") mainMd
-  mapM_ (\(name, md) -> TIO.writeFile (dir </> "workflows" </> T.unpack name) md) (Map.toList subs)
+  mapM_ (writeExtraDecl dir) (Map.toList subs)
+  where
+    writeExtraDecl root (relPath, md) =
+      let fp =
+            if "tools/" `T.isPrefixOf` relPath
+              then root </> T.unpack relPath
+              else root </> "workflows" </> T.unpack relPath
+       in do
+            createDirectoryIfMissing True (takeDirectory fp)
+            TIO.writeFile fp md
 
 loadChecked :: FilePath -> IO TypedProject
 loadChecked dir = do
@@ -670,6 +680,63 @@ tryCatchFailMd =
     []
     [("ok", "Bool")]
 
+tryEvalReturnMd :: Text
+tryEvalReturnMd =
+  wrapBodyWithImports
+    []
+    [ "rows <- foreach x in ${inputs.nothing} {",
+      "  return { v = ${x} }",
+      "} @rows",
+      "x <- try {",
+      "  return { v = ${rows[0].v} }",
+      "} catch {",
+      "  return { v = \"caught\" }",
+      "} @safe",
+      "return { out = ${x.v} }"
+    ]
+    [("nothing", "List<String>")]
+    [("out", "String")]
+
+emptyListInputs :: Map.Map Ident RValue
+emptyListInputs = Map.fromList [("nothing", VList [])]
+
+boomToolMd :: Text
+boomToolMd =
+  T.unlines
+    [ "---",
+      "name: tools/boom",
+      "inputs:",
+      "  items: List<String>",
+      "outputs:",
+      "  y: String",
+      "imports: []",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "return { y = ${inputs.items[0]} }",
+      "```"
+    ]
+
+tryEvalSubtoolMd :: Text
+tryEvalSubtoolMd =
+  wrapBodyWithImports
+    ["tools/boom"]
+    [ "x <- try {",
+      "  _ <- tools/boom(items = []) @call",
+      "  return { v = \"ok\" }",
+      "} catch {",
+      "  return { v = \"caught\" }",
+      "} @safe",
+      "return { out = ${x.v} }"
+    ]
+    []
+    [("out", "String")]
+
+tryEvalSubtoolSubs :: Map.Map Text Text
+tryEvalSubtoolSubs = Map.singleton "tools/boom.md" boomToolMd
+
 tryPartialMd :: Text
 tryPartialMd =
   wrapBody
@@ -1229,6 +1296,16 @@ spec = do
       runThenResume tryOkMd Map.empty $ \_ r2 _ -> do
         resumedStepStarts "work" (rrEvents r2) `shouldBe` 0
         resumedStepStarts "recover" (rrEvents r2) `shouldBe` 0
+
+    it "T8: catches eval errors from a return in the try arm (§4.4.3)" $
+      runProject tryEvalReturnMd emptyListInputs $ \rr _ -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("out", VString "caught")]))
+        tryBranches "safe" (rrEvents rr) `shouldBe` ["try", "catch"]
+
+    it "T9: catches eval errors from a sub-tool return inside try (§4.4.3)" $
+      runProjectWithSubs tryEvalSubtoolMd tryEvalSubtoolSubs Map.empty $ \rr _ -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("out", VString "caught")]))
+        tryBranches "safe" (rrEvents rr) `shouldBe` ["try", "catch"]
 
   describe "par(on_error = collect) (§4.1.1, 9.9)" $ do
     it "runs all iterations and wraps failures in envelope records" $
