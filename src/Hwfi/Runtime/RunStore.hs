@@ -36,20 +36,16 @@ module Hwfi.Runtime.RunStore
 where
 
 import Control.Exception (IOException)
-import Control.Monad (when)
 import Data.Aeson (Value (..), eitherDecodeFileStrict', object, (.:), (.:?), (.=))
-import Data.Aeson.Key qualified as K
-import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (parseMaybe, withObject)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
 import Data.Functor ((<&>))
-import Data.List (isSuffixOf, nub, sortOn)
+import Data.List (sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Ord (Down (..))
-import Data.Vector qualified as V
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.IO.Handle.Lock (LockMode (ExclusiveLock), hTryLock)
@@ -62,7 +58,6 @@ import System.Directory
     doesDirectoryExist,
     doesFileExist,
     listDirectory,
-    removeFile,
     renameFile,
   )
 import System.FilePath ((</>))

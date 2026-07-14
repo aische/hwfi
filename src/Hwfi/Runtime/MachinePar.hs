@@ -32,7 +32,7 @@ import Hwfi.Runtime.Error (RuntimeError, internalError)
 import Hwfi.Runtime.RunCommon (defaultParallelism)
 import Hwfi.Runtime.Machine
 import Hwfi.Runtime.MachinePath (StmtContext (..), enterChildBlock, resolveStmtPath)
-import Hwfi.Runtime.StepEnv (ConfirmPolicy (..), RunWorkflowSeam, StepEnv (..), StepOutcome (..))
+import Hwfi.Runtime.StepEnv (StepEnv (..), StepOutcome (..))
 import Hwfi.Runtime.Trace (EventBody (..), emit)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.TypedProject (TypedProject)
@@ -255,8 +255,7 @@ setSlotFailed :: [ParSlot] -> Int -> Text -> [ParSlot]
 setSlotFailed slots idx msg = updateSlot idx (ParSlotFailed msg) slots
 
 updateSlot :: Int -> ParSlot -> [ParSlot] -> [ParSlot]
-updateSlot i s xs =
-  zipWith (\j slot -> if j == i then s else slot) [0 ..] xs
+updateSlot i s = zipWith (\j slot -> if j == i then s else slot) [0 ..]
 
 allSlotsTerminal :: [ParSlot] -> Bool
 allSlotsTerminal = all $ \case

@@ -13,7 +13,7 @@ module Hwfi.Runtime.StepDriver
   )
 where
 
-import Control.Monad (foldM, void, when)
+import Control.Monad (foldM, void)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.IORef (modifyIORef', readIORef)
@@ -33,7 +33,6 @@ import Hwfi.Ast.Step
     LoopKind (..),
     LoopStmt (..),
     ParOnError (..),
-    ParOpts (..),
     Statement (..),
     StepStmt (..),
     TryStmt (..),
@@ -129,7 +128,7 @@ runWorkflowSeam env q scope inputs = do
 
 -- | Run until 'RunCompleted', 'StepHalted', or an error.
 runMachine :: StepEnv -> Machine -> IO (Either RuntimeError StepOutcome)
-runMachine env machine = loop machine
+runMachine env = loop
   where
     loop m
       | isParWave m = stepParWave env m >>= continue
@@ -696,13 +695,9 @@ applyWhilePredDecision ::
   Bool ->
   Text ->
   IO (Either RuntimeError StepOutcome)
-applyWhilePredDecision env machine wf rest cont reason =
-  if not cont
-    then finishWhile env machine wf rest
-    else
-      if wfIteration wf >= wfMaxIterations wf
-        then
-          pure $
+applyWhilePredDecision env machine wf rest cont reason
+  | not cont = finishWhile env machine wf rest
+  | wfIteration wf >= wfMaxIterations wf = pure $
             Left
               ( userError_
                   ( "while loop reached max_iterations ("
@@ -710,7 +705,7 @@ applyWhilePredDecision env machine wf rest cont reason =
                       <> ") without predicate returning continue = false (§4.3)"
                   )
               )
-        else startWhileBody env machine wf rest (VRecord (Map.fromList [("continue", VBool cont), ("reason", VString reason)]))
+  | otherwise = startWhileBody env machine wf rest (VRecord (Map.fromList [("continue", VBool cont), ("reason", VString reason)]))
 
 startWhileBody :: StepEnv -> Machine -> WhileFrame -> [Frame] -> RValue -> IO (Either RuntimeError StepOutcome)
 startWhileBody env machine wf rest _predResult = do
@@ -975,7 +970,7 @@ absorbWaveOutcome ::
   Either RuntimeError (Machine, ParJoinState) ->
   ((Int, BranchMachine), Either RuntimeError StepOutcome) ->
   IO (Either RuntimeError (Machine, ParJoinState))
-absorbWaveOutcome env rest acc ((idx, _), outcome) =
+absorbWaveOutcome _env rest acc ((idx, _), outcome) =
   case acc of
     Left err -> pure (Left err)
     Right (machine, pjs) ->
@@ -996,7 +991,7 @@ stepParPool_ env machine pjs rest =
    in case pjsPhase pjs of
         ParPausedConfirm ->
           case pjsConfirmQueue pjs of
-            (c : _) -> pauseParConfirm env m' pjs rest
+            (_c : _) -> pauseParConfirm env m' pjs rest
             [] -> finishParJoin env m' pjs rest
         ParDraining -> drainPar env m' pjs rest
         ParScheduling -> schedulePar env m' pjs rest
@@ -1025,7 +1020,7 @@ drainPar env machine pjs rest
         else stepLowestBranch env machine pjs rest
   | otherwise =
       case pjsConfirmQueue pjs of
-        (c : _) -> pauseParConfirm env machine pjs rest
+        (_c : _) -> pauseParConfirm env machine pjs rest
         [] -> finishParJoin env machine pjs rest
 
 pauseParConfirm :: StepEnv -> Machine -> ParJoinState -> [Frame] -> IO (Either RuntimeError StepOutcome)

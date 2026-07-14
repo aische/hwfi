@@ -40,7 +40,6 @@ import Hwfi.Compat
     noHooks,
   )
 import Hwfi.Project.Manifest (SkillPolicy (..), execPolicy)
-import Hwfi.Runtime.Context (RunInfo (..))
 import Hwfi.Runtime.Agent
   ( AdvertisedTool (..),
     AgentSpec (..),
@@ -54,6 +53,7 @@ import Hwfi.Runtime.Agent
     validateSubmit,
   )
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
+import Hwfi.Runtime.Context (RunInfo (..))
 import Hwfi.Runtime.Error
   ( ErrorKind (..),
     RuntimeError (..),
@@ -75,7 +75,7 @@ import Hwfi.Runtime.Machine
 import Hwfi.Runtime.Skills (instructionInjectionText, loadSkillResultRecord)
 import Hwfi.Runtime.StepEnv (StepEnv (..))
 import Hwfi.Runtime.Trace (EventBody (..), emit)
-import Hwfi.Runtime.Usage (UsageSeam, checkBudgetSeam, recordBilledCall)
+import Hwfi.Runtime.Usage (checkBudgetSeam, recordBilledCall)
 import Hwfi.Runtime.Value (RValue (..), RefKind (..), canonicalJson, redactedJson, valueToJson)
 import Hwfi.SkillCatalog
   ( SkillEntry (..),
@@ -105,7 +105,7 @@ initAgentState ::
   QName ->
   Map Ident RValue ->
   Either RuntimeError AgentState
-initAgentState env stepRef binder target argMap = do
+initAgentState _env stepRef binder target argMap = do
   system <- reqText "system"
   prompt <- reqText "prompt"
   modelName <- reqText "model"
@@ -217,14 +217,16 @@ stepModel env machine ag
                                     trCompleted = [],
                                     trActive = Nothing
                                   }
-                          pure . Right . (Nothing,) $
-                            machine
-                              { mCurrent =
-                                  CurAgent
-                                    ag'
-                                      { agToolRound = Just tr
-                                      }
-                              }
+                          (pure . Right)
+                            ( Nothing,
+                              machine
+                                { mCurrent =
+                                    CurAgent
+                                      ag'
+                                        { agToolRound = Just tr
+                                        }
+                                }
+                            )
 
 finishText :: StepEnv -> Machine -> AgentState -> AgentResponse -> IO (Either RuntimeError (Maybe RValue, Machine))
 finishText env machine ag assistant
@@ -267,13 +269,13 @@ handleMixedSubmit :: StepEnv -> Machine -> AgentState -> ToolRound -> IO (Either
 handleMixedSubmit env machine ag tr = do
   let msg = "submit must be called on its own; no tools were run this round — call submit alone (§6.1.3)"
       results = [toolResult tc msg | tc <- trPending tr]
-  zipWithM_ (\ix tc -> emitToolCall env ag (agRound ag) ix (tc.tcName) (tc.tcArguments)) [0 ..] (trPending tr)
+  zipWithM_ (\ix tc -> emitToolCall env ag (agRound ag) ix tc.tcName tc.tcArguments) [0 ..] (trPending tr)
   mapM_
     ( \(ix, tc) ->
         void $
           emit
             (seTracer env)
-            (AgentToolResult (srQName (agStepRef ag)) (srStepId (agStepRef ag)) (agRound ag) ix (tc.tcName) (String msg) True)
+            (AgentToolResult (srQName (agStepRef ag)) (srStepId (agStepRef ag)) (agRound ag) ix tc.tcName (String msg) True)
     )
     (zip [0 ..] (trPending tr))
   finishToolRound env machine ag (tr {trPending = [], trCompleted = results, trActive = Nothing})
@@ -283,9 +285,7 @@ startNextTool env machine ag tr =
   case trPending tr of
     [] -> finishToolRound env machine ag tr
     tc : rest ->
-      if isSubmit tc
-        then executeActiveTool env machine ag (tr {trPending = rest, trActive = Just tc}) tc
-        else executeActiveTool env machine ag (tr {trPending = rest, trActive = Just tc}) tc
+      executeActiveTool env machine ag (tr {trPending = rest, trActive = Just tc}) tc
 
 executeActiveTool :: StepEnv -> Machine -> AgentState -> ToolRound -> ToolCall -> IO (Either RuntimeError (Maybe RValue, Machine))
 executeActiveTool env machine ag tr tc
@@ -427,7 +427,7 @@ recoverable env machine ag tr tc msg = do
           (srStepId (agStepRef ag))
           (agRound ag)
           (callIndex tr)
-          (tc.tcName)
+          tc.tcName
           (String msg)
           True
       )
@@ -443,7 +443,7 @@ recoverableJson env machine ag tr tc rv = do
           (srStepId (agStepRef ag))
           (agRound ag)
           (callIndex tr)
-          (tc.tcName)
+          tc.tcName
           (valueToJson rv)
           True
       )
@@ -455,10 +455,12 @@ appendToolResult env machine ag tr tc content = do
   if null (trPending tr')
     then finishToolRound env machine ag tr'
     else
-      pure . Right . (Nothing,) $
-        machine
-          { mCurrent = CurAgent ag {agToolRound = Just tr'}
-          }
+      (pure . Right)
+        ( Nothing,
+          machine
+            { mCurrent = CurAgent ag {agToolRound = Just tr'}
+            }
+        )
 
 finishToolRound :: StepEnv -> Machine -> AgentState -> ToolRound -> IO (Either RuntimeError (Maybe RValue, Machine))
 finishToolRound env machine ag tr = do
@@ -477,7 +479,7 @@ finishToolRound env machine ag tr = do
             agToolRound = Nothing
           }
   void $ emit (seTracer env) (AgentRoundEnd (srQName (agStepRef ag)) (srStepId (agStepRef ag)) (agRound ag) False)
-  pure . Right . (Nothing,) $ machine {mCurrent = CurAgent ag'}
+  (pure . Right) (Nothing, machine {mCurrent = CurAgent ag'})
 
 -- Dispatch -------------------------------------------------------------------
 
@@ -589,6 +591,7 @@ calleeOutputTypes env q
       Just td -> Right (rsigOutputs (tdSignature td))
       Nothing -> Left (internalError ("advertised tool not found: " <> renderQName q))
 
+activeTools :: StepEnv -> PendingAgent -> Either RuntimeError [AdvertisedTool]
 activeTools env pa =
   case (traverse (buildTool env) (paInitialTools pa), mapMaybe (buildToolFromId env) (paActiveToolIds pa)) of
     (Left e, _) -> Left (internalError (tshow e))
@@ -646,26 +649,18 @@ loadInstruction env pa e skillId =
                           )
 
 loadCallable :: StepEnv -> PendingAgent -> SkillEntry -> Text -> (PendingAgent, RValue)
-loadCallable env pa e skillId =
-  if skillId `elem` paActiveToolIds pa
-        then (pa, loadSkillResultRecord True (skillKindText SkillCallable) False False "" "")
-        else
-          if not (seChecked e)
-            then (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill failed hwfi check")
-            else
-              if not (seAgentEligible e)
-                then (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill is not agent-eligible")
-                else
-                  if length (paActiveToolIds pa) >= spMaxCallableLoads (skillPolicyFromManifest (tpManifest (seProject env)))
-                    then (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable load cap exceeded")
-                    else
-                      case buildTool env (VRef RTool (seId e)) of
-                        Left _ ->
-                          (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill could not be resolved")
-                        Right _ ->
-                          ( pa {paActiveToolIds = skillId : paActiveToolIds pa},
-                            loadSkillResultRecord True (skillKindText SkillCallable) True False "" ""
-                          )
+loadCallable env pa e skillId
+  | skillId `elem` paActiveToolIds pa = (pa, loadSkillResultRecord True (skillKindText SkillCallable) False False "" "")
+  | not (seChecked e) = (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill failed hwfi check")
+  | not (seAgentEligible e) = (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill is not agent-eligible")
+  | length (paActiveToolIds pa) >= spMaxCallableLoads (skillPolicyFromManifest (tpManifest (seProject env))) = (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable load cap exceeded")
+  | otherwise = case buildTool env (VRef RTool (seId e)) of
+      Left _ ->
+        (pa, loadSkillResultRecord False (skillKindText SkillCallable) False False "" "callable skill could not be resolved")
+      Right _ ->
+        ( pa {paActiveToolIds = skillId : paActiveToolIds pa},
+          loadSkillResultRecord True (skillKindText SkillCallable) True False "" ""
+        )
 
 -- Trace helpers --------------------------------------------------------------
 

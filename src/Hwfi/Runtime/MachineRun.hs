@@ -403,8 +403,7 @@ runInfo runId startedAt entry rootInputs envVars =
 
 nowIso :: IO Text
 nowIso = do
-  now <- getCurrentTime
-  pure (T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%3QZ" now))
+  T.pack . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%3QZ" <$> getCurrentTime
 
 -- | When a run was aborted with a trace ending at a catchable error inside a
 -- @try@ (but before a @catch@ branch was recorded), rewind the machine so
@@ -474,7 +473,7 @@ findTryStmtPath :: TypedProject -> QName -> Ident -> Maybe StmtPath
 findTryStmtPath tp q sid = do
   td <- lookupTyped q tp
   let stmts = declStatements (tdDeclaration td)
-  (i, STry s) <-
+  (i, STry _s) <-
     find
       ( \(_, st) -> case st of
           STry s' -> tryId s' == sid

@@ -19,6 +19,7 @@ import Hwfi.Check.Error (CheckWarning, checkWarning)
 import Hwfi.Check.Expr (Env (..))
 import Hwfi.Source (Pos (..), Span (..), spanStart)
 import Hwfi.Type (Type (..), assignable)
+import Data.Maybe (isJust)
 
 -- | Whether a type is a first-class callable reference (§5.1).
 isRefType :: Type -> Bool
@@ -133,7 +134,7 @@ qnamesWithSuffix :: [QName] -> (QName -> Maybe Callee) -> Ident -> [QName]
 qnamesWithSuffix qnames resolve ident =
   [ q
   | q <- qnames,
-    resolve q /= Nothing,
+    isJust (resolve q),
     case reverse (qnameSegments q) of
       (seg : _) | seg == ident -> True
       _ -> False

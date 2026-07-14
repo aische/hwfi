@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use bimap" #-}
 -- | The @project.json@ manifest. See spec §2, §5.7, and §7.5.
 module Hwfi.Project.Manifest
   ( ProjectManifest (..),
@@ -57,7 +59,7 @@ instance FromJSON ExecPolicy where
       <*> o .:? "max_output_bytes" .!= defaultExecMaxOutputBytes
 
 -- | Optional spend ceiling for LLM provider calls (spec §8.4.6).
-data BudgetPolicy = BudgetPolicy
+newtype BudgetPolicy = BudgetPolicy
   { bpMaxCostUsd :: Double
   }
   deriving stock (Eq, Show)

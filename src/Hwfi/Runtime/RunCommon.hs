@@ -14,11 +14,11 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
+import Hwfi.Ast.Name (Ident, QName, renderQName)
 import Hwfi.Runtime.Error (RuntimeError (..))
 import Hwfi.Runtime.StepKey (sha256Hex)
 import Hwfi.Runtime.Trace (TraceEvent)
-import Hwfi.Runtime.Value (RValue (..), coerceFromJson, valueToJson)
+import Hwfi.Runtime.Value (RValue (..), coerceFromJson)
 import Hwfi.TypedProject
   ( Fingerprint (..),
     ResolvedSignature (..),

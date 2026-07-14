@@ -25,14 +25,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Hwfi.Ast.Name (Ident, QName, qnameFromText, renderQName)
+import Hwfi.Ast.Name (Ident, qnameFromText, renderQName)
 import Hwfi.Ast.Step (Binder (..), ParOnError (..), StepStmt (..))
 import Hwfi.Ast.Step qualified as Step
 import Hwfi.Runtime.Machine
 import Hwfi.Runtime.Value (RValue (..), RefKind (..), coerceFromJson, valueToJson)
 import Hwfi.Source (Pos (..), singletonSpan)
 import Hwfi.Type (Type (TyJson))
-import LLM.Core.Types (ToolCall, ToolResult, Turn)
 
 encodeMachine :: Machine -> Value
 encodeMachine m =
@@ -134,7 +133,7 @@ encodePath (StmtPath q segs) =
 
 parsePath :: Value -> Parser StmtPath
 parsePath = withObject "path" $ \o ->
-  StmtPath <$> (qnameFromText <$> o .: "qname") <*> (o .: "segments" >>= traverse parseSegment)
+  (StmtPath . qnameFromText <$> (o .: "qname")) <*> (o .: "segments" >>= traverse parseSegment)
 
 encodeSegment :: PathSegment -> Value
 encodeSegment (PathSegment i mBlock) =
@@ -217,8 +216,8 @@ encodeAgent ag =
 parseAgent :: Value -> Parser AgentState
 parseAgent = withObject "agent" $ \o -> do
   ref <- o .: "step_ref"
-  qnText <- withObject "step_ref" (\r -> r .: "qname") ref
-  sid <- withObject "step_ref" (\r -> r .: "step_id") ref
+  qnText <- withObject "step_ref" (.: "qname") ref
+  sid <- withObject "step_ref" (.: "step_id") ref
   binder <- o .:? "binder" >>= \case
     Just b -> parseBinderField b
     Nothing -> pure BindDiscard

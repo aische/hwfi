@@ -24,14 +24,11 @@ module Hwfi.Runtime.Agent
 where
 
 import Control.Monad (unless, void, when)
-import Data.Aeson (Value (..), fromJSON, object, toJSON, (.=))
-import Data.Aeson qualified as Aeson
+import Data.Aeson (Value (..), object)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Either (fromRight)
-import Data.Functor ((<&>))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
@@ -216,7 +213,7 @@ finishTextRound _ spec assistant roundIx = case asSubmit spec of
 -- Model call -----------------------------------------------------------------
 
 runModelCall :: AgentEnv -> AgentSpec -> IORef AgentSkillState -> [Turn] -> Int -> IO () -> IO (Either RuntimeError AgentResponse)
-runModelCall env spec skillState messages roundIx ensureStart = do
+runModelCall env spec skillState messages _roundIx ensureStart = do
   messages' <- applyPendingInjections skillState messages
   active <- activeTools env spec skillState
   ensureStart

@@ -9,7 +9,7 @@ module Hwfi.Runtime.StepEnv
   )
 where
 
-import Data.Aeson (Value (..), object)
+import Data.Aeson (object)
 import Data.IORef (IORef, newIORef)
 import Data.Map.Strict (Map)
 import Data.Set (Set)
@@ -116,7 +116,7 @@ newRunStepEnv ::
   RunInfo ->
   ConfirmPolicy ->
   IO StepEnv
-newRunStepEnv tp ws models envVars _store tracer usage runInfo confirmPolicy = do
+newRunStepEnv tp ws models _envVars _store tracer usage runInfo confirmPolicy = do
   approvals <- newIORef Set.empty
   pure
     StepEnv

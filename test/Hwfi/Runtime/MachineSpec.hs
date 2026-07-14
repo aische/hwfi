@@ -4,7 +4,7 @@ import Data.Aeson (Value (..), object, (.=))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Map.Strict qualified as Map
-import Hwfi.Ast.Name (Ident, QName, qnameFromText)
+import Hwfi.Ast.Name (QName, qnameFromText)
 import Hwfi.Ast.Step (Binder (..), ParOnError (..))
 import Hwfi.Check (checkProject)
 import Hwfi.Compat (ModelConfig (..))
@@ -34,9 +34,6 @@ import LLM.Core.Types
     mkToolCall,
   )
 import LLM.Core.Usage (PricingInfo (..), Usage (..))
-import LLM.Generate.ModelConfig (ModelWithFallbacks (..))
-import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -368,7 +365,7 @@ lineCount :: FilePath -> IO Int
 lineCount fp = length . lines <$> readFile fp
 
 stepUntilParMid :: StepEnv -> Machine -> IO Machine
-stepUntilParMid env m0 = loop m0
+stepUntilParMid env = loop
   where
     loop m
       | isParMid m = pure m
@@ -390,7 +387,7 @@ isParMid m =
       _ -> False
 
 stepUntilParActive :: StepEnv -> Machine -> IO Machine
-stepUntilParActive env m0 = loop m0
+stepUntilParActive env = loop
   where
     loop m
       | isParActive m = pure m
@@ -407,7 +404,7 @@ isParActive m =
     _ -> False
 
 runUntilHalt :: StepEnv -> Machine -> IO Machine
-runUntilHalt env m0 = loop m0
+runUntilHalt env = loop
   where
     loop m =
       stepMachine env m >>= \case
@@ -453,7 +450,7 @@ llmConfig gw temp =
     }
 
 stepUntilToolRound :: StepEnv -> Machine -> IO Machine
-stepUntilToolRound env m0 = loop m0
+stepUntilToolRound env = loop
   where
     loop m =
       case mCurrent m of
