@@ -18,8 +18,8 @@ imports:
 Semantic review workflow (layers 0–1). The checker project runs from
 `examples/semantic-check`; the **workspace** is the target project under review.
 
-Layer 0 uses `builtin/check-project` for parse/type diagnostics. Layer 1 (interim)
-uses workspace `grep` to surface qname-like lines until
+Layer 0 uses `builtin/check-project` for parse/type diagnostics. Layer 1 walks
+step metadata with nested `foreach` and surfaces grep prose hints until
 `resolve-qnames-in-text` ships.
 
 ## flow

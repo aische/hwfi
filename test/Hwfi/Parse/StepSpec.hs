@@ -114,6 +114,26 @@ spec = describe "step DSL parser (spec §3.1, §3.4)" $ do
   it "requires an explicit @id for a discarding control-flow statement" $
     parseB (Pos 1 1) (T.unlines ["_ <- foreach x in ${xs} {", "  a <- foo/bar()", "}"]) `shouldSatisfy` isLeft
 
+  it "parses nested foreach loops (inner loop as a bound rhs)" $ do
+    let src =
+          T.unlines
+            [ "outer <- foreach x in ${inputs.xs} {",
+              "  inner <- foreach y in ${x} {",
+              "    r <- foo/bar(v = ${y})",
+              "  } @inner",
+              "} @outer"
+            ]
+    case parseB (Pos 1 1) src of
+      Right [SLoop outer] -> do
+        loopKind outer `shouldBe` LoopSeq
+        loopVar outer `shouldBe` "x"
+        case loopBody outer of
+          [SLoop inner] -> do
+            loopVar inner `shouldBe` "y"
+            loopId inner `shouldBe` "inner"
+          _ -> expectationFailure "expected nested foreach in outer body"
+      other -> expectationFailure ("unexpected: " <> show other)
+
   it "parses a while(predicate, body) loop (§4.3, M9)" $ do
     let src =
           T.unlines

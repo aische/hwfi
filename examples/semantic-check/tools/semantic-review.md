@@ -11,6 +11,7 @@ imports:
   - tools/build-catalog
   - tools/entry-finding
   - tools/prose-hints
+  - tools/referential-scan
   - tools/error-finding
   - tools/warning-finding
 ---
@@ -41,6 +42,11 @@ entry_pack <- tools/entry-finding(
 
 prose_pack <- tools/prose-hints() @prose
 
+ref_pack <- tools/referential-scan(
+  declarations = ${inputs.project.declarations},
+  catalog = ${catalog_pack.catalog}
+) @refs
+
 report_text <- builtin/concat(parts = [
   "{\n",
   "  \"schema\": \"semantic-report/v0\",\n",
@@ -50,7 +56,8 @@ report_text <- builtin/concat(parts = [
   "  \"structural_errors\": ", "${error_pick.values}", ",\n",
   "  \"structural_warnings\": ", "${warning_pick.values}", ",\n",
   "  \"entry_findings\": ", "${entry_pack.findings}", ",\n",
-  "  \"prose_hints\": ", "${prose_pack.findings}", "\n",
+  "  \"prose_hints\": ", "${prose_pack.findings}", ",\n",
+  "  \"step_referential\": ", "${ref_pack.step_results}", "\n",
   "}\n"
 ]) @report
 

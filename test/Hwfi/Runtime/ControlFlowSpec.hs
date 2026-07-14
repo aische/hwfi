@@ -173,6 +173,43 @@ foreachMd =
 parMd :: Text
 parMd = T.replace "@loop" "@fan" (T.replace "foreach it in" "par(max = 2) it in" foreachMd)
 
+-- Nested @foreach@: outer groups contain inner lists; collects @List<List<exec>>@.
+nestedForeachMd :: Text
+nestedForeachMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs:",
+      "  groups: List<List<String>>",
+      "outputs:",
+      "  got: String",
+      "imports:",
+      "  - builtin/exec",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rows <- foreach outer in ${inputs.groups} {",
+      "  inner <- foreach inner in ${outer} {",
+      "    r <- builtin/exec(program = \"sh\", args = [\"-c\", \"echo ${inner} >> log.txt; echo ${inner}\"], stdin = \"\", timeout_ms = 0)",
+      "  } @inner",
+      "} @outer",
+      "return { got = ${rows[1][0].stdout} }",
+      "```"
+    ]
+
+nestedGroups :: Map.Map Ident RValue
+nestedGroups =
+  Map.fromList
+    [ ( "groups",
+        VList
+          [ VList [VString "a", VString "b"],
+            VList [VString "c"]
+          ]
+      )
+    ]
+
 -- A sub-workflow with a cacheable step using identical static arguments on
 -- every call — without call-site scope threading (§4.1) a second loop iteration
 -- would incorrectly cache-hit the first iteration's internal step.
@@ -812,6 +849,15 @@ spec = do
         -- keeps exactly three lines (a re-run would double it).
         lineCount (ws </> "log.txt") `shouldReturn` 3
         resumedStepStarts "r" (rrEvents r2) `shouldBe` 0
+
+    it "runs nested foreach loops and preserves two-dimensional order" $
+      runProject nestedForeachMd nestedGroups $ \rr ws -> do
+        rrOutcome rr `shouldBe` Right (VRecord (Map.fromList [("got", VString "c\n")]))
+        lineCount (ws </> "log.txt") `shouldReturn` 3
+        loopIters (rrEvents rr) `shouldBe` 5
+
+    it "type-checks nested foreach" $
+      errKinds <$> checkOnly nestedForeachMd `shouldReturn` []
 
   describe "par (§13, M8)" $ do
     it "returns results in input order despite concurrency" $

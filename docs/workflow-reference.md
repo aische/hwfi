@@ -621,6 +621,25 @@ rows <- foreach task in ${task_list.tasks} {
 - Value: `List<U>` where `U` is the body's last statement type.
 - `_ <- foreach ...` discards the list (side effects only).
 
+**Nested loops** — a loop may appear as the right-hand side of a binding inside
+another loop body. Each level needs its own binder (`outer <- foreach … { inner <-
+foreach … { … } }`):
+
+```step
+matrix <- foreach group in ${inputs.groups} {
+  row <- foreach item in ${group} {
+    cell <- tools/process(item = ${item}) @cell
+  } @row
+} @matrix
+```
+
+- The inner loop's value (`List<U>`) becomes one element of the outer result
+  (`List<List<U>>`).
+- Step `@id`s may repeat across nesting levels; the executor disambiguates them
+  via iteration-scoped prefixes (§4.1, §8.1).
+- Bodies still cannot use `return` (§5.6.5); end each body with a value-producing
+  step call or nested control-flow binding.
+
 ### `par`
 
 Parallel loop with bounded concurrency (default 4).

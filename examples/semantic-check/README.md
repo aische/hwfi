@@ -10,10 +10,10 @@ Given a target project root in the workspace:
 
 1. **Layer 0 — Structure:** `builtin/check-project` for parse/type errors and
    warnings; entrypoint coverage check against declared qnames.
-2. **Layer 1 — Referential (interim):** `builtin/grep` over the workspace for
-   qname-like tokens (`workflows/…`, `tools/…`, `builtin/…`, etc.) and emits
-   **info** findings for manual review. Automated resolution will move to
-   `resolve-qnames-in-text` when that builtin ships.
+2. **Layer 1 — Referential:** nested `foreach` over declaration step metadata
+   (`bare_qnames`, static `agent_tools`) resolved against the project catalog
+   plus shipped builtins; interim `grep` prose hints until
+   `resolve-qnames-in-text` ships.
 
 Writes `semantic-report.json` into the workspace.
 
@@ -56,17 +56,26 @@ and the workspace contains `semantic-report.json`.
 | `structural_errors` | Type/parse failures (layer 0) |
 | `structural_warnings` | Checker warnings |
 | `entry_findings` | Entrypoint not in declarations |
-| `prose_hints` | Grep hits for qname-like lines (layer 1 interim) |
+| `prose_hints` | Grep hits for qname-like lines (interim) |
+| `step_referential` | Nested per-decl/per-step referential scan (`bare` / `agent` matrices) |
 
 Each finding uses `types/finding`: severity, category, location, claim,
 evidence, suggestion.
 
+## Nested `foreach`
+
+Layer 1 uses nested loops (`decl → step → mention`) in
+`tools/step-ref-findings` and `tools/referential-scan`. Inner loops must bind
+their result (`inner <- foreach …`), not appear as bare statements — see
+[workflow-reference.md](../../docs/workflow-reference.md).
+
 ## Limitations (v0)
 
-- No nested `foreach` in the step DSL yet, so step-metadata dead-ref checks
-  (`bare_qnames`, static `agent_tools`) are deferred until
-  `resolve-qnames-in-text` or nested loops land.
+- Prose qname resolution still uses `grep` hints; `resolve-qnames-in-text` will
+  replace the interim pass.
 - Corpus quality (layer 2) and LLM pragmatics (layer 3) are not wired here.
+- Loop bodies cannot use `return`; use value-producing step calls (helper tools
+  like `tools/spread-finding` wrap records for nested collection).
 
 ## Related
 

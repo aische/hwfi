@@ -16,7 +16,9 @@ local filesystem mode.
 ## Done recently
 
 - **Semantic review example** — `examples/semantic-check`: layer 0
-  (`check-project`, entrypoint coverage) + layer 1 interim (`grep` prose hints).
+  (`check-project`, entrypoint coverage) + layer 1 (nested `foreach` step-metadata
+  scan + grep prose hints). Nested-loop docs/tests in workflow-reference /
+  ControlFlowSpec.
 - **Semantic review Tier 2** — entropy/compression metrics, Jaccard/LCS
   similarity, corpus overlap clustering.
 - **Semantic review Tier 1** — `check-project`, `parse-markdown`.
