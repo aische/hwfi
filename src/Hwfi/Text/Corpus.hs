@@ -192,16 +192,15 @@ lcsLength left right =
         | i > m = prevRow !! n
         | otherwise =
             let row =
-                  [0]
-                    ++ [ let above = prevRow !! (k - 1)
-                             leftVal = row !! (k - 1)
-                          in if ls !! (i - 1) == rs !! (k - 1)
-                               then above + 1
-                               else max leftVal above
+                  0 : [ let above = prevRow !! (k - 1)
+                            leftVal = row !! (k - 1)
+                         in if ls !! (i - 1) == rs !! (k - 1)
+                              then above + 1
+                              else max leftVal above
                          | k <- [1 .. n]
                        ]
              in go (i + 1) j row
-   in go (1 :: Int) 0 (replicate (n + 1) 0)
+   in go (1 :: Int) (0 :: Integer) (replicate (n + 1) 0)
 
 longestCommonSubstring :: Text -> Text -> Text
 longestCommonSubstring left right =
