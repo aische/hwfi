@@ -784,8 +784,8 @@ return { ok = ${r.ok} }
 
 In addition to §5.6:
 
-1. Both arms must end in a **value-producing statement** (same rule as
-   `foreach`; no nested `return`).
+1. Both arms must end in a **value-producing statement** or a nested
+   `return { … }` (§5.6.5).
 2. When the construct binds a name, both arms must have **structurally equal**
    result types `U`; the construct's type is `U`.
 3. When the binder is `_`, no value constraint is imposed beyond ordinary
@@ -2010,7 +2010,7 @@ may appear anywhere a `List<Int>` is expected, e.g. `foreach i in range(3) {
 `while` may use either a callee body (`body = workflows/…`, `body_args = {…}`)
 or an inline statement block (`body = { … }` without `body_args`). The
 predicate remains a callee in both forms. Inline bodies follow the same
-value-producing rules as `foreach` (last step binding, no nested `return`).
+value-producing rules as `foreach` (last step binding or nested `return`, §5.6.5).
 `${carry}` is in scope inside the block from the second iteration onward
 (§4.3.4, §4.3.7).
 

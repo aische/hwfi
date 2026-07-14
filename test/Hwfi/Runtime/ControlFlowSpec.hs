@@ -210,6 +210,28 @@ nestedGroups =
       )
     ]
 
+returnForeachMd :: Text
+returnForeachMd =
+  T.unlines
+    [ "---",
+      "name: workflows/main",
+      "inputs:",
+      "  items: List<String>",
+      "outputs:",
+      "  got: String",
+      "imports: []",
+      "---",
+      "",
+      "## flow",
+      "",
+      "```step",
+      "rows <- foreach it in ${inputs.items} {",
+      "  return { out = ${it} }",
+      "} @loop",
+      "return { got = ${rows[0].out} }",
+      "```"
+    ]
+
 -- A sub-workflow with a cacheable step using identical static arguments on
 -- every call — without call-site scope threading (§4.1) a second loop iteration
 -- would incorrectly cache-hit the first iteration's internal step.
@@ -1018,13 +1040,22 @@ spec = do
               [("out", "String")]
       errKinds <$> checkOnly md `shouldReturn` [DuplicateBind]
 
-    it "rejects a return inside a control-flow block" $ do
+    it "accepts return inside a foreach body as the iteration value" $ do
       let md =
             wrapBody
-              ["_ <- foreach it in ${inputs.items} {", "  return { out = \"x\" }", "} @loop", "return { out = \"y\" }"]
+              [ "rows <- foreach it in ${inputs.items} {",
+                "  return { out = ${it} }",
+                "} @loop",
+                "return { got = ${rows[0].out} }"
+              ]
               [("items", "List<String>")]
-              [("out", "String")]
-      errKinds <$> checkOnly md `shouldReturn` [ReturnRule]
+              [("got", "String")]
+      errKinds <$> checkOnly md `shouldReturn` []
+
+    it "runs foreach with return in the body and collects record results" $
+      runProject returnForeachMd items3 $ \rr _ -> do
+        rrOutcome rr
+          `shouldBe` Right (VRecord (Map.fromList [("got", VString "a")]))
 
   describe "while (§4.3, M9)" $ do
     it "runs predicate then body until max_iterations when predicate never stops (A30)" $

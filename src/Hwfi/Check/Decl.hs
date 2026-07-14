@@ -113,13 +113,12 @@ checkBody ctx qname sig statements sections =
         ]
     initial = BodyState initialRoots [] [] [] [] Nothing
 
-    -- @return@ is a top-level construct (§5.6.5); the sequence that builds the
-    -- binding environment and the implicit-return result excludes it. A
-    -- @return@ nested inside a control-flow block is caught by 'checkStmt'.
+    -- @return@ at the top level is validated by 'checkReturnRule' (§5.6.5).
+    -- Nested control-flow blocks may use @return@ as a value-producing tail.
     seqStmts = filter (not . isReturn) statements
     returns = [(args, sp) | SReturn args sp <- statements]
 
-    final = checkSeq ctx path sections initial seqStmts
+    final = checkSeq ctx path sections initial TopLevel seqStmts
 
     finalEnv = mkEnv ctx path sections (bsRoots final)
     returnErrs = checkReturnRule finalEnv path sig returns (bsLastResult final)
@@ -167,30 +166,41 @@ duplicateIdErrors path statements =
 
 -- Statement-sequence checking (§5.6, §13) -----------------------------------
 
+-- | Whether a statement list is the top-level workflow/tool body or nested
+-- inside control-flow (§4, §5.6.5).
+data BlockKind = TopLevel | Nested
+
 -- | Check a sequence of statements, threading the binding environment forward.
-checkSeq :: CheckCtx -> FilePath -> [Section] -> BodyState -> [Statement] -> BodyState
-checkSeq ctx path sections = foldl' (checkStmt ctx path sections)
+checkSeq :: CheckCtx -> FilePath -> [Section] -> BodyState -> BlockKind -> [Statement] -> BodyState
+checkSeq ctx path sections st kind = foldl' (checkStmt ctx path sections kind) st
 
 -- | Check one statement, dispatching on its kind.
-checkStmt :: CheckCtx -> FilePath -> [Section] -> BodyState -> Statement -> BodyState
-checkStmt ctx path sections st = \case
+checkStmt :: CheckCtx -> FilePath -> [Section] -> BlockKind -> BodyState -> Statement -> BodyState
+checkStmt ctx path sections kind st = \case
   SStep s -> checkStep ctx path sections st s
   SIf s -> checkIf ctx path sections st s
   SLoop s -> checkLoop ctx path sections st s
   SWhile s -> checkWhile ctx path sections st s
   STry s -> checkTry ctx path sections st s
-  SReturn _ sp ->
-    st
-      { bsErrors =
-          bsErrors st
-            <> [ typeError
-                   path
-                   (spanStart sp)
-                   ReturnRule
-                   "a 'return' block is only allowed at the top level of a workflow body, not inside a control-flow block (§13)"
-               ],
-        bsLastResult = Nothing
-      }
+  SReturn args sp ->
+    case kind of
+      TopLevel ->
+        st
+          { bsErrors =
+              bsErrors st
+                <> [ typeError
+                       path
+                       (spanStart sp)
+                       ReturnRule
+                       "a 'return' block is only allowed at the top level of a workflow body, not inside a control-flow block (§13)"
+                   ],
+            bsLastResult = Nothing
+          }
+      Nested ->
+        let env = mkEnv ctx path sections (bsRoots st)
+         in case inferReturnRecordType env args of
+              Left es -> st {bsErrors = bsErrors st <> es}
+              Right t -> st {bsLastResult = Just t}
 
 -- | Check a nested block in a /child/ scope (§13). Enclosing binds and roots
 -- are visible inside the block, but inner binds do not escape: only the
@@ -219,7 +229,7 @@ checkChild ctx path sections parent extraRoots extraBound stmts =
           bsSteps = [],
           bsLastResult = Nothing
         }
-    res = checkSeq ctx path sections child stmts
+    res = checkSeq ctx path sections child Nested stmts
 
 -- | Check an @if@\/@else@ statement (§13). The condition must be @Bool@. An
 -- @if@ that binds a value requires an @else@ branch whose tail type
@@ -281,7 +291,7 @@ checkIf ctx path sections st s =
                   path
                   pos
                   ReturnRule
-                  "each branch of a value-binding 'if' must end in a value-producing statement (§13)"
+                  "each branch of a value-binding 'if' must end in a value-producing statement or 'return' (§13)"
               ]
             )
 
@@ -334,7 +344,7 @@ checkTry ctx path sections st s =
                 path
                 pos
                 ReturnRule
-                "each arm of a value-binding 'try' must end in a value-producing statement (§4.4)"
+                "each arm of a value-binding 'try' must end in a value-producing statement or 'return' (§4.4)"
             ]
           )
 
@@ -398,7 +408,7 @@ checkLoop ctx path sections st s =
                 path
                 pos
                 ReturnRule
-                ("the body of a value-binding '" <> kindLabel <> "' must end in a value-producing statement (§13)")
+                ("the body of a value-binding '" <> kindLabel <> "' must end in a value-producing statement or 'return' (§13)")
             ]
           )
 
@@ -1074,6 +1084,17 @@ bindResult path pos binder resultType st =
         ("bind name '" <> n <> "' shadows " <> what <> " (no shadowing, §3.4)")
 
 -- Return rule (§5.6.5) ------------------------------------------------------
+
+-- | Infer the record type of a nested @return { … }@ from its field expressions.
+inferReturnRecordType :: Env -> [Arg] -> Either [TypeError] Type
+inferReturnRecordType _ [] = Right (TyRecord [])
+inferReturnRecordType env args = go args []
+  where
+    go [] acc = Right (TyRecord (reverse acc))
+    go (a : as) acc =
+      case inferExpr env (spanStart (argSpan a)) (argValue a) of
+        Left es -> Left es
+        Right t -> go as ((argName a, t) : acc)
 
 checkReturnRule ::
   Env ->

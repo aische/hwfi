@@ -15,6 +15,9 @@ local filesystem mode.
 
 ## Done recently
 
+- **`return` in control-flow blocks** — checker allows nested `return { … }` as
+  iteration/branch tail (runtime already supported). Tests in ControlFlowSpec;
+  semantic-check example simplified (removed spread/error/warning helper tools).
 - **Semantic review example** — `examples/semantic-check`: layer 0
   (`check-project`, entrypoint coverage) + layer 1 (nested `foreach` step-metadata
   scan + grep prose hints). Nested-loop docs/tests in workflow-reference /

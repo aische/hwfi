@@ -74,8 +74,6 @@ their result (`inner <- foreach …`), not appear as bare statements — see
 - Prose qname resolution still uses `grep` hints; `resolve-qnames-in-text` will
   replace the interim pass.
 - Corpus quality (layer 2) and LLM pragmatics (layer 3) are not wired here.
-- Loop bodies cannot use `return`; use value-producing step calls (helper tools
-  like `tools/spread-finding` wrap records for nested collection).
 
 ## Related
 

@@ -56,6 +56,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **`return` in control-flow blocks (2026-07-14):** Nested loop/branch bodies
+  may end with `return { … }`; top-level return rule unchanged. semantic-check
+  loops inlined; helper tools removed.
 - **Per-transition stepping (2026-07-14):** `DriveOneBatch` halts after each
   `Stepped` outcome; agent loops step per model/tool call.
 - **`hwfi run --step` (2026-07-14):** `performRunMode` + `--step` flag.

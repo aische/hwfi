@@ -9,7 +9,6 @@ outputs:
   agent: types/finding-matrix
 imports:
   - tools/unresolved-finding
-  - tools/spread-finding
 ---
 
 ## flow
@@ -29,7 +28,14 @@ bare <- foreach mention in ${inputs.step.bare_qnames} {
     suggestion = "Import the declaration, fix the typo, or remove the reference"
   ) @bare
   inner <- foreach f in ${pack.findings} {
-    row <- tools/spread-finding(finding = ${f}) @row
+    return {
+      severity = ${f.severity},
+      category = ${f.category},
+      location = ${f.location},
+      claim = ${f.claim},
+      evidence = ${f.evidence},
+      suggestion = ${f.suggestion}
+    }
   } @inner
 } @bare_loop
 
@@ -44,7 +50,14 @@ agent <- foreach tool in ${inputs.step.agent_tools} {
     suggestion = "Add the tool to imports and the project, or remove it from the agent tools list"
   ) @tool
   inner <- foreach f in ${pack.findings} {
-    row <- tools/spread-finding(finding = ${f}) @row
+    return {
+      severity = ${f.severity},
+      category = ${f.category},
+      location = ${f.location},
+      claim = ${f.claim},
+      evidence = ${f.evidence},
+      suggestion = ${f.suggestion}
+    }
   } @inner
 } @agent_loop
 

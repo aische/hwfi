@@ -637,8 +637,9 @@ matrix <- foreach group in ${inputs.groups} {
   (`List<List<U>>`).
 - Step `@id`s may repeat across nesting levels; the executor disambiguates them
   via iteration-scoped prefixes (§4.1, §8.1).
-- Bodies still cannot use `return` (§5.6.5); end each body with a value-producing
-  step call or nested control-flow binding.
+- Bodies still end with a value-producing step call, a nested control-flow
+  binding, or a `return { … }` record (§5.6.5). Top-level workflow `return`
+  still validates against declared `outputs`.
 
 ### `par`
 

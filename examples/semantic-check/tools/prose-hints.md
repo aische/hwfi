@@ -5,8 +5,6 @@ outputs:
   findings: List<types/finding>
 imports:
   - builtin/grep
-  - builtin/record-map
-  - tools/prose-hint-finding
 ---
 
 ## flow
@@ -19,15 +17,16 @@ hits <- builtin/grep(
   path = "."
 ) @grep
 
-rows <- foreach hit in ${hits.matches} {
-  row <- tools/prose-hint-finding(
-    file = ${hit.file},
-    line = ${hit.line},
-    text = ${hit.text}
-  ) @row
+findings <- foreach hit in ${hits.matches} {
+  return {
+    severity = "info",
+    category = "dead_reference",
+    location = { file = ${hit.file}, section = "" },
+    claim = "Prose or step block mentions a qname-like token",
+    evidence = ${hit.text},
+    suggestion = "Confirm the mention resolves; replace grep hints with resolve-qnames-in-text when available"
+  }
 } @rows
 
-picked <- builtin/record-map(items = ${rows}, field = "finding") @pick
-
-return { findings = ${picked.values} }
+return { findings = ${findings} }
 ```
