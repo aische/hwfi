@@ -18,7 +18,7 @@ There is no `steps/` directory in the v2 runtime.
 
 ## How resume works
 
-1. `hwfi run` (or `hwfi continue`) loads `machine.json` if
+1. `hwfi run` (or `hwfi resume`) loads `machine.json` if
    present and the run is resumable (`run.json.status ∈ {running, crashed,
    aborted}`).
 2. The runtime checks `project_hash` in `run.json` against the current project.
@@ -77,7 +77,7 @@ Shows the trace with secrets redacted.
 
 ```bash
 hwfi run <project-dir> <workspace-dir> <run-id> ...
-hwfi continue <workspace-dir> <run-id>    # run to completion from snapshot
+hwfi resume <workspace-dir> <run-id>    # run to completion from snapshot
 hwfi step <workspace-dir> <run-id>      # one transition batch, then pause
 ```
 

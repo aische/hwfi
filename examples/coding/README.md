@@ -4,7 +4,7 @@ Demonstrates the M7 capabilities: filesystem **mutation** builtins (spec §6.2)
 and allowlisted command **execution** (`builtin/exec`, spec §6.3, §7.5), in both
 a fixed *scripted* workflow and an *agentic* coding loop. Used in
 [docs/tutorials/03-agent.md](../../docs/tutorials/03-agent.md) and
-[04-show-and-continue.md](../../docs/tutorials/04-show-and-continue.md).
+[04-show-and-resume.md](../../docs/tutorials/04-show-and-resume.md).
 
 Two entrypoints:
 
@@ -95,7 +95,7 @@ edits the file, and re-runs until the check exits 0.
 If a run is interrupted and resumed:
 
 ```bash
-cabal run hwfi -- continue /tmp/coding-ws <run-id>
+cabal run hwfi -- resume /tmp/coding-ws <run-id>
 ```
 
 completed transitions are reflected in `machine.json` — edits and commands are

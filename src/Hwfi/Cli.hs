@@ -5,18 +5,18 @@
 -- @
 -- hwfi check   \<project-dir>
 -- hwfi run      \<project-dir> --workspace \<dir> ...
--- hwfi continue \<workspace-dir> \<run-id> [--approve]
+-- hwfi resume   \<workspace-dir> \<run-id> [--approve]
 -- hwfi step     \<workspace-dir> \<run-id> [--approve]
 -- hwfi show    \<workspace-dir> \<run-id>
 -- @
 --
 -- @hwfi check@ parses and type-checks the project (spec §9, §7.3, A1/A2).
--- @run@, @continue@, @step@, and @show@ are fully implemented.
+-- @run@, @resume@, @step@, and @show@ are fully implemented.
 module Hwfi.Cli
   ( Command (..),
     CheckOpts (..),
     RunOpts (..),
-    ContinueOpts (..),
+    ResumeOpts (..),
     StepOpts (..),
     ShowOpts (..),
     InputArg (..),
@@ -91,7 +91,7 @@ import System.Random (randomRIO)
 data Command
   = Check CheckOpts
   | Run RunOpts
-  | Continue ContinueOpts
+  | Resume ResumeOpts
   | Step StepOpts
   | Show ShowOpts
   deriving stock (Eq, Show)
@@ -113,17 +113,17 @@ data RunOpts = RunOpts
   }
   deriving stock (Eq, Show)
 
--- | @hwfi continue \<workspace-dir> \<run-id>@ (v2 runtime).
-data ContinueOpts = ContinueOpts
-  { continueWorkspace :: FilePath,
-    continueRunId :: Text,
-    continueApprove :: Bool
+-- | @hwfi resume \<workspace-dir> \<run-id>@ (v2 runtime).
+data ResumeOpts = ResumeOpts
+  { resumeWorkspace :: FilePath,
+    resumeRunId :: Text,
+    resumeApprove :: Bool
   }
   deriving stock (Eq, Show)
 
 -- | @hwfi step \<workspace-dir> \<run-id>@ — one step-batch (v2 runtime).
 newtype StepOpts = StepOpts
-  { stepContinue :: ContinueOpts
+  { stepResume :: ResumeOpts
   }
   deriving stock (Eq, Show)
 
@@ -170,7 +170,7 @@ commandParser =
   hsubparser
     ( command "check" (info (Check <$> checkOpts) (progDesc "Parse and type-check a project"))
         <> command "run" (info (Run <$> runOpts) (progDesc "Run a workflow project"))
-        <> command "continue" (info (Continue <$> continueOpts) (progDesc "Continue a v2 run from its machine snapshot"))
+        <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume a v2 run from its machine snapshot"))
         <> command "step" (info (Step <$> stepOpts) (progDesc "Advance a v2 run until the next halt point"))
         <> command "show" (info (Show <$> showOpts) (progDesc "Pretty-print a run's trace"))
     )
@@ -194,15 +194,15 @@ runOpts =
     <*> optional (strOption (long "input-json" <> metavar "FILE" <> help "Supply the whole inputs record as JSON"))
     <*> optional (fmap T.pack (strOption (long "entry" <> metavar "QNAME" <> help "Override project.json entrypoint")))
 
-continueOpts :: Parser ContinueOpts
-continueOpts =
-  ContinueOpts
+resumeOpts :: Parser ResumeOpts
+resumeOpts =
+  ResumeOpts
     <$> strArgument (metavar "WORKSPACE-DIR" <> help "Workspace directory of the run")
-    <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to continue"))
+    <*> fmap T.pack (strArgument (metavar "RUN-ID" <> help "Run id to resume"))
     <*> switch (long "approve" <> help "Approve the active exec confirm gate before stepping")
 
 stepOpts :: Parser StepOpts
-stepOpts = StepOpts <$> continueOpts
+stepOpts = StepOpts <$> resumeOpts
 
 showOpts :: Parser ShowOpts
 showOpts =
@@ -220,7 +220,7 @@ dispatch :: Command -> IO ()
 dispatch = \case
   Check opts -> runCheck opts
   Run opts -> runRun opts
-  Continue opts -> runContinue opts
+  Resume opts -> runResume opts
   Step opts -> runStep opts
   Show opts -> runShow opts
 
@@ -327,7 +327,7 @@ runChecked opts dir tp catalog = do
 entrypointInputs :: QName -> TypedProject -> Maybe [(Ident, Type)]
 entrypointInputs entry tp = rsigInputs . tdSignature <$> lookupTyped entry tp
 
--- | Print the outcome of a run/continue and exit. Orchestration failures (lock
+-- | Print the outcome of a run/resume and exit. Orchestration failures (lock
 -- busy, non-resumable, etc.) and workflow errors both exit non-zero.
 finishRun :: Either Text RunResult -> IO ()
 finishRun = \case
@@ -344,30 +344,30 @@ finishRun = \case
       Left _ -> "paused"
       Right _ -> "completed"
 
--- | Run @hwfi continue@ (v2 runtime): reload machine snapshot and drive.
-runContinue :: ContinueOpts -> IO ()
-runContinue opts =
-  runContinueMode opts False
+-- | Run @hwfi resume@ (v2 runtime): reload machine snapshot and drive.
+runResume :: ResumeOpts -> IO ()
+runResume opts =
+  runResumeMode opts False
 
 -- | Run @hwfi step@ — one step-batch until halt.
 runStep :: StepOpts -> IO ()
 runStep opts =
-  runContinueMode opts.stepContinue True
+  runResumeMode opts.stepResume True
 
-runContinueMode :: ContinueOpts -> Bool -> IO ()
-runContinueMode opts stepBatch = do
-  workspace <- newWorkspace opts.continueWorkspace
-  eStore <- openRunStore (workspaceRoot workspace) opts.continueRunId
+runResumeMode :: ResumeOpts -> Bool -> IO ()
+runResumeMode opts stepBatch = do
+  workspace <- newWorkspace opts.resumeWorkspace
+  eStore <- openRunStore (workspaceRoot workspace) opts.resumeRunId
   case eStore of
     Left e -> failMsgs ["error: " <> e]
     Right store -> do
       eMeta <- readRunMeta store
       case eMeta of
         Left e -> failMsgs ["error: " <> e]
-        Right meta -> continueChecked workspace meta opts.continueApprove stepBatch
+        Right meta -> resumeChecked workspace meta opts.resumeApprove stepBatch
 
-continueChecked :: Workspace -> RunMeta -> Bool -> Bool -> IO ()
-continueChecked workspace meta approve stepBatch = do
+resumeChecked :: Workspace -> RunMeta -> Bool -> Bool -> IO ()
+resumeChecked workspace meta approve stepBatch = do
   let dir = T.unpack meta.rmProjectDir
   eproj <- loadProject dir
   case eproj of

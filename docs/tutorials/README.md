@@ -11,7 +11,7 @@ for detail.
 | 1 | [Hello](01-hello.md) | [`examples/hello`](../../examples/hello) | No |
 | 2 | [Check](02-check.md) | same project | No |
 | 3 | [Agent](03-agent.md) | [`examples/coding`](../../examples/coding) | Yes |
-| 4 | [Show and continue](04-show-and-continue.md) | [`examples/coding`](../../examples/coding) | Optional |
+| 4 | [Show and resume](04-show-and-resume.md) | [`examples/coding`](../../examples/coding) | Optional |
 
 **Optional next steps** (not part of the core path):
 

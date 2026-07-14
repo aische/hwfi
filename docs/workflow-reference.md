@@ -869,7 +869,7 @@ hwfi run <project-dir> --workspace <dir> \
 ### Resume
 
 ```bash
-hwfi continue <workspace-dir> <run-id>
+hwfi resume <workspace-dir> <run-id>
 ```
 
 Continues from the `machine.json` snapshot. Completed transitions are not

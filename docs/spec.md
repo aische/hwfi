@@ -2289,10 +2289,10 @@ Author-facing guide: [caching-and-resume.md](caching-and-resume.md).
 
 - **Machine snapshot.** After each completed transition (and on step-batch
   pause), the runtime writes `machine.json` — cursor (`StmtPath`), frames,
-  bindings, `current` (agent / `par` / confirm), and status. `hwfi continue`
+  bindings, `current` (agent / `par` / confirm), and status. `hwfi resume`
   / `hwfi step` reload this snapshot and call `stepMachine` until the
   requested stop condition.
-- **Project staleness.** Continue is refused when `project_hash` in `run.json`
+- **Project staleness.** Resume is refused when `project_hash` in `run.json`
   differs from the current project directory hash; start a new run id.
 - **No step-key skip.** Completed work is represented in the snapshot; there
   is no lookup of `steps/<step-key>.json` on resume (M6).
@@ -2739,7 +2739,7 @@ hwfi run     <project-dir> --workspace <dir>
              [--input <k>=<v>]... [--input <k>=@<file.json>]...
              [--input-json <file.json>]
              [--entry <qname>]
-hwfi continue  <workspace-dir> <run-id>         # resume from machine.json
+hwfi resume  <workspace-dir> <run-id>          # resume from machine.json
 hwfi step    <workspace-dir> <run-id>          # one transition batch, then pause
 hwfi show    <workspace-dir> <run-id>          # pretty-print trace + usage
 ```

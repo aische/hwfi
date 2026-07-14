@@ -124,7 +124,7 @@ is authoritative.
 | **M1** | `stepMachine` for sequential statements + builtins |
 | **M2** | Agent as `Current` states; drop agent sub-key replay |
 | **M3** | `FrPar` + cooperative confirm + branch snapshots |
-| **M4** | CLI `step` / `continue`; replace `performResume` |
+| **M4** | CLI `step` / `resume`; replace `performResume` |
 | **M6** | Remove step-key cache path, update spec §8 (**done**) |
 | **M5** | `ProjectStore` DB + server API (optional; deferred) |
 

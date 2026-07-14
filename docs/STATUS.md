@@ -13,7 +13,7 @@ local filesystem mode.
 ## Done recently
 
 - **CLI UX** — `hwfi run` prints `run-id` on stderr; bare `hwfi` shows help;
-  removed `resume` alias (use `continue`).
+  resume command is `hwfi resume` (replaces `continue`).
 - **Resume robustness** — Collapse step dispatch into one transition; skip
   persisting `CurDispatch`; checkpoint before agent LLM/tool I/O; flush snapshot
   on crash/interrupt.
