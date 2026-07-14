@@ -47,6 +47,7 @@ import Hwfi.Runtime.EvalWorkflow (EvalWorkflowSeam (..), runEvalWorkflow)
 import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.ParseMarkdown (runParseMarkdown)
+import Hwfi.Runtime.TextCorpus (runTextMetrics, runTextSearchCorpus, runTextSimilarity)
 import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
 import Hwfi.Runtime.Skills (discoverSkillsResult, loadSkillScripted)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, sliceTrace, snapshotEvents)
@@ -128,6 +129,9 @@ runBuiltin env q args = case renderQName q of
   "builtin/load-skill" -> loadSkillTool env args
   "builtin/check-project" -> runCheckProject (beWorkspace env) args
   "builtin/parse-markdown" -> runParseMarkdown (beWorkspace env) args
+  "builtin/text-metrics" -> runTextMetrics args
+  "builtin/text-similarity" -> runTextSimilarity args
+  "builtin/text-search-corpus" -> runTextSearchCorpus args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))
 
 -- File I/O -------------------------------------------------------------------

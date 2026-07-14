@@ -29,6 +29,9 @@ module Hwfi.Check.Builtins
     loadSkillQName,
     checkProjectQName,
     parseMarkdownQName,
+    textMetricsQName,
+    textSimilarityQName,
+    textSearchCorpusQName,
     isAgentBuiltin,
     isRecordPlumbingBuiltin,
     isOneShotLlmBuiltin,
@@ -136,6 +139,18 @@ checkProjectQName = qnameFromText "builtin/check-project"
 parseMarkdownQName :: QName
 parseMarkdownQName = qnameFromText "builtin/parse-markdown"
 
+-- | Text corpus metrics for semantic review (§13.1.8).
+textMetricsQName :: QName
+textMetricsQName = qnameFromText "builtin/text-metrics"
+
+-- | Pairwise text similarity for semantic review (§13.1.8).
+textSimilarityQName :: QName
+textSimilarityQName = qnameFromText "builtin/text-similarity"
+
+-- | Corpus overlap clustering for semantic review (§13.1.8).
+textSearchCorpusQName :: QName
+textSearchCorpusQName = qnameFromText "builtin/text-search-corpus"
+
 stepSummaryTy :: Type
 stepSummaryTy =
   TyRecord
@@ -173,6 +188,21 @@ markdownFenceTy =
   TyRecord
     [ ("lang", TyString),
       ("body", TyString)
+    ]
+
+corpusDocumentTy :: Type
+corpusDocumentTy =
+  TyRecord
+    [ ("id", TyString),
+      ("text", TyString)
+    ]
+
+corpusClusterTy :: Type
+corpusClusterTy =
+  TyRecord
+    [ ("members", TyList TyString),
+      ("score", TyDouble),
+      ("span", TyString)
     ]
 
 -- | Whether a qname is one of the agentic tool-use builtins (§6.1). These need
@@ -385,7 +415,37 @@ builtinCallees =
           ("sections", TyList markdownSectionTy),
           ("fences", TyList markdownFenceTy),
           ("error", TyString)
+        ],
+      builtin
+        "builtin/text-metrics"
+        [("text", TyString), ("tokenize", TyString)]
+        [ ("chars", TyInt),
+          ("tokens", TyInt),
+          ("lines", TyInt),
+          ("paragraphs", TyInt),
+          ("shannon_entropy", TyDouble),
+          ("compression_ratio", TyDouble)
+        ],
+      builtin
+        "builtin/text-similarity"
+        [ ("left", TyString),
+          ("right", TyString),
+          ("method", TyString),
+          ("ngram", TyInt)
         ]
+        [ ("score", TyDouble),
+          ("method", TyString),
+          ("left_tokens", TyInt),
+          ("right_tokens", TyInt)
+        ],
+      builtin
+        "builtin/text-search-corpus"
+        [ ("documents", TyList corpusDocumentTy),
+          ("method", TyString),
+          ("threshold", TyDouble),
+          ("ngram", TyInt)
+        ]
+        [("clusters", TyList corpusClusterTy)]
     ]
   where
     builtin name ins outs = (qnameFromText name, Callee ins outs)

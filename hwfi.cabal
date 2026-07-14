@@ -80,6 +80,7 @@ library
         Hwfi.Runtime.MachinePath
         Hwfi.Runtime.MachineSnapshot
         Hwfi.Runtime.ParseMarkdown
+        Hwfi.Runtime.TextCorpus
         Hwfi.Runtime.StepDriver
         Hwfi.Runtime.StepEnv
         Hwfi.Runtime.Gateways
@@ -98,6 +99,7 @@ library
         Hwfi.Runtime.Value
         Hwfi.Runtime.Workspace
         Hwfi.Source
+        Hwfi.Text.Corpus
         Hwfi.Type
         Hwfi.Ast.Tool
         Hwfi.TypedProject
@@ -127,7 +129,8 @@ library
         typed-process        >=0.2  && <0.3,
         unliftio             >=0.2  && <0.3,
         vector               >=0.12 && <0.14,
-        yaml                 >=0.11 && <0.12
+        yaml                 >=0.11 && <0.12,
+        zlib                 >=0.6  && <0.8
 
 executable hwfi
     import:           opts
@@ -169,6 +172,8 @@ test-suite hwfi-test
         Hwfi.Runtime.DataPlumbingSpec
         Hwfi.Runtime.CheckProjectSpec
         Hwfi.Runtime.ParseMarkdownSpec
+        Hwfi.Runtime.TextCorpusSpec
+        Hwfi.Text.CorpusSpec
         Hwfi.Runtime.EvalSpec
         Hwfi.Runtime.EvalWorkflowSpec
         Hwfi.Runtime.ExecSpec

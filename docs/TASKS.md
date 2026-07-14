@@ -21,9 +21,9 @@ a **workflow**, not engine logic. Builtins are general-purpose primitives.
 
 ### Tier 2 — text corpus analysis
 
-- [ ] `builtin/text-metrics` — entropy, compression ratio, token counts
-- [ ] `builtin/text-similarity` — Jaccard / LCS pairwise similarity
-- [ ] `builtin/text-search-corpus` — overlap clusters across documents
+- [x] `builtin/text-metrics` — entropy, compression ratio, token counts
+- [x] `builtin/text-similarity` — Jaccard / LCS pairwise similarity
+- [x] `builtin/text-search-corpus` — overlap clusters across documents
 
 ### Tier 3 — graph and reference utilities
 
