@@ -14,18 +14,7 @@ Design: [semantic-check-design.md](semantic-check-design.md) (§Experimental tra
 Policy stays in `examples/semantic-check`; engine exposes general-purpose
 primitives only. Entropy and speech-act heuristics are **signals, not verdicts**.
 
-**Done foundation:** layers 0–1 wired; Tier 1–2 builtins + `resolve-qnames-in-text`.
-
-### E1 — Layer 2 corpus wiring *(implement first)*
-
-Wire existing Tier 2 builtins into the example workflow; no new engine code
-required except workflow types/tools.
-
-- [ ] `types/corpus-profile` — per-slice metrics row (`location`, `shannon_entropy`, `compression_ratio`, `tokens`, …)
-- [ ] `tools/corpus-profile` — `parse-markdown` sections → `text-metrics` per slice
-- [ ] `tools/corpus-clusters` — `text-search-corpus` over agent/tool/skill bodies
-- [ ] `tools/corpus-hints` — outlier + redundancy findings from metrics + clusters
-- [ ] Extend `tools/semantic-review` — add `corpus_profile`, `corpus_hints`; schema `semantic-report/v1`
+**Done foundation:** layers 0–2 wired; Tier 1–2 builtins + `resolve-qnames-in-text`.
 
 ### E2 — Speech-act heuristics *(deterministic, no LLM)*
 
@@ -47,7 +36,7 @@ LLM only on slices flagged by E1/E2; bounded cost.
 - [ ] Workflow input `mode` — `strict` (skip LLM) vs `exploratory` (run layer 3)
 - [ ] Report field `pragmatic_findings`
 
-### E4 — Graph layer *(after E1; parallel with E2/E3)*
+### E4 — Graph layer *(parallel with E2/E3)*
 
 Structural graph analysis on `check-project` output.
 
@@ -76,6 +65,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **E1 layer 2 corpus wiring (2026-07-14):** `types/corpus-profile`, `types/corpus-slice`,
+  `tools/corpus-profile`, `tools/corpus-clusters`, `tools/corpus-hints`; report
+  `semantic-report/v1` with `corpus_profile` + `corpus_hints`.
 - **Semantic review engine primitives (2026-07-14):** Tier 1 (`check-project`,
   `parse-markdown`), Tier 2 (`text-metrics`, `text-similarity`,
   `text-search-corpus`), `resolve-qnames-in-text`, `list-concat`.

@@ -6,3 +6,4 @@ dist-newstyle/
 .env
 dumps/
 tmp/
+.hwfi/

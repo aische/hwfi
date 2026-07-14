@@ -1,4 +1,4 @@
-# `semantic-check` — semantic review workflow (layers 0–1)
+# `semantic-check` — semantic review workflow (layers 0–2)
 
 An ordinary hwfi workflow that reviews another project in its **workspace**.
 Demonstrates the architecture from [semantic-check-design.md](../../docs/semantic-check-design.md):
@@ -14,8 +14,11 @@ Given a target project root in the workspace:
    (`bare_qnames`, static `agent_tools`) resolved against the project catalog
    plus shipped builtins; prose scan via `resolve-qnames-in-text` on markdown
    sections (skips ` ```step ` fences and shipped builtins).
+3. **Layer 2 — Corpus:** `parse-markdown` section bodies → `text-metrics` per
+   slice; `text-search-corpus` clusters; entropy/compression outlier and
+   redundancy hints (signals, not verdicts).
 
-Writes `semantic-report.json` into the workspace (`semantic-report/v0`).
+Writes `semantic-report.json` into the workspace (`semantic-report/v1`).
 
 No LLM calls — runs without API keys.
 
@@ -25,12 +28,10 @@ See [TASKS.md](../../docs/TASKS.md) and design doc §Experimental track.
 
 | Phase | Adds |
 |-------|------|
-| **E1** | Layer 2 corpus profile, clusters, hints (entropy + similarity) |
+| **E1** | Layer 2 corpus profile, clusters, hints *(done)* |
 | **E2** | Speech-act pattern tagger + step↔agent alignment |
 | **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) |
 | **E4** | Graph findings (cycles, orphans, reachability) |
-
-Target report schema: `semantic-report/v1` after E1–E2.
 
 ## Prerequisites
 
@@ -62,7 +63,7 @@ cabal run hwfi -- run examples/semantic-check \
 On success the workflow prints `{ "report_path": "semantic-report.json", "ok": … }`
 and the workspace contains `semantic-report.json`.
 
-## Report shape (v0)
+## Report shape (v1)
 
 | Field | Content |
 |-------|---------|
@@ -71,6 +72,8 @@ and the workspace contains `semantic-report.json`.
 | `entry_findings` | Entrypoint not in declarations |
 | `prose_hints` | Unresolved qname mentions in markdown prose (layer 1) |
 | `step_referential` | Nested per-decl/per-step referential scan (`bare` / `agent` matrices) |
+| `corpus_profile` | Per-section metrics rows (layer 2; not findings) |
+| `corpus_hints` | Entropy/compression outliers, similarity clusters (layer 2) |
 
 Each finding uses `types/finding`: severity, category, location, claim,
 evidence, suggestion.

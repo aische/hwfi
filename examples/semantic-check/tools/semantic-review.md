@@ -7,7 +7,12 @@ outputs:
   report_text: String
 imports:
   - builtin/concat
+  - builtin/record-map
   - tools/build-catalog
+  - tools/corpus-clusters
+  - tools/corpus-hints
+  - tools/corpus-profile
+  - tools/corpus-profile-public
   - tools/entry-finding
   - tools/prose-hints
   - tools/referential-scan
@@ -15,7 +20,7 @@ imports:
 
 ## flow
 
-Layers 0–1 semantic review over a `check-project` result.
+Layers 0–2 semantic review over a `check-project` result.
 
 ```step
 catalog_pack <- tools/build-catalog(declarations = ${inputs.project.declarations}) @catalog
@@ -54,9 +59,27 @@ ref_pack <- tools/referential-scan(
   catalog = ${catalog_pack.catalog}
 ) @refs
 
+corpus_pack <- tools/corpus-profile(
+  declarations = ${inputs.project.declarations}
+) @corpus
+
+cluster_pack <- tools/corpus-clusters(slices = ${corpus_pack.slices}) @clusters
+
+hint_pack <- tools/corpus-hints(
+  slices = ${corpus_pack.slices},
+  clusters = ${cluster_pack.clusters}
+) @hints
+
+profile_rows <- foreach slice in ${corpus_pack.slices} {
+  pack <- tools/corpus-profile-public(slice = ${slice}) @row
+  return { row = ${pack.row} }
+} @profile
+
+profile_layers <- builtin/record-map(items = ${profile_rows}, field = "row") @pick
+
 report_text <- builtin/concat(parts = [
   "{\n",
-  "  \"schema\": \"semantic-report/v0\",\n",
+  "  \"schema\": \"semantic-report/v1\",\n",
   "  \"entry\": \"", ${inputs.entry}, "\",\n",
   "  \"ok\": ", "${inputs.project.ok}", ",\n",
   "  \"check_error\": \"", ${inputs.project.error}, "\",\n",
@@ -64,7 +87,9 @@ report_text <- builtin/concat(parts = [
   "  \"structural_warnings\": ", "${structural_warnings}", ",\n",
   "  \"entry_findings\": ", "${entry_pack.findings}", ",\n",
   "  \"prose_hints\": ", "${prose_pack.findings}", ",\n",
-  "  \"step_referential\": ", "${ref_pack.step_results}", "\n",
+  "  \"step_referential\": ", "${ref_pack.step_results}", ",\n",
+  "  \"corpus_profile\": ", "${profile_layers.values}", ",\n",
+  "  \"corpus_hints\": ", "${hint_pack.findings}", "\n",
   "}\n"
 ]) @report
 
