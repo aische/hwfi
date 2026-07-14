@@ -41,12 +41,12 @@ review <- tools/semantic-review(
 ) @review
 
 _ <- builtin/write-file(
-  path = "semantic-report.json",
+  path = ".hwfi/runs/${ctx.run.id}/semantic-report.json",
   text = ${review.report_text}
 ) @write
 
 return {
-  report_path = "semantic-report.json",
+  report_path = ".hwfi/runs/${ctx.run.id}/semantic-report.json",
   ok = ${project.ok},
   check_error = ${project.error}
 }

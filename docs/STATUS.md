@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 ## Current focus
 
@@ -14,11 +14,12 @@ strict/exploratory, `pragmatic_findings`). Next: graph layer (`graph-*`,
 
 ## Done recently
 
+- **Semantic report per run** — `semantic-check` writes
+  `.hwfi/runs/<run-id>/semantic-report.json` (provenance with trace/inputs).
 - **E3 gated LLM pragmatics** — `review-gate`, `pragmatic-review`; report fields
   `mode`, `review_gate`, `pragmatic_findings`; `mode=exploratory` + schema input.
 - **E2 speech-act heuristics** — scan/align; `speech_act_hints`; `split-text`,
   `text-grep`.
-- **E1 layer 2 wiring** — corpus profile, clusters, hints in v1 report.
 
 ## Blockers
 

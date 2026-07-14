@@ -23,7 +23,8 @@ Given a target project root in the workspace:
 5. **Layer 3 — Pragmatics (optional):** when `mode=exploratory`, union gate
    signals from layers 2 / 2b → bounded `llm-gen-object` review per slice.
 
-Writes `semantic-report.json` into the workspace (`semantic-report/v1`).
+Writes `.hwfi/runs/<run-id>/semantic-report.json` in the workspace
+(`semantic-report/v1`). Each run keeps its own report alongside `trace.jsonl`.
 
 **Strict mode** (default) runs without API keys. **Exploratory mode** requires a
 model catalog and provider (see below).
@@ -82,8 +83,10 @@ cabal run hwfi -- run examples/semantic-check \
   --input schema=null
 ```
 
-On success the workflow prints `{ "report_path": "semantic-report.json", "ok": … }`
-and the workspace contains `semantic-report.json`.
+On success the workflow prints
+`{ "report_path": ".hwfi/runs/<run-id>/semantic-report.json", "ok": … }`.
+The report lives under that run directory in the workspace (same `run-id` as
+stderr / `hwfi show`).
 
 ## Report shape (v1)
 

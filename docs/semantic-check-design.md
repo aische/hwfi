@@ -81,7 +81,7 @@ flowchart TB
   L2 --> GATE
   L2b --> GATE
   GATE --> L3
-  L2 --> OUT["semantic-report.json"]
+  L2 --> OUT[".hwfi/runs/<run-id>/semantic-report.json"]
   L2b --> OUT
   L3 --> OUT
   L4 --> OUT
@@ -202,8 +202,8 @@ The checker workflow owns the output schema. Suggested starting shape:
 }
 ```
 
-Emit via `write-file` or `llm-gen-object` into the workspace (e.g.
-`semantic-report.json`).
+Emit via `write-file` into the active run directory (e.g.
+`.hwfi/runs/<run-id>/semantic-report.json`).
 
 ### Report schema versions
 
