@@ -1,4 +1,4 @@
-# `semantic-check` — semantic review workflow (layers 0–2)
+# `semantic-check` — semantic review workflow (layers 0–3)
 
 An ordinary hwfi workflow that reviews another project in its **workspace**.
 Demonstrates the architecture from [semantic-check-design.md](../../docs/semantic-check-design.md):
@@ -20,10 +20,13 @@ Given a target project root in the workspace:
 4. **Layer 2b — Speech acts:** `split-text` + `text-grep` tag illocutionary
    force per sentence; align `llm-agent` tool lists to agent-section directives;
    emit `speech_act_hints` (bare directives, coverage gaps, declarative role cues).
+5. **Layer 3 — Pragmatics (optional):** when `mode=exploratory`, union gate
+   signals from layers 2 / 2b → bounded `llm-gen-object` review per slice.
 
 Writes `semantic-report.json` into the workspace (`semantic-report/v1`).
 
-No LLM calls — runs without API keys.
+**Strict mode** (default) runs without API keys. **Exploratory mode** requires a
+model catalog and provider (see below).
 
 ## Roadmap (experimental track)
 
@@ -33,12 +36,15 @@ See [TASKS.md](../../docs/TASKS.md) and design doc §Experimental track.
 |-------|------|
 | **E1** | Layer 2 corpus profile, clusters, hints *(done)* |
 | **E2** | Speech-act pattern tagger + step↔agent alignment *(done)* |
-| **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) |
+| **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) *(done)* |
 | **E4** | Graph findings (cycles, orphans, reachability) |
 
 ## Prerequisites
 
-None.
+- **Strict:** none.
+- **Exploratory:** `model-catalog.json` + provider (default: local Ollama
+  `llama3.2:latest` as catalog entry `fast`). Pass
+  `--input schema=@examples/semantic-check/pragmatic-schema.json`.
 
 ## Running
 
@@ -48,10 +54,21 @@ Point the workspace at the project you want reviewed. The checker loads from
 ```bash
 cabal run hwfi -- check examples/semantic-check
 
+# Strict (no LLM) — default for CI
 cabal run hwfi -- run examples/semantic-check \
   --workspace examples/hello \
   --input path=. \
-  --input entry=workflows/main
+  --input entry=workflows/main \
+  --input mode=strict \
+  --input schema=null
+
+# Exploratory (gated LLM on flagged slices, max 8)
+cabal run hwfi -- run examples/semantic-check \
+  --workspace examples/hello \
+  --input path=. \
+  --input entry=workflows/main \
+  --input mode=exploratory \
+  --input schema=@examples/semantic-check/pragmatic-schema.json
 ```
 
 Review a project with a type error:
@@ -60,7 +77,9 @@ Review a project with a type error:
 cabal run hwfi -- run examples/semantic-check \
   --workspace test/fixtures/check/type-mismatch \
   --input path=. \
-  --input entry=workflows/main
+  --input entry=workflows/main \
+  --input mode=strict \
+  --input schema=null
 ```
 
 On success the workflow prints `{ "report_path": "semantic-report.json", "ok": … }`
@@ -70,6 +89,8 @@ and the workspace contains `semantic-report.json`.
 
 | Field | Content |
 |-------|---------|
+| `mode` | `strict` or `exploratory` |
+| `review_gate` | Slice ids selected for layer 3 (exploratory only) |
 | `structural_errors` | Type/parse failures (layer 0) |
 | `structural_warnings` | Checker warnings |
 | `entry_findings` | Entrypoint not in declarations |
@@ -78,6 +99,7 @@ and the workspace contains `semantic-report.json`.
 | `corpus_profile` | Per-section metrics rows (layer 2; not findings) |
 | `corpus_hints` | Entropy/compression outliers, similarity clusters (layer 2) |
 | `speech_act_hints` | Illocutionary alignment hints (layer 2b) |
+| `pragmatic_findings` | LLM judgments (exploratory mode only; may vary between runs) |
 
 Each finding uses `types/finding`: severity, category, location, claim,
 evidence, suggestion.

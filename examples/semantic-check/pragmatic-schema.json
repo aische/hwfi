@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "illocutionary_force": {
+      "type": "string",
+      "enum": ["directive", "assertive", "commissive", "declarative", "mixed", "unknown"]
+    },
+    "felicity_violations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "contradictions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "other_location": { "type": "string" },
+          "evidence": { "type": "string" }
+        },
+        "required": ["other_location", "evidence"]
+      }
+    },
+    "clarity_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": ["illocutionary_force", "felicity_violations", "contradictions", "clarity_score"]
+}

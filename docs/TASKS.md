@@ -14,18 +14,8 @@ Design: [semantic-check-design.md](semantic-check-design.md) (§Experimental tra
 Policy stays in `examples/semantic-check`; engine exposes general-purpose
 primitives only. Entropy and speech-act heuristics are **signals, not verdicts**.
 
-**Done foundation:** layers 0–2b wired; Tier 1–2 builtins + `resolve-qnames-in-text`,
-`split-text`, `text-grep`.
-
-### E3 — Layer 3 pragmatic LLM pass *(gated)*
-
-LLM only on slices flagged by E1/E2; bounded cost.
-
-- [ ] `builtin/split-text` — sentence/paragraph chunks for act tagging + LLM context
-- [ ] `tools/review-gate` — union entropy outliers, similarity pairs, speech-act mismatches
-- [ ] `tools/pragmatic-review` — `llm-gen-object` with fixed contradiction/clarity schema
-- [ ] Workflow input `mode` — `strict` (skip LLM) vs `exploratory` (run layer 3)
-- [ ] Report field `pragmatic_findings`
+**Done foundation:** layers 0–2b + gated layer 3; Tier 1–2 builtins +
+`resolve-qnames-in-text`, `split-text`, `text-grep`.
 
 ### E4 — Graph layer *(parallel with E2/E3)*
 
@@ -37,7 +27,7 @@ Structural graph analysis on `check-project` output.
 - [ ] `tools/graph-findings` — orphans, import cycles, unreachable from entry
 - [ ] Report field `graph_findings`
 
-### Engine backlog (deferred until E3/E4 need them)
+### Engine backlog (deferred until E4 need them)
 
 - [ ] `builtin/diff-text`
 - [ ] `builtin/json-validate`
@@ -56,6 +46,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **E3 layer 3 gated LLM (2026-07-14):** `tools/review-gate`, `tools/pragmatic-review`,
+  `types/review-gate-item`, `pragmatic-schema.json`; workflow inputs `mode` +
+  `schema`; report `mode`, `review_gate`, `pragmatic_findings`.
 - **E2 speech-act heuristics (2026-07-14):** `types/speech-act-tag`,
   `types/speech-act-hint`; `tools/speech-act-scan`, `tools/speech-act-align`
   (+ pattern/align helpers); report `speech_act_hints`; engine
