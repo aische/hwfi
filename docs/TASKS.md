@@ -40,7 +40,7 @@ a **workflow**, not engine logic. Builtins are general-purpose primitives.
 
 ### Example workflow (after Tier 1)
 
-- [ ] `examples/semantic-check` — layers 0–1 review; `semantic-report.json` output
+- [x] `examples/semantic-check` — layers 0–1 review; `semantic-report.json` output
 
 ## Next — v1.1 (paused during v2)
 
