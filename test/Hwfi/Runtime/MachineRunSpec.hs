@@ -6,7 +6,7 @@ import Hwfi.Ast.Name (Ident, qnameFromText)
 import Hwfi.Check (checkProject)
 import Hwfi.Parse.Project (loadProject)
 import Hwfi.Runtime.RunCommon (RunResult (..))
-import Hwfi.Runtime.MachineRun (DriveMode (..), performContinueToEnd, performRun, performRunMode)
+import Hwfi.Runtime.MachineRun (DriveMode (..), performContinueToEnd, performRun, performRunMode, performStep)
 import Hwfi.Runtime.RunStore (hasMachineSnapshot, openRunStore, rsRunDir)
 import Hwfi.Runtime.Value (RValue (..))
 import Hwfi.Runtime.Workspace (newWorkspace, workspaceRoot)
@@ -53,7 +53,7 @@ spec =
                 Left err -> err `shouldSatisfy` ("not resumable" `T.isInfixOf`)
                 Right _ -> expectationFailure "completed run should not be continuable"
 
-    it "performRunMode DriveOneBatch completes a simple sequential workflow" $
+    it "performRunMode DriveOneBatch halts after each transition" $
       withSystemTempDirectory "hwfi-m4-proj" $ \proj ->
         withSystemTempDirectory "hwfi-m4-ws" $ \ws -> do
           createDirectoryIfMissing True (proj </> "workflows")
@@ -68,8 +68,13 @@ spec =
           r1 <- performRunMode tp workspace Map.empty Map.empty proj runId entry inputs DriveOneBatch
           case r1 of
             Left err -> expectationFailure (T.unpack err)
+            Right res ->
+              rrHalted res `shouldBe` True
+          r2 <- performStep tp workspace Map.empty Map.empty runId False
+          case r2 of
+            Left err -> expectationFailure (T.unpack err)
             Right res
-              | rrHalted res -> expectationFailure "expected completed run for single-step workflow"
+              | rrHalted res -> expectationFailure "expected completed run after return transition"
               | otherwise ->
                   case rrOutcome res of
                     Left e -> expectationFailure (show e)

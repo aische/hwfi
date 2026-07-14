@@ -123,7 +123,7 @@ data ResumeOpts = ResumeOpts
   }
   deriving stock (Eq, Show)
 
--- | @hwfi step \<workspace-dir> \<run-id>@ — one step-batch (v2 runtime).
+-- | @hwfi step \<workspace-dir> \<run-id>@ — one transition (v2 runtime).
 newtype StepOpts = StepOpts
   { stepResume :: ResumeOpts
   }
@@ -173,7 +173,7 @@ commandParser =
     ( command "check" (info (Check <$> checkOpts) (progDesc "Parse and type-check a project"))
         <> command "run" (info (Run <$> runOpts) (progDesc "Run a workflow project"))
         <> command "resume" (info (Resume <$> resumeOpts) (progDesc "Resume a v2 run from its machine snapshot"))
-        <> command "step" (info (Step <$> stepOpts) (progDesc "Advance a v2 run until the next halt point"))
+        <> command "step" (info (Step <$> stepOpts) (progDesc "Advance a v2 run by one transition"))
         <> command "show" (info (Show <$> showOpts) (progDesc "Pretty-print a run's trace"))
     )
 
@@ -195,7 +195,7 @@ runOpts =
       )
     <*> optional (strOption (long "input-json" <> metavar "FILE" <> help "Supply the whole inputs record as JSON"))
     <*> optional (fmap T.pack (strOption (long "entry" <> metavar "QNAME" <> help "Override project.json entrypoint")))
-    <*> switch (long "step" <> help "Create the run and halt after the first transition batch")
+    <*> switch (long "step" <> help "Create the run and halt after the first transition")
 
 resumeOpts :: Parser ResumeOpts
 resumeOpts =
@@ -354,7 +354,7 @@ runResume :: ResumeOpts -> IO ()
 runResume opts =
   runResumeMode opts False
 
--- | Run @hwfi step@ — one step-batch until halt.
+-- | Run @hwfi step@ — one transition, then halt.
 runStep :: StepOpts -> IO ()
 runStep opts =
   runResumeMode opts.stepResume True

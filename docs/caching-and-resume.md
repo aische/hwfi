@@ -79,13 +79,17 @@ Shows the trace with secrets redacted.
 hwfi run <project-dir> --workspace <workspace-dir>
              [--step] ...
 hwfi resume <workspace-dir> <run-id>    # run to completion from snapshot
-hwfi step <workspace-dir> <run-id>      # one transition batch, then pause
+hwfi step <workspace-dir> <run-id>      # one transition, then pause
 ```
 
 `hwfi run --step` creates a new run (prints `run-id` on stderr) and halts after
-the first step-batch — the same stop condition as `hwfi step`. Use it to start
+the first transition — the same stop condition as `hwfi step`. Use it to start
 stepping without interrupting a full `run`. Repeat with `hwfi step` until done, or
 use `hwfi resume` to finish in one go.
+
+Each step executes exactly **one transition** (workflow statement, agent model
+call, agent tool call, or control-flow tick). Agent loops in `llm-agent` steps
+are stepped round-by-round and tool-by-tool.
 
 `hwfi cache clear` and `hwfi cache invalidate` were removed with the v2
 cutover (M6). To force a clean retry, use a new `run-id`.

@@ -12,17 +12,14 @@ local filesystem mode.
 
 ## Done recently
 
-- **`hwfi run --step`** — start a new run and halt after the first step-batch
-  (same stop condition as `hwfi step`); no Ctrl+C needed to begin stepping.
-- **CLI UX** — `hwfi run` prints `run-id` on stderr; bare `hwfi` shows help;
-  resume command is `hwfi resume` (replaces `continue`).
-- **Resume robustness** — Collapse step dispatch into one transition; skip
-  persisting `CurDispatch`; checkpoint before agent LLM/tool I/O; flush snapshot
-  on crash/interrupt.
-- **Resume snapshot fix** — Tagged `RValue` encoding in `machine.json` preserves
-  typed bindings (`VRecord`/`VString`/…).
-- **M6 cleanup** — Purged stale step-cache docs/examples; fixed runtime
-  comments; wired `cacheable` trace flags from checker.
+- **Per-transition stepping** — `hwfi step` / `hwfi run --step` halt after each
+  transition (workflow statement, agent model call, or agent tool call).
+- **`hwfi run --step`** — start stepping without Ctrl+C; prints `run-id` on stderr.
+- **CLI UX** — bare `hwfi` shows help; resume command is `hwfi resume`.
+- **Resume robustness** — Collapse step dispatch into one transition; checkpoint
+  before agent LLM/tool I/O; flush snapshot on crash/interrupt.
+- **Resume snapshot fix** — Tagged `RValue` encoding in `machine.json`.
+- **M6 cleanup** — Purged stale step-cache docs/examples.
 
 ## Blockers
 

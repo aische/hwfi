@@ -42,7 +42,7 @@ Each run directory contains `run.json`, `machine.json`, and `trace.jsonl`.
 
 ### Stepping from the start
 
-To drive a run one batch at a time (without interrupting a full `run`):
+To drive a run one transition at a time (without interrupting a full `run`):
 
 ```bash
 cabal run hwfi -- run examples/coding \
@@ -52,12 +52,14 @@ cabal run hwfi -- run examples/coding \
 # run-id: … on stderr; stdout: run halted (status: paused)
 
 export RUN_ID=$(ls /tmp/resume-ws/.hwfi/runs/ | head -1)
-cabal run hwfi -- step /tmp/resume-ws $RUN_ID    # repeat until done
+cabal run hwfi -- step /tmp/resume-ws $RUN_ID    # one transition per call
 # or: cabal run hwfi -- resume /tmp/resume-ws $RUN_ID
 ```
 
-A step-batch runs until the next halt point (confirm gate, `par` join boundary,
-or run end). Simple sequential workflows may finish in the first batch.
+Each `step` runs exactly **one transition**: a workflow statement, an agent
+model call, an agent tool call, or a control-flow tick. For `llm-agent` steps
+(like `examples/coding` `workflows/fix` or `examples/ship` `workflows/build`),
+that means you can step through the tool loop round-by-round.
 
 ## 2. Inspect the trace
 

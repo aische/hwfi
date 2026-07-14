@@ -187,7 +187,7 @@ performContinue tp ws models envVars runId approve mode =
         Left e -> pure (Left e)
         Right store -> continueWith tp ws models envVars runId store approve mode
 
--- | Drive one step-batch until halt, confirm, par wave boundary, or completion.
+-- | Drive one transition in step mode, then halt (or complete on final return).
 performStep ::
   TypedProject ->
   Workspace ->
@@ -332,7 +332,9 @@ drive env store machineRef machine mode = loop machine
           case outcome of
             Left err -> pure (Left err)
             Right done -> case done of
-              Stepped m' -> loop m'
+              Stepped m'
+                | mode == DriveOneBatch -> pure (Right (StepHalted m'))
+                | otherwise -> loop m'
               finished -> pure (Right finished)
 
 persistSnapshot :: RunStore -> IORef Machine -> StepEnv -> Either RuntimeError StepOutcome -> IO ()

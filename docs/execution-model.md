@@ -30,8 +30,9 @@ Crash or explicit pause persists state **after** a completed transition, or
 **before** starting the next. A transition interrupted mid-flight (e.g. kill
 during HTTP) is re-run on resume.
 
-CLI/API `step` runs until: `paused`, `awaiting_confirm`, `par` join boundary
-(relaxed stepping), or run end.
+CLI/API `step` runs **one transition**, then halts (or completes the run when
+the transition is the final `return`). Agent loops step per model call or tool
+call. `par` confirm gates still pause with `awaiting_confirm` until `--approve`.
 
 ## Machine shape
 

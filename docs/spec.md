@@ -2741,12 +2741,13 @@ hwfi run     <project-dir> --workspace <dir>
              [--entry <qname>]
              [--step]
 hwfi resume  <workspace-dir> <run-id>          # resume from machine.json
-hwfi step    <workspace-dir> <run-id>          # one transition batch, then pause
+hwfi step    <workspace-dir> <run-id>          # one transition, then pause
 hwfi show    <workspace-dir> <run-id>          # pretty-print trace + usage
 ```
 
-`hwfi run --step` creates a new run and halts after the first step-batch (same
-stop condition as `hwfi step`). Prints `run-id` on stderr.
+`hwfi run --step` creates a new run and halts after the first transition (same
+stop condition as `hwfi step`). Prints `run-id` on stderr. Agent loops step per
+model call or tool call.
 
 `hwfi show` prints the run's accumulated `usage` (tokens and `cost_usd`) from
 `run.json` after the trace. Resume continues from `machine.json` (§8.2); there
