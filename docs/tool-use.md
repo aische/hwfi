@@ -301,19 +301,16 @@ builtin/llm-agent :
 
 The `tools` argument uses hwfi's existing first-class `ToolRef`/`WorkflowRef`
 values (`Hwfi.Type.TyToolRef`/`TyWorkflowRef`, resolved to `VRef` at
-runtime). The executor's `dispatch` already knows how to call a `VRef`
-target:
+runtime). The v2 step driver's `dispatchCall` already knows how to call a
+`VRef` target:
 
-```414:422:src/Hwfi/Runtime/Executor.hs
-dispatch rt stepRef bindings target argMap
+```339:345:src/Hwfi/Runtime/StepDriver.hs
+resolveDispatchTarget machine target
   | isBareQName target =
-      case Map.lookup (bareIdent target) bindings of
-        Just (VRef _ realQ) -> dispatchResolved rt stepRef bindings realQ argMap
-        Just _ ->
-          pure (Left (evalError ("'" <> renderQName target <> "' is not a callable ref value")))
-        Nothing ->
-          pure (Left (evalError ("call target '" <> renderQName target <> "' is not bound")))
-  | otherwise = dispatchResolved rt stepRef bindings target argMap
+      case Map.lookup (bareIdent target) (mBindings machine) of
+        Just (VRef _ realQ) -> Right realQ
+        Just _ -> Left (evalError ("'" <> renderQName target <> "' is not a callable ref value"))
+        Nothing -> Left (evalError ("call target '" <> renderQName target <> "' is not bound"))
 ```
 
 So passing declared tools/workflows to the model as a list of refs is
@@ -322,11 +319,11 @@ type-safe and reuses existing dispatch. This is the natural way to say
 
 Following §3.1–§3.2, the agent loop should **not** live in `Builtins.hs`
 behind a callback. `runBuiltin` only receives a `BuiltinEnv`; a
-model-chosen call needs the full `Runtime`. Implement the agent step in the
-executor, and model that a chosen tool call produces a reified
-"run this ref" step that the executor runs like any nested workflow (so its
-`step-start`/`step-end` events nest under the agent step, §8.3.3.6), rather
-than an opaque IO callback.
+model-chosen call needs the full step environment. Implement the agent step
+in `MachineAgent` / `StepDriver`, and model that a chosen tool call produces
+a reified "run this ref" step that the driver runs like any nested workflow
+(so its `step-start`/`step-end` events nest under the agent step, §8.3.3.6),
+rather than an opaque IO callback.
 
 ### 4.2 Signature → JSON-schema translation
 

@@ -7,11 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Planned as **0.2.0.0** — breaking runtime and CLI changes. Upgrading from
+0.1.0.0: see **Removed** and **Changed** below; v1 run workspaces (`steps/`
+cache) cannot be resumed on v2.
+
+### Added
+
+- v2 machine runtime (`Machine`, `MachineRun`, `StepDriver`, `MachineAgent`,
+  `MachineSnapshot`) with cursor + frames execution model — see
+  [execution-model.md](docs/execution-model.md).
+- `machine.json` snapshot persisted after each transition (and on pause/crash).
+- `hwfi step <workspace> <run-id>` — advance one transition then halt (workflow
+  statement, agent model call, or agent tool call).
+- `hwfi run --step` — create a run and halt after the first transition.
+- `--approve` on `hwfi resume` / `hwfi step` for exec confirm gates inside `par`.
+- Tagged `RValue` encoding in `machine.json` (fixes typed binding restore on
+  resume).
+- Checkpoint before agent LLM/tool I/O; snapshot flush on crash/interrupt.
+
 ### Changed
 
-- v2 resume cleanup: removed stale step-cache docs/comments; runtime emits
-  static `cacheable` flags from checker classification; dropped unused
-  `aeStepKey` / `atFingerprint` agent fields.
+- Resume is **machine-snapshot based** (`machine.json` + `trace.jsonl`), not
+  content-addressed `steps/<step-key>.json` lookup.
+- Agent resume carries `CurAgent` state in the snapshot (no per-round sub-key
+  replay under `steps/`).
+- `while` predicate `continue` decisions replay from `trace.jsonl` (`while-pred`
+  events).
+- CLI primary resume command is `hwfi resume` (replaces v1 `hwfi continue`).
+- Bare `hwfi` invocation prints help; `hwfi run` prints `run-id` on stderr.
+- Runtime emits static `cacheable` flags from checker classification in trace
+  events; dropped unused `aeStepKey` / `atFingerprint` agent fields.
+
+### Removed
+
+- `Executor` runtime and `steps/` per-step result cache.
+- `hwfi cache clear` and `hwfi cache invalidate` subcommands.
+- Intra-step agent sub-key caching under `steps/` (legacy v1 resume path).
+
+### Fixed
+
+- Resume snapshot bindings preserve `VRecord`/`VString` types (not coerced to
+  `VJson`).
+- Collapsed `CurReady` → step dispatch into one transition (no `CurDispatch`
+  gap before agent entry).
+- `par` exec confirm: `ConfirmHold` for stepping, `ConfirmAuto` for run-to-end.
 
 ## [0.1.0.0] - 2026-07-10
 

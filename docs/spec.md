@@ -3109,7 +3109,7 @@ walker; catalog entries for callable workflow skills under `skills/`.
 | H1.2 | §7.1, §6.2 | **done** — `resolveContainedPath`; `WorkspaceSpec` symlink tests |
 | H1.3 | §8.1, §7.3 | **done** — model-catalog fingerprint in one-shot LLM step-keys |
 | H1.4 | §4.1 | **done** — sub-workflow scope threading; `ControlFlowSpec` |
-| H1.5 | §8.2, §8.3.2 | **done** — `guardedFinish` crash path; `ExecutorSpec` |
+| H1.5 | §8.2, §8.3.2 | **done** — `finishCrash` in `MachineRun`; `MachineRunSpec`, `ControlFlowSpec` |
 
 **Deferred hardening** (acceptable for v1; track in [TASKS.md](TASKS.md) if
 needed): O(n²) `ctx.trace` rebuild per step (§8.3.5, perf); O(n²)

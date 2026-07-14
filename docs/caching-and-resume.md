@@ -6,6 +6,18 @@ trace — not from a content-addressed step cache.
 
 Normative detail: spec §8, [execution-model.md](execution-model.md).
 
+## Upgrading from 0.1.0.0
+
+v0.2.0.0 (see [CHANGELOG.md](../CHANGELOG.md)) replaces the v1 `steps/`
+cache with `machine.json` snapshots. **Runs created under 0.1.0.0 cannot be
+resumed** on the v2 runtime — start a new `run-id`. CLI changes:
+
+| 0.1.0.0 | v2 |
+|---------|-----|
+| `hwfi resume` (step-cache replay) | `hwfi resume` (loads `machine.json`) |
+| `hwfi cache clear` / `cache invalidate` | removed |
+| — | `hwfi step`, `hwfi run --step` |
+
 ## Run artifacts
 
 ```

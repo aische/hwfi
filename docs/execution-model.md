@@ -98,7 +98,8 @@ One JSON blob per persisted point (every transition, or on pause/crash flush):
 run_snapshots(run_id, seq, snapshot_json, at)
 ```
 
-Legacy `steps/<step-key>.json` skip-as-resume is **deprecated** by this model.
+Legacy `steps/<step-key>.json` skip-as-resume was **removed** in M6 (v0.2.0.0).
+See [caching-and-resume.md § Upgrading](caching-and-resume.md#upgrading-from-0100).
 
 ### Trace (audit)
 
@@ -119,15 +120,18 @@ is authoritative.
 
 ## Migration plan
 
-| Phase | Deliverable |
-|-------|-------------|
-| **M0** (now) | `Machine` types, `StmtPath`, snapshot JSON, tests |
-| **M1** | `stepMachine` for sequential statements + builtins |
-| **M2** | Agent as `Current` states; drop agent sub-key replay |
-| **M3** | `FrPar` + cooperative confirm + branch snapshots |
-| **M4** | CLI `step` / `resume`; replace `performResume` |
-| **M6** | Remove step-key cache path, update spec §8 (**done**) |
-| **M5** | `ProjectStore` DB + server API (optional; deferred) |
+All phases through **M6** are complete (2026-07-14). **M5** (DB / server store)
+remains optional and deferred.
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| **M0** | `Machine` types, `StmtPath`, snapshot JSON, tests | done |
+| **M1** | `stepMachine` for sequential statements + builtins | done |
+| **M2** | Agent as `Current` states; drop agent sub-key replay | done |
+| **M3** | `FrPar` + cooperative confirm + branch snapshots | done |
+| **M4** | CLI `hwfi step` / `hwfi resume`; replace cache-as-resume | done |
+| **M6** | Remove step-key cache path, update spec §8 | done |
+| **M5** | `ProjectStore` DB + server API | deferred |
 
 ## Modules
 

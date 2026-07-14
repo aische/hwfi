@@ -206,7 +206,7 @@ Author runs `hwfi check`, commits the file. On the next run the agent can
 |------|---------|
 | Catalog | `Parse/Project`, `Check`, new `SkillCatalog` |
 | Builtins | `Builtins`, `Check/Builtins` |
-| Agent loop | `Agent`, `Executor` (checkpoint, tool expansion) |
+| Agent loop | `MachineAgent`, `StepDriver` (checkpoint, tool expansion) |
 | Trace | `Trace` (`skill-discover`, `skill-load` events) |
 | Checker | `Check/Decl` (instruction files, runtime `tools` list) |
 

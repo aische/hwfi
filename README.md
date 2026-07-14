@@ -3,11 +3,14 @@
 A command-line workflow engine: projects are **markdown + JSON**, type-checked
 before run, executed in a sandboxed workspace with **durable traces and resume**.
 
-> **Version 0.1.0.0 (first release).** The [tutorials](docs/tutorials/README.md)
-> core path is `examples/hello` and `examples/coding/fix`. Some examples —
-> notably [`examples/ship`](examples/ship) — are experimental reference
-> orchestrations (check-only in the test suite; live runs are costly and
-> non-deterministic).
+> **Unreleased (planned 0.2.0.0):** v2 runtime with `machine.json` resume.
+> Breaking changes from 0.1.0.0 — see [CHANGELOG.md](CHANGELOG.md). v1 run
+> workspaces (`steps/` cache) cannot be resumed on v2.
+>
+> The [tutorials](docs/tutorials/README.md) core path is `examples/hello` and
+> `examples/coding/fix`. Some examples — notably
+> [`examples/ship`](examples/ship) — are experimental reference orchestrations
+> (check-only in the test suite; live runs are costly and non-deterministic).
 
 ## Features
 
@@ -122,6 +125,14 @@ Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
 - [CHANGELOG.md](CHANGELOG.md) — release history
 - [docs/TASKS.md](docs/TASKS.md) — active backlog
 - [docs/STATUS.md](docs/STATUS.md) — current focus
+
+## Upgrading from 0.1.0.0
+
+v2 replaces step-cache resume with `machine.json` snapshots. Removed:
+`hwfi cache clear`, `hwfi cache invalidate`, and the `steps/` directory under
+each run. Existing 0.1.0.0 runs cannot be resumed — start a new `run-id`.
+Details: [caching-and-resume.md](docs/caching-and-resume.md#upgrading-from-0100),
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Remaining limitations
 

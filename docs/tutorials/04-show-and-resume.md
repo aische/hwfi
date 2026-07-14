@@ -141,7 +141,8 @@ start a new run id.
 For a clean slate without project edits, use a new workspace directory or a new
 `run-id` under the same workspace.
 
-`hwfi cache clear` and `hwfi cache invalidate` were removed in the v2 runtime.
+**Upgrading from 0.1.0.0:** v1 `steps/` cache resume and `hwfi cache *`
+commands were removed. See [caching-and-resume.md § Upgrading](../caching-and-resume.md#upgrading-from-0100).
 
 ## 5. Workspace vs snapshot
 

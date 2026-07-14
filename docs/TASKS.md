@@ -32,9 +32,9 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
   `hwfi cache clear|invalidate`); single v2 path via `MachineRun` +
   `machine.json`; migrated tests; rewrote spec §8 / caching docs; while-pred
   replay from trace; control-flow trace parity.
-- **M4 (2026-07-13):** CLI `step` / `continue` (+ `resume` alias); v2 default
-  runtime via `MachineRun` — `machine.json` snapshot persistence, project-hash
-  staleness gate, `performContinueToEnd` / `performStep`.
+- **M4 (2026-07-13):** CLI `hwfi step` / `hwfi resume`; v2 default runtime via
+  `MachineRun` — `machine.json` snapshot persistence, project-hash staleness
+  gate, `performContinueToEnd` / `performStep`.
 - **M3 (2026-07-13):** Real `par` + cooperative confirm + per-branch snapshots.
 - **M2 (2026-07-13):** Agent `CurAgent` in `stepMachine`; snapshot resume.
 - **M1 (2026-07-13):** Sequential `stepMachine`; control flow; `StepEnv`.

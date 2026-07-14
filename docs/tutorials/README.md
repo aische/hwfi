@@ -35,5 +35,5 @@ for detail.
 
 - Use a **scratch workspace** under `/tmp/` — never run against the repo tree.
 - Run `hwfi check` before `hwfi run` — the checker is your compile step.
-- Normative detail lives in [spec.md](../spec.md); cache semantics in
+- Normative detail lives in [spec.md](../spec.md); resume semantics in
   [caching-and-resume.md](../caching-and-resume.md).

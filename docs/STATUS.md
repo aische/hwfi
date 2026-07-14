@@ -12,6 +12,9 @@ local filesystem mode.
 
 ## Done recently
 
+- **Merge-prep docs** — CHANGELOG `[Unreleased]` (0.2.0.0 breaking changes),
+  upgrade guide in `caching-and-resume.md` / README; fixed stale `Executor`
+  references in spec, tool-use, skills-design.
 - **Per-transition stepping** — `hwfi step` / `hwfi run --step` halt after each
   transition (workflow statement, agent model call, or agent tool call).
 - **`hwfi run --step`** — start stepping without Ctrl+C; prints `run-id` on stderr.
