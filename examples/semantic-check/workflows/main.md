@@ -22,6 +22,8 @@ Layer 0 uses `builtin/check-project` for parse/type diagnostics. Layer 1 walks
 step metadata with nested `foreach` and scans prose via
 `resolve-qnames-in-text`. Layer 2 profiles section metrics, clusters similar
 slices, and emits corpus hints (entropy/compression outliers, redundancy).
+Layer 2b tags illocutionary force in prose and aligns agent steps to section
+directives.
 
 ## flow
 

@@ -32,6 +32,8 @@ module Hwfi.Check.Builtins
     textMetricsQName,
     textSimilarityQName,
     textSearchCorpusQName,
+    splitTextQName,
+    textGrepQName,
     resolveQnamesInTextQName,
     listConcatQName,
     isAgentBuiltin,
@@ -152,6 +154,12 @@ textSimilarityQName = qnameFromText "builtin/text-similarity"
 -- | Corpus overlap clustering for semantic review (§13.1.8).
 textSearchCorpusQName :: QName
 textSearchCorpusQName = qnameFromText "builtin/text-search-corpus"
+
+splitTextQName :: QName
+splitTextQName = qnameFromText "builtin/split-text"
+
+textGrepQName :: QName
+textGrepQName = qnameFromText "builtin/text-grep"
 
 resolveQnamesInTextQName :: QName
 resolveQnamesInTextQName = qnameFromText "builtin/resolve-qnames-in-text"
@@ -462,6 +470,18 @@ builtinCallees =
           ("ngram", TyInt)
         ]
         [("clusters", TyList corpusClusterTy)],
+      builtin
+        "builtin/split-text"
+        [ ("text", TyString),
+          ("max_chars", TyInt),
+          ("overlap", TyInt),
+          ("split_on", TyString)
+        ]
+        [("chunks", TyList TyString)],
+      builtin
+        "builtin/text-grep"
+        [("text", TyString), ("pattern", TyString)]
+        [("matches", TyList TyString)],
       builtin
         "builtin/resolve-qnames-in-text"
         [ ("text", TyString),

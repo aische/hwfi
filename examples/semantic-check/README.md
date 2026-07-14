@@ -17,6 +17,9 @@ Given a target project root in the workspace:
 3. **Layer 2 — Corpus:** `parse-markdown` section bodies → `text-metrics` per
    slice; `text-search-corpus` clusters; entropy/compression outlier and
    redundancy hints (signals, not verdicts).
+4. **Layer 2b — Speech acts:** `split-text` + `text-grep` tag illocutionary
+   force per sentence; align `llm-agent` tool lists to agent-section directives;
+   emit `speech_act_hints` (bare directives, coverage gaps, declarative role cues).
 
 Writes `semantic-report.json` into the workspace (`semantic-report/v1`).
 
@@ -29,7 +32,7 @@ See [TASKS.md](../../docs/TASKS.md) and design doc §Experimental track.
 | Phase | Adds |
 |-------|------|
 | **E1** | Layer 2 corpus profile, clusters, hints *(done)* |
-| **E2** | Speech-act pattern tagger + step↔agent alignment |
+| **E2** | Speech-act pattern tagger + step↔agent alignment *(done)* |
 | **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) |
 | **E4** | Graph findings (cycles, orphans, reachability) |
 
@@ -74,6 +77,7 @@ and the workspace contains `semantic-report.json`.
 | `step_referential` | Nested per-decl/per-step referential scan (`bare` / `agent` matrices) |
 | `corpus_profile` | Per-section metrics rows (layer 2; not findings) |
 | `corpus_hints` | Entropy/compression outliers, similarity clusters (layer 2) |
+| `speech_act_hints` | Illocutionary alignment hints (layer 2b) |
 
 Each finding uses `types/finding`: severity, category, location, claim,
 evidence, suggestion.

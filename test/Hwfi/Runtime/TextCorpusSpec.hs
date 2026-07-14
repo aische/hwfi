@@ -5,7 +5,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
-import Hwfi.Check.Builtins (textMetricsQName, textSearchCorpusQName, textSimilarityQName)
+import Hwfi.Check.Builtins (splitTextQName, textGrepQName, textMetricsQName, textSearchCorpusQName, textSimilarityQName)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (RuntimeError, StepRef (..))
@@ -58,6 +58,46 @@ spec = describe "Tier 2 text corpus builtins (§13.1.8)" $ do
             Map.lookup "score" m `shouldSatisfy` isDouble
             Map.lookup "left_tokens" m `shouldBe` Just (VInt 3)
             Map.lookup "right_tokens" m `shouldBe` Just (VInt 3)
+          other -> fail ("unexpected result: " <> show other)
+
+  describe "builtin/split-text" $ do
+    it "splits prose into sentences" $
+      withHarness $ \run -> do
+        result <-
+          run
+            splitTextQName
+            ( Map.fromList
+                [ ("text", VString "Do this. Then that!"),
+                  ("max_chars", VInt 0),
+                  ("overlap", VInt 0),
+                  ("split_on", VString "sentence")
+                ]
+            )
+        case result of
+          Right (VRecord m) ->
+            case Map.lookup "chunks" m of
+              Just (VList [VString a, VString b]) -> do
+                a `shouldBe` "Do this."
+                b `shouldBe` "Then that!"
+              other -> fail ("unexpected chunks: " <> show other)
+          other -> fail ("unexpected result: " <> show other)
+
+  describe "builtin/text-grep" $ do
+    it "returns lines that match a regex pattern" $
+      withHarness $ \run -> do
+        result <-
+          run
+            textGrepQName
+            ( Map.fromList
+                [ ("text", VString "plain\nmust verify\nplain"),
+                  ("pattern", VString "\\bmust\\b")
+                ]
+            )
+        case result of
+          Right (VRecord m) ->
+            case Map.lookup "matches" m of
+              Just (VList [VString line]) -> line `shouldBe` "must verify"
+              other -> fail ("unexpected matches: " <> show other)
           other -> fail ("unexpected result: " <> show other)
 
   describe "builtin/text-search-corpus" $ do

@@ -2,6 +2,7 @@
 module Hwfi.Text.Corpus
   ( TokenizeMode (..),
     SimilarityMethod (..),
+    SplitOn (..),
     TextMetrics (..),
     SimilarityResult (..),
     CorpusCluster (..),
@@ -9,6 +10,8 @@ module Hwfi.Text.Corpus
     textMetrics,
     textSimilarity,
     searchCorpus,
+    splitText,
+    grepTextLines,
   )
 where
 
@@ -21,11 +24,16 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Text.Regex.TDFA (CompOption (..), defaultCompOpt, defaultExecOpt, matchTest)
+import Text.Regex.TDFA.String (compile)
 
 data TokenizeMode = TokenizeChar | TokenizeWord | TokenizeLine
   deriving stock (Eq, Show)
 
 data SimilarityMethod = SimilarityJaccard | SimilarityLcs
+  deriving stock (Eq, Show)
+
+data SplitOn = SplitOnParagraph | SplitOnSentence | SplitOnChar
   deriving stock (Eq, Show)
 
 data TextMetrics = TextMetrics
@@ -84,6 +92,71 @@ textSimilarity left right method ngram =
     score = case method of
       SimilarityJaccard -> jaccardScore left right ngram
       SimilarityLcs -> lcsRatio left right
+
+splitText :: Text -> Int -> Int -> SplitOn -> [Text]
+splitText text maxChars overlap mode =
+  case mode of
+    SplitOnParagraph -> filter (not . T.null) (map T.strip (T.splitOn "\n\n" (T.strip text)))
+    SplitOnSentence -> splitSentences text
+    SplitOnChar -> splitChars text maxChars overlap
+
+grepTextLines :: Text -> Text -> Either Text [Text]
+grepTextLines rawPattern text =
+  let (pattern, opts) = patternOpts rawPattern
+   in case compile opts defaultExecOpt (T.unpack pattern) of
+        Left err -> Left (T.pack err)
+        Right regex ->
+          let lineMatches =
+                filter (\line -> matchTest regex (T.unpack line)) (T.lines text)
+           in Right lineMatches
+
+patternOpts :: Text -> (Text, CompOption)
+patternOpts pat =
+  case T.stripPrefix "(?i)" pat of
+    Just rest -> (rest, defaultCompOpt)
+    Nothing -> (pat, defaultCompOpt)
+
+splitSentences :: Text -> [Text]
+splitSentences text =
+  filter (not . T.null . T.strip) (map T.strip (consume (T.unpack text) [] []))
+  where
+    punct :: [Char]
+    punct = ['.', '!', '?']
+
+    space :: [Char]
+    space = [' ', '\n', '\t']
+
+    consume [] acc cur =
+      let sent = T.pack (reverse cur)
+       in if not (null acc)
+            then reverse acc
+            else
+              if T.null (T.strip sent)
+                then []
+                else [T.strip sent]
+    consume (c : cs) acc cur
+      | c `elem` punct && (null cs || head cs `elem` space) =
+          let sent = T.pack (reverse (c : cur))
+              rest = dropWhile (`elem` space) cs
+           in if T.null (T.strip sent)
+                then consume rest acc []
+                else consume rest (sent : acc) []
+      | otherwise = consume cs acc (c : cur)
+
+splitChars :: Text -> Int -> Int -> [Text]
+splitChars text maxChars overlap
+  | maxChars <= 0 = [text]
+  | T.null text = []
+  | otherwise = go 0
+  where
+    len = T.length text
+    step = max 1 (maxChars - max 0 overlap)
+    go start
+      | start >= len = []
+      | otherwise =
+          let end = min len (start + maxChars)
+              chunk = T.take (end - start) (T.drop start text)
+           in chunk : go (start + step)
 
 searchCorpus :: [CorpusDocument] -> SimilarityMethod -> Double -> Int -> [CorpusCluster]
 searchCorpus docs method threshold ngram =

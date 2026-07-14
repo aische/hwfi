@@ -3,6 +3,8 @@ module Hwfi.Runtime.TextCorpus
   ( runTextMetrics,
     runTextSimilarity,
     runTextSearchCorpus,
+    runSplitText,
+    runTextGrep,
   )
 where
 
@@ -18,9 +20,12 @@ import Hwfi.Text.Corpus
     CorpusDocument (..),
     SimilarityMethod (..),
     SimilarityResult (..),
+    SplitOn (..),
     TextMetrics (..),
     TokenizeMode (..),
+    grepTextLines,
     searchCorpus,
+    splitText,
     textMetrics,
     textSimilarity,
   )
@@ -88,6 +93,39 @@ runTextSearchCorpus args =
         let clusters = searchCorpus docs method threshold ngram
          in pure (Right (record [("clusters", VList (map clusterValue clusters))]))
 
+runSplitText :: Map Ident RValue -> IO (Either RuntimeError RValue)
+runSplitText args =
+  case
+    ( argText args "text",
+      argInt args "max_chars",
+      argInt args "overlap",
+      argSplitOn args "split_on"
+    )
+    of
+      (Left e, _, _, _) -> pure (Left e)
+      (_, Left e, _, _) -> pure (Left e)
+      (_, _, Left e, _) -> pure (Left e)
+      (_, _, _, Left e) -> pure (Left e)
+      (Right text, Right maxChars, Right overlap, Right mode) ->
+        pure
+          ( Right
+              ( record
+                  [ ("chunks", VList (map VString (splitText text maxChars overlap mode)))
+                  ]
+              )
+          )
+
+runTextGrep :: Map Ident RValue -> IO (Either RuntimeError RValue)
+runTextGrep args =
+  case (argText args "text", argText args "pattern") of
+    (Left e, _) -> pure (Left e)
+    (_, Left e) -> pure (Left e)
+    (Right text, Right pattern) ->
+      case grepTextLines pattern text of
+        Left err -> pure (Left (evalError ("invalid text-grep pattern: " <> err)))
+        Right matches ->
+          pure (Right (record [("matches", VList (map VString matches))]))
+
 clusterValue :: CorpusCluster -> RValue
 clusterValue CorpusCluster {..} =
   record
@@ -135,6 +173,19 @@ argMethod args name = case Map.lookup name args of
   Nothing -> Left (evalError ("builtin requires " <> name <> ": String"))
   Just (VString t) ->
     Left (evalError ("argument '" <> name <> "' must be jaccard or lcs; got: " <> t))
+  Just v -> Left (evalError ("argument '" <> name <> "' is not text: " <> T.pack (show v)))
+
+argSplitOn :: Map Ident RValue -> Ident -> Either RuntimeError SplitOn
+argSplitOn args name = case Map.lookup name args of
+  Just (VString "paragraph") -> Right SplitOnParagraph
+  Just (VString "sentence") -> Right SplitOnSentence
+  Just (VString "char") -> Right SplitOnChar
+  Nothing -> Left (evalError ("builtin requires " <> name <> ": String"))
+  Just (VString t) ->
+    Left
+      ( evalError
+          ("argument '" <> name <> "' must be paragraph, sentence, or char; got: " <> t)
+      )
   Just v -> Left (evalError ("argument '" <> name <> "' is not text: " <> T.pack (show v)))
 
 argDocuments :: Map Ident RValue -> Ident -> Either RuntimeError [CorpusDocument]

@@ -54,6 +54,8 @@ rows <- foreach name in [
   "builtin/text-metrics",
   "builtin/text-similarity",
   "builtin/text-search-corpus",
+  "builtin/split-text",
+  "builtin/text-grep",
   "builtin/resolve-qnames-in-text",
   "builtin/list-concat"
 ] {

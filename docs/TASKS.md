@@ -14,17 +14,8 @@ Design: [semantic-check-design.md](semantic-check-design.md) (§Experimental tra
 Policy stays in `examples/semantic-check`; engine exposes general-purpose
 primitives only. Entropy and speech-act heuristics are **signals, not verdicts**.
 
-**Done foundation:** layers 0–2 wired; Tier 1–2 builtins + `resolve-qnames-in-text`.
-
-### E2 — Speech-act heuristics *(deterministic, no LLM)*
-
-Pattern-based illocutionary tagging; compare prose profiles to step metadata.
-
-- [ ] `types/speech-act-tag` — `{ force, sentence, patterns }` per tagged sentence
-- [ ] `types/speech-act-hint` — finding shape for act mismatches / bare directives
-- [ ] `tools/speech-act-scan` — tag section bodies (directive / assertive / commissive / declarative)
-- [ ] `tools/speech-act-align` — step `target`/`agent_tools` vs agent-section act profile
-- [ ] Wire into report — `speech_act_hints` array in `semantic-report/v1`
+**Done foundation:** layers 0–2b wired; Tier 1–2 builtins + `resolve-qnames-in-text`,
+`split-text`, `text-grep`.
 
 ### E3 — Layer 3 pragmatic LLM pass *(gated)*
 
@@ -65,6 +56,10 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **E2 speech-act heuristics (2026-07-14):** `types/speech-act-tag`,
+  `types/speech-act-hint`; `tools/speech-act-scan`, `tools/speech-act-align`
+  (+ pattern/align helpers); report `speech_act_hints`; engine
+  `builtin/split-text`, `builtin/text-grep`.
 - **E1 layer 2 corpus wiring (2026-07-14):** `types/corpus-profile`, `types/corpus-slice`,
   `tools/corpus-profile`, `tools/corpus-clusters`, `tools/corpus-hints`; report
   `semantic-report/v1` with `corpus_profile` + `corpus_hints`.

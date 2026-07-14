@@ -16,6 +16,8 @@ imports:
   - tools/entry-finding
   - tools/prose-hints
   - tools/referential-scan
+  - tools/speech-act-align
+  - tools/speech-act-scan
 ---
 
 ## flow
@@ -70,6 +72,13 @@ hint_pack <- tools/corpus-hints(
   clusters = ${cluster_pack.clusters}
 ) @hints
 
+speech_pack <- tools/speech-act-scan(slices = ${corpus_pack.slices}) @acts
+
+align_pack <- tools/speech-act-align(
+  declarations = ${inputs.project.declarations},
+  tags = ${speech_pack.tags}
+) @align
+
 profile_rows <- foreach slice in ${corpus_pack.slices} {
   pack <- tools/corpus-profile-public(slice = ${slice}) @row
   return { row = ${pack.row} }
@@ -89,7 +98,8 @@ report_text <- builtin/concat(parts = [
   "  \"prose_hints\": ", "${prose_pack.findings}", ",\n",
   "  \"step_referential\": ", "${ref_pack.step_results}", ",\n",
   "  \"corpus_profile\": ", "${profile_layers.values}", ",\n",
-  "  \"corpus_hints\": ", "${hint_pack.findings}", "\n",
+  "  \"corpus_hints\": ", "${hint_pack.findings}", ",\n",
+  "  \"speech_act_hints\": ", "${align_pack.hints}", "\n",
   "}\n"
 ]) @report
 

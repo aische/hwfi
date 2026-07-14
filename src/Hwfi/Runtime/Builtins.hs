@@ -48,7 +48,7 @@ import Hwfi.Runtime.Exec (ExecArgs (..), ExecOutcome (..), runExec)
 import Hwfi.Runtime.Gateways (ModelStore, lookupModel, primaryModel)
 import Hwfi.Runtime.ParseMarkdown (runParseMarkdown)
 import Hwfi.Runtime.ResolveQnames (runListConcat, runResolveQnamesInText)
-import Hwfi.Runtime.TextCorpus (runTextMetrics, runTextSearchCorpus, runTextSimilarity)
+import Hwfi.Runtime.TextCorpus (runSplitText, runTextGrep, runTextMetrics, runTextSearchCorpus, runTextSimilarity)
 import Hwfi.Runtime.RunStore (RunSummary (..), listRuns, readRunTrace)
 import Hwfi.Runtime.Skills (discoverSkillsResult, loadSkillScripted)
 import Hwfi.Runtime.Trace (EventBody (..), FileOp (..), Tracer, emit, eventToJson, sliceTrace, snapshotEvents)
@@ -133,6 +133,8 @@ runBuiltin env q args = case renderQName q of
   "builtin/text-metrics" -> runTextMetrics args
   "builtin/text-similarity" -> runTextSimilarity args
   "builtin/text-search-corpus" -> runTextSearchCorpus args
+  "builtin/split-text" -> runSplitText args
+  "builtin/text-grep" -> runTextGrep args
   "builtin/resolve-qnames-in-text" -> runResolveQnamesInText args
   "builtin/list-concat" -> runListConcat args
   other -> pure (Left (evalError ("unknown builtin '" <> other <> "'")))

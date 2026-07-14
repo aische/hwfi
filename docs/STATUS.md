@@ -4,9 +4,10 @@ Last updated: 2026-07-14
 
 ## Current focus
 
-**Semantic review — experimental track (E2)** — E1 done: layer 2 corpus profile,
-clusters, and hints wired into `semantic-report/v1`. Next: speech-act heuristics
-(`speech-act-scan`, `speech-act-align`) and gated layer 3 LLM. Plan:
+**Semantic review — experimental track (E3)** — E2 done: deterministic speech-act
+scan/align wired into `semantic-report/v1` (`speech_act_hints`). Engine gained
+`split-text` and `text-grep` (sentence tagging primitives). Next: gated layer 3
+LLM (`review-gate`, `pragmatic-review`). Plan:
 [semantic-check-design.md](semantic-check-design.md) §Experimental track;
 checklist: [TASKS.md](TASKS.md).
 
@@ -14,12 +15,11 @@ checklist: [TASKS.md](TASKS.md).
 
 ## Done recently
 
-- **E1 layer 2 wiring** — `corpus-profile`, `corpus-clusters`, `corpus-hints`;
-  report schema `semantic-report/v1` with `corpus_profile` + `corpus_hints`.
-- **Layers 0–1 + prose resolver** — `resolve-qnames-in-text` section scan;
-  ship `prose_hints` 142 → 2.
-- **Tier 2 builtins** — Shannon entropy, compression ratio, Jaccard/LCS,
-  corpus clustering (`Hwfi.Text.Corpus`).
+- **E2 speech-act heuristics** — `speech-act-scan`, `speech-act-align`;
+  `types/speech-act-tag`, `types/speech-act-hint`; report field
+  `speech_act_hints`; builtins `split-text`, `text-grep`.
+- **E1 layer 2 wiring** — corpus profile, clusters, hints in v1 report.
+- **Layers 0–1 + prose resolver** — ship `prose_hints` 142 → 2.
 
 ## Blockers
 
@@ -27,4 +27,4 @@ None.
 
 ## Next up
 
-[TASKS.md](TASKS.md) — **E2** speech-act scan/align → `speech_act_hints`.
+[TASKS.md](TASKS.md) — **E3** gated LLM pragmatics (`mode=exploratory`).
