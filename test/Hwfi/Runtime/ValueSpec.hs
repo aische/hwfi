@@ -70,15 +70,3 @@ spec = do
             ]
       forM_ values $ \v ->
         snapshotValueFromJson (snapshotValueToJson v) `shouldBe` Right v
-
-    it "legacy untagged objects decode as VRecord with typed fields" $ do
-      let legacy =
-            object
-              [ ("line", String "Task JSON: {\"id\":\"0\"}")
-              ]
-          headRec = snapshotValueFromJsonLegacy legacy
-      headRec
-        `shouldBe` VRecord (Map.fromList [("line", VString "Task JSON: {\"id\":\"0\"}")])
-      case headRec of
-        VRecord m -> Map.lookup "line" m `shouldBe` Just (VString "Task JSON: {\"id\":\"0\"}")
-        _ -> expectationFailure "expected VRecord"

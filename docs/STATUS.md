@@ -13,8 +13,7 @@ local filesystem mode.
 ## Done recently
 
 - **Resume snapshot fix** — Tagged `RValue` encoding in `machine.json` preserves
-  typed bindings (`VRecord`/`VString`/…); legacy untagged snapshots decode via
-  shape heuristic (objects → records).
+  typed bindings (`VRecord`/`VString`/…).
 - **M6 cleanup** — Purged stale step-cache docs/examples; fixed runtime
   comments; wired `cacheable` trace flags from checker; removed dead
   `aeStepKey` / `atFingerprint` fields.

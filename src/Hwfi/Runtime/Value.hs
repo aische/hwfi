@@ -16,7 +16,6 @@ module Hwfi.Runtime.Value
     valueToJson,
     snapshotValueToJson,
     snapshotValueFromJson,
-    snapshotValueFromJsonLegacy,
     redactedJson,
     canonicalJson,
     renderValue,
@@ -133,8 +132,7 @@ snapshotValueToJson = \case
     tagged :: Text -> Value -> Value
     tagged tag payload = object ["_hwfi" .= tag, "payload" .= payload]
 
--- | Decode a tagged snapshot value written by 'snapshotValueToJson'. Returns
--- 'Left' when @v@ is not a tagged snapshot object (call 'snapshotValueFromJsonLegacy').
+-- | Decode a tagged snapshot value written by 'snapshotValueToJson'.
 snapshotValueFromJson :: Value -> Either Text RValue
 snapshotValueFromJson v = case parseMaybe parseSnapshotValue v of
   Nothing -> Left "not a tagged snapshot value"
@@ -189,21 +187,6 @@ refKindTag :: RefKind -> Text
 refKindTag = \case
   RTool -> "tool"
   RWorkflow -> "workflow"
-
--- | Decode an untagged JSON value using the same shape rules as 'valueToJson'
--- (objects become 'VRecord', arrays become 'VList', etc.). Used for
--- @machine.json@ files written before tagged snapshot encoding.
-snapshotValueFromJsonLegacy :: Value -> RValue
-snapshotValueFromJsonLegacy = \case
-  Null -> VNull
-  Bool b -> VBool b
-  Number n ->
-    case floatingOrInteger n :: Either Double Integer of
-      Right i -> VInt i
-      Left d -> VDouble d
-  String t -> VString t
-  Array a -> VList (map snapshotValueFromJsonLegacy (V.toList a))
-  Object o -> VRecord (Map.fromList [(K.toText k, snapshotValueFromJsonLegacy v) | (k, v) <- KM.toList o])
 
 -- | Convert a runtime value to JSON, replacing every 'VSecret' with its
 -- @"\<secret:name>"@ placeholder (spec §8.3.4). Used everywhere a value is

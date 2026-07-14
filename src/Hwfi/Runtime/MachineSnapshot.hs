@@ -33,7 +33,6 @@ import Hwfi.Runtime.Value
   ( RValue (..),
     RefKind (..),
     snapshotValueFromJson,
-    snapshotValueFromJsonLegacy,
     snapshotValueToJson,
   )
 import Hwfi.Source (Pos (..), singletonSpan)
@@ -79,7 +78,7 @@ parseRValue :: Value -> Parser RValue
 parseRValue v =
   case snapshotValueFromJson v of
     Right r -> pure r
-    Left _ -> pure (snapshotValueFromJsonLegacy v)
+    Left e -> fail (T.unpack e)
 
 encodeStatus :: MachineStatus -> Value
 encodeStatus = \case
