@@ -1,0 +1,6 @@
+{
+  "name": "semantic-pragmatic",
+  "version": "0.1.0",
+  "entrypoint": "workflows/main",
+  "env": []
+}

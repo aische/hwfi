@@ -3,8 +3,6 @@ name: workflows/main
 inputs:
   path: FileRef
   entry: String
-  mode: String
-  schema: Json
 outputs:
   report_path: String
   ok: Bool
@@ -17,16 +15,15 @@ imports:
 
 ## overview
 
-Semantic review workflow (layers 0–2, optional layer 3). The checker project runs
-from `examples/semantic-check`; the **workspace** is the target project under review.
+Deterministic semantic review (layers 0–2b). The checker project runs from
+`examples/semantic-check`; the **workspace** is the target project under review.
 
 Layer 0 uses `builtin/check-project` for parse/type diagnostics. Layer 1 walks
 step metadata with nested `foreach` and scans prose via
 `resolve-qnames-in-text`. Layer 2 profiles section metrics, clusters similar
 slices, and emits corpus hints (entropy/compression outliers, redundancy).
 Layer 2b tags illocutionary force in prose and aligns agent steps to section
-directives. Layer 3 (`mode=exploratory`) runs gated `llm-gen-object` pragmatics
-on high-signal slices (redundancy, divergence, coverage gaps, dead references).
+directives. Always emits `review_gate` for optional `semantic-pragmatic`.
 
 ## flow
 
@@ -35,9 +32,7 @@ project <- builtin/check-project(path = ${inputs.path}) @check
 
 review <- tools/semantic-review(
   project = ${project},
-  entry = ${inputs.entry},
-  mode = ${inputs.mode},
-  schema = ${inputs.schema}
+  entry = ${inputs.entry}
 ) @review
 
 _ <- builtin/write-file(

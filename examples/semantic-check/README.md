@@ -1,4 +1,4 @@
-# `semantic-check` — semantic review workflow (layers 0–3)
+# `semantic-check` — deterministic semantic review (layers 0–2b)
 
 An ordinary hwfi workflow that reviews another project in its **workspace**.
 Demonstrates the architecture from [semantic-check-design.md](../../docs/semantic-check-design.md):
@@ -20,39 +20,35 @@ Given a target project root in the workspace:
 4. **Layer 2b — Speech acts:** `split-text` + `text-grep` tag illocutionary
    force per sentence; align `llm-agent` tool lists to agent-section directives;
    emit `speech_act_hints` (bare directives, coverage gaps, declarative role cues).
-5. **Layer 3 — Pragmatics (optional):** when `mode=exploratory`, high-signal gate
-   items (redundancy clusters, divergence pairs, coverage gaps, dead references)
-   → bounded `llm-gen-object` review with post-filtered felicity output.
+
+Always computes **`review_gate`** — bounded slice items for optional LLM review
+via [`semantic-pragmatic`](../semantic-pragmatic/README.md).
 
 Writes `.hwfi/runs/<run-id>/semantic-report.json` in the workspace
 (`semantic-report/v1`). Each run keeps its own report alongside `trace.jsonl`.
 
-**Strict mode** (default) runs without API keys. **Exploratory mode** requires a
-model catalog and provider (see below).
+Runs without API keys.
 
-## Roadmap (experimental track)
+## Pipeline
+
+```text
+semantic-check       → semantic-report.json (+ review_gate always)
+  ↓ optional
+semantic-pragmatic   → merges pragmatic_findings into same run dir
+  ↓ optional
+semantic-summary     → semantic-summary.md
+```
+
+## Roadmap
 
 See [TASKS.md](../../docs/TASKS.md) and design doc §Architecture cleanup.
 
 | Phase | Adds | Status |
 |-------|------|--------|
-| **E1** | Layer 2 corpus profile, clusters, hints | done |
-| **E2** | Speech-act pattern tagger + step↔agent alignment | done |
-| **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) | done |
-| **Summary** | `semantic-summary` markdown digest (`source_run` CLI) | done |
-| **AC** | Split check / pragmatic / summary; always emit `review_gate` | **next** |
-| **E4** | Graph findings (cycles, orphans, reachability) | after AC |
-
-**Pipeline (target after AC):** `semantic-check` → optional `semantic-pragmatic`
-→ optional `semantic-summary`. Today layer 3 still runs inside check when
-`mode=exploratory`.
-
-## Prerequisites
-
-- **Strict:** none.
-- **Exploratory:** `model-catalog.json` + provider (default: local Ollama
-  `llama3.2:latest` as catalog entry `fast`). Pass
-  `--input schema=@examples/semantic-check/pragmatic-schema.json`.
+| **E1–E3** | Corpus, speech acts, gated LLM (now in semantic-pragmatic) | done |
+| **Summary** | `semantic-summary` markdown digest | done |
+| **AC** | Split check / pragmatic / summary | **done** |
+| **E4** | Graph findings (cycles, orphans, reachability) | next |
 
 ## Running
 
@@ -62,21 +58,10 @@ Point the workspace at the project you want reviewed. The checker loads from
 ```bash
 cabal run hwfi -- check examples/semantic-check
 
-# Strict (no LLM) — default for CI
 cabal run hwfi -- run examples/semantic-check \
   --workspace examples/hello \
   --input path=. \
-  --input entry=workflows/main \
-  --input mode=strict \
-  --input schema=null
-
-# Exploratory (gated LLM on flagged slices, max 8)
-cabal run hwfi -- run examples/semantic-check \
-  --workspace examples/hello \
-  --input path=. \
-  --input entry=workflows/main \
-  --input mode=exploratory \
-  --input schema=@examples/semantic-check/pragmatic-schema.json
+  --input entry=workflows/main
 ```
 
 Review a project with a type error:
@@ -85,44 +70,48 @@ Review a project with a type error:
 cabal run hwfi -- run examples/semantic-check \
   --workspace test/fixtures/check/type-mismatch \
   --input path=. \
-  --input entry=workflows/main \
-  --input mode=strict \
-  --input schema=null
+  --input entry=workflows/main
 ```
 
 On success the workflow prints
 `{ "report_path": ".hwfi/runs/<run-id>/semantic-report.json", "ok": … }`.
-The report lives under that run directory in the workspace (same `run-id` as
-stderr / `hwfi show`).
+
+Optional pragmatic LLM pass and markdown summary:
+
+```bash
+# After check — requires model catalog (see semantic-pragmatic README)
+cabal run hwfi -- run examples/semantic-pragmatic \
+  --workspace examples/hello \
+  --input source_run=<run-id> \
+  --input schema=@examples/semantic-pragmatic/pragmatic-schema.json
+
+cabal run hwfi -- run examples/semantic-summary \
+  --workspace examples/hello \
+  --input source_run=<run-id> \
+  --input mode=mechanical
+```
 
 ## Report shape (v1)
 
 | Field | Content |
 |-------|---------|
-| `mode` | `strict` or `exploratory` |
-| `review_gate` | Slice ids selected for layer 3 (exploratory only; high-signal gates) |
+| `mode` | Always `deterministic` for check runs |
+| `review_gate` | High-signal gate items (objects with slice bodies; max 8) |
 | `structural_errors` | Type/parse failures (layer 0) |
 | `structural_warnings` | Checker warnings |
 | `entry_findings` | Entrypoint not in declarations |
 | `prose_hints` | Unresolved qname mentions in markdown prose (layer 1) |
-| `step_referential` | Nested per-decl/per-step referential scan (`bare` / `agent` matrices) |
+| `step_referential` | Nested per-decl/per-step referential scan |
 | `corpus_profile` | Per-section metrics rows (layer 2; not findings) |
 | `corpus_hints` | Entropy/compression outliers, similarity clusters (layer 2) |
 | `speech_act_hints` | Illocutionary alignment hints (layer 2b) |
-| `pragmatic_findings` | LLM judgments (exploratory mode only; may vary between runs) |
+| `pragmatic_findings` | Added by `semantic-pragmatic` when run (optional) |
 
 Each finding uses `types/finding`: severity, category, location, claim,
 evidence, suggestion.
 
-## Nested `foreach`
-
-Layer 1 uses nested loops (`decl → step → mention`) in
-`tools/step-ref-findings` and `tools/referential-scan`. Inner loops must bind
-their result (`inner <- foreach …`), not appear as bare statements — see
-[workflow-reference.md](../../docs/workflow-reference.md).
-
 ## Related
 
-- [semantic-summary](../semantic-summary/README.md) — markdown digest of a report
+- [semantic-pragmatic](../semantic-pragmatic/README.md) — optional layer 3 LLM
+- [semantic-summary](../semantic-summary/README.md) — markdown digest
 - [semantic-check-design.md](../../docs/semantic-check-design.md)
-- [workflow-reference.md](../../docs/workflow-reference.md) §13.1.8 builtins

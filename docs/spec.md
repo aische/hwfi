@@ -2986,7 +2986,7 @@ A40. (Mode B only) `builtin/extract-skill` writes under `skills/` and
 - `Bytes`-typed file I/O.
 - `trace.jsonl` rotation.
 - `Optional<T>` / nullable types (v1 uses strict env presence, §5.7).
-- **Semantic review primitives** — §13.1.8 (partial; architecture cleanup next).
+- **Semantic review primitives** — §13.1.8 (partial; E4 graph layer next).
 - **Author capability backlog (post-v1)** — §13.1 items 9.9–9.14 are
   **implemented**; remaining v1.1 work is listed in [TASKS.md](TASKS.md).
 
@@ -3103,9 +3103,9 @@ walker; catalog entries for callable workflow skills under `skills/`.
 #### 13.1.8 Semantic review primitives
 
 **Status: partial (2026-07-15).** Tier 1–2 builtins, `resolve-qnames-in-text`,
-`split-text`, `read-json`, `examples/semantic-check` layers 0–3, and
-`examples/semantic-summary` are implemented. **Next:** architecture cleanup
-(split deterministic check from optional pragmatic LLM); then E4 graph layer per
+`split-text`, `read-json`, `examples/semantic-check` (layers 0–2b),
+`examples/semantic-pragmatic` (layer 3), and `examples/semantic-summary` are
+implemented. **Next:** E4 graph layer per
 [semantic-check-design.md](semantic-check-design.md). Checklist: [TASKS.md](TASKS.md).
 
 **Problem:** `hwfi check` validates structure and types; authors also need to
@@ -3129,9 +3129,9 @@ without a `builtin/semantic-check` policy builtin.
 | 3 | `graph-reachability`, `graph-cycles`, `graph-topo-sort` | planned (E4) |
 | 4 | `diff-text`, `json-validate` | planned |
 
-**Example workflows:** `semantic-check` → `semantic-report/v1` (layers 0–3 today;
-target: layers 0–2b + always `review_gate`). `semantic-summary` → markdown digest.
-Optional pragmatic LLM moves to a separate workflow (architecture cleanup).
+**Example workflows:** `semantic-check` → `semantic-report/v1` (layers 0–2b,
+always `review_gate`). `semantic-pragmatic` → optional `pragmatic_findings`.
+`semantic-summary` → markdown digest.
 
 **Non-goals:** automatic invocation from `hwfi check` or `hwfi run`; reads
 outside the workspace; embedding index in the first implementation tranche.

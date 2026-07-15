@@ -8,29 +8,9 @@ Deferred until v2 cutover is complete; may not ship.
 
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend; server API
 
-## Now — architecture cleanup
+## Now — semantic review E4 (graph layer)
 
-Design: [semantic-check-design.md](semantic-check-design.md) §Architecture cleanup.
-
-Decouple deterministic review from optional LLM. Policy stays in example workflows;
-no new review-specific engine builtins.
-
-- [ ] **`semantic-check` always strict** — layers 0–2b only; remove `mode` input
-  and in-workflow layer 3 (`pragmatic-review`)
-- [ ] **Always emit `review_gate`** — compute high-signal gate items on every check
-  run (not only when LLM is enabled)
-- [ ] **Optional pragmatic workflow** — new project (e.g. `semantic-pragmatic`):
-  `--input source_run=<run-id>` loads report + `review_gate`, runs bounded
-  `llm-gen-object`, writes `pragmatic_findings` back into the run directory
-- [ ] **Pipeline docs** — document order: check → optional pragmatic → summary;
-  update example READMEs and report `mode` field semantics
-- [ ] **Retire `mode=exploratory` on check** — avoid strict/exploratory coupling;
-  exploratory becomes an explicit second step
-
-## Next — semantic review E4 (graph layer)
-
-Deferred until architecture cleanup ships. Design:
-[semantic-check-design.md](semantic-check-design.md) §Experimental track.
+Design: [semantic-check-design.md](semantic-check-design.md) §Experimental track.
 
 - [ ] `builtin/graph-reachability`
 - [ ] `builtin/graph-cycles`
@@ -59,6 +39,8 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 Recent milestones; earlier items in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).
 
+- **Architecture cleanup (2026-07-15):** check always strict; always `review_gate`;
+  `semantic-pragmatic` workflow; pipeline docs.
 - **semantic-summary CLI (2026-07-15):** `source_run` input; `builtin/read-json`.
 - **semantic-summary workflow (2026-07-15):** mechanical rollup + optional narrative.
 - **Layer 3 gate noise mitigation (2026-07-15):** high-signal gates; post-filter.

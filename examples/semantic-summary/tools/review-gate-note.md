@@ -11,7 +11,7 @@ imports:
 
 ## flow
 
-Describe whether layer 3 `review_gate` is populated.
+Describe whether `review_gate` items are present for optional pragmatic review.
 
 ```step
 gate <- tools/json-values-or-empty(
@@ -19,15 +19,15 @@ gate <- tools/json-values-or-empty(
   path = "review_gate"
 ) @gate
 
-rows <- foreach slice_id in ${gate.values} {
+rows <- foreach item in ${gate.values} {
   return { hit = "yes" }
 } @rows
 
 pack <- try {
   _ <- tools/hit-nonempty(items = ${rows}) @hit
-  return { text = "populated (exploratory layer 3)" }
+  return { text = "populated (run semantic-pragmatic for LLM review)" }
 } catch {
-  return { text = "none (strict or no gated slices)" }
+  return { text = "none (no high-signal gated slices)" }
 } @probe
 
 return { text = ${pack.text} }

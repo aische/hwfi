@@ -1,11 +1,10 @@
 # Semantic review — design notes
 
 Companion to spec §13.1.8. Tier 1–2 builtins, `examples/semantic-check` layers
-0–3, and `examples/semantic-summary` are **implemented**. **Architecture
-cleanup** (split check from optional LLM) is the active backlog; **E4** graph
-layer follows. See [Architecture cleanup](#architecture-cleanup),
-[Implementation phases](#implementation-phases), and [Experimental
-track](#experimental-track).
+0–2b, `examples/semantic-pragmatic` layer 3, and `examples/semantic-summary`
+are **implemented**. **E4** graph layer is next. See [Architecture
+cleanup](#architecture-cleanup), [Implementation phases](#implementation-phases),
+and [Experimental track](#experimental-track).
 
 ## Problem
 
@@ -95,14 +94,20 @@ flowchart TB
   target --> passes
 ```
 
-**Invocation (today):**
+**Invocation:**
 
 ```bash
-# Deterministic check (+ optional layer 3 when mode=exploratory)
+# Deterministic check (always emits review_gate)
 cabal run hwfi -- run examples/semantic-check \
   --workspace /path/to/target-project \
   --input path=. \
   --input entry=workflows/main
+
+# Optional layer 3 LLM on gated slices
+cabal run hwfi -- run examples/semantic-pragmatic \
+  --workspace /path/to/target-project \
+  --input source_run=<run-id> \
+  --input schema=@examples/semantic-pragmatic/pragmatic-schema.json
 
 # Markdown digest of a prior check run
 cabal run hwfi -- run examples/semantic-summary \
@@ -111,12 +116,8 @@ cabal run hwfi -- run examples/semantic-summary \
   --input mode=mechanical
 ```
 
-**Target invocation (after architecture cleanup):** check is always strict and
-always emits `review_gate`; layer 3 runs only via a separate pragmatic workflow.
-See [Architecture cleanup](#architecture-cleanup).
-
-Layers 0–2b run without API keys. Layer 3 (today: `mode=exploratory` on check;
-target: separate workflow) requires a model catalog.
+Layers 0–2b run without API keys. Layer 3 (`semantic-pragmatic`) requires a
+model catalog.
 
 ## Analysis layers
 
@@ -207,9 +208,8 @@ Suggested LLM output fields (workflow schema, not engine):
 }
 ```
 
-Map to `types/finding` (`contradiction`, `ambiguity`, `policy`). Today layer 3
-is toggled by `mode=exploratory` on `semantic-check`; after architecture cleanup
-it runs only in a separate pragmatic workflow. Low temperature; findings may
+Map to `types/finding` (`contradiction`, `ambiguity`, `policy`). Layer 3 runs
+in `examples/semantic-pragmatic` after check. Low temperature; findings may
 vary between runs — document in report metadata.
 
 Workflow tools: `review-gate`, `pragmatic-review`. Depends on `split-text` for
@@ -217,23 +217,13 @@ sentence-level tagging when paragraph split is too coarse.
 
 ## Architecture cleanup
 
-**Status:** next ([TASKS.md](TASKS.md)).
+**Status:** done (2026-07-15).
 
-Today `semantic-check` couples deterministic review with optional layer 3 via
-`mode=strict|exploratory`. Strict mode skips `review_gate` computation entirely,
-so the report does not list which slices *would* be reviewed. Layer 3 and the
-markdown summary are separate concerns but both depend on the same run directory.
+`semantic-check` is always deterministic (layers 0–2b). It always emits full
+`review_gate` items. Layer 3 LLM pragmatics runs via optional
+`examples/semantic-pragmatic`. `semantic-summary` is unchanged.
 
-**Problems:**
-
-| Issue | Today | Target |
-|-------|-------|--------|
-| Gate visibility | `review_gate` only when `mode=exploratory` | Always emitted on check |
-| LLM coupling | Layer 3 inside `semantic-check` | Separate optional workflow |
-| Mode confusion | `strict` / `exploratory` / typo `explanatory` | Check always deterministic; LLM is explicit second step |
-| Summary scope | `semantic-summary` digests existing report | Unchanged; runs after check (and optional pragmatic) |
-
-**Target pipeline:**
+**Pipeline:**
 
 ```text
 semantic-check          → semantic-report.json (+ review_gate always)
@@ -243,17 +233,10 @@ semantic-pragmatic      → merges pragmatic_findings into same run dir
 semantic-summary        → semantic-summary.md (mechanical or narrative)
 ```
 
-**Planned changes:**
+Report `mode` is `deterministic` for check runs. `pragmatic_findings` appears
+only after a pragmatic pass.
 
-1. **`semantic-check`** — layers 0–2b only; drop `mode` input; always compute
-   and emit `review_gate`; report `mode` reflects deterministic check only.
-2. **`semantic-pragmatic`** (new example project) — `--input source_run=<run-id>`;
-   load report, run bounded `llm-gen-object` on `review_gate` items, write back
-   `pragmatic_findings` (reuse existing gate/review tools).
-3. **`semantic-summary`** — unchanged contract; document pipeline order in
-   READMEs.
-
-E4 graph findings remain after this cleanup; graph analysis stays in check.
+E4 graph findings remain in check; graph analysis stays deterministic.
 
 ## Findings schema (workflow-defined)
 
@@ -552,19 +535,18 @@ Chunk long prose for bounded LLM context windows.
 | **E2 — Speech acts** | `speech-act-scan`, `speech-act-align`; `speech_act_hints` | done |
 | **E3 — Gated LLM** | `review-gate`, `pragmatic-review`, `split-text`; `pragmatic_findings` | done |
 | **Summary** | `examples/semantic-summary`, `builtin/read-json`, `source_run` CLI | done |
+| **AC — Architecture cleanup** | Split check / pragmatic / summary; always emit `review_gate` | done |
 
 ### Active
 
 | Phase | Deliverable | Depends on |
 |-------|-------------|------------|
-| **AC — Architecture cleanup** | Split check / pragmatic / summary; always emit `review_gate` | E3, Summary |
 | **E4 — Graph layer** | `graph-*` builtins, `graph-findings` | P1, P2 |
 
-AC is independently shippable; E4 may proceed after AC (no dependency on LLM
-split). Defer `diff-text` and `json-validate` until a concrete workflow needs them.
+Defer `diff-text` and `json-validate` until a concrete workflow needs them.
 
-After AC, deterministic check (layers 0–2b + `review_gate` + E4) remains usable
-without API keys.
+Deterministic check (layers 0–2b + `review_gate` + E4) remains usable without
+API keys. Optional layer 3 runs via `semantic-pragmatic`.
 
 ## Non-goals
 
