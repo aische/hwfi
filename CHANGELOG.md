@@ -24,6 +24,13 @@ cache) cannot be resumed on v2.
 - Tagged `RValue` encoding in `machine.json` (fixes typed binding restore on
   resume).
 - Checkpoint before agent LLM/tool I/O; snapshot flush on crash/interrupt.
+- Semantic review builtins (§13.1.8): `check-project`, `parse-markdown`,
+  `text-metrics`, `text-similarity`, `text-search-corpus`, `split-text`,
+  `text-grep`, `resolve-qnames-in-text`, `list-concat`, `list-unique-by`,
+  `read-json`, `json-get-string`.
+- Example workflows: `semantic-check` (layers 0–2b), `semantic-pragmatic`
+  (layer 3 LLM), `semantic-summary` (markdown digest).
+- `scripts/semantic-review.sh` — runs check → pragmatic → summary on a workspace.
 
 ### Changed
 
@@ -37,6 +44,7 @@ cache) cannot be resumed on v2.
 - Bare `hwfi` invocation prints help; `hwfi run` prints `run-id` on stderr.
 - Runtime emits static `cacheable` flags from checker classification in trace
   events; dropped unused `aeStepKey` / `atFingerprint` agent fields.
+- `llm-simple` dependency bumped to `^>=0.1.0.2`.
 
 ### Removed
 

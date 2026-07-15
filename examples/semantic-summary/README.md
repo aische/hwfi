@@ -18,7 +18,7 @@ provides `json-get`, `json-values`, `concat`, and optional `llm-generate`.
 
 - **Mechanical:** none.
 - **Narrative:** `model-catalog.json` + provider (default: local Ollama
-  `llama3.2:latest` as catalog entry `fast`).
+  `nemotron-3-nano:4b` as catalog entry `fast`).
 
 ## Running
 

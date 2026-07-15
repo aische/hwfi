@@ -29,8 +29,8 @@ before run, executed in a sandboxed workspace with **durable traces and resume**
 ## Prerequisites
 
 - GHC 9.x (GHC2021)
-- **[llm-simple](https://hackage.haskell.org/package/llm-simple-0.1.0.1)**
-  `^>=0.1.0.1` — resolved from Hackage by Cabal. All LLM provider calls
+- **[llm-simple](https://hackage.haskell.org/package/llm-simple-0.1.0.2)**
+  `^>=0.1.0.2` — resolved from Hackage by Cabal. All LLM provider calls
   (`llm-generate`, `llm-chat`, `llm-agent`, …) go through `llm-simple`.
 - For hosted providers: API keys via project `.env`, `--env-file`, or
   `$XDG_CONFIG_HOME/hwfi/.env` (tutorial examples use **DeepSeek**;
@@ -107,6 +107,9 @@ Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
 | [`examples/workflow-refs`](examples/workflow-refs) | `ToolRef` / `WorkflowRef` patterns (no LLM) |
 | [`examples/skills`](examples/skills) | Trace → skill extraction |
 | [`examples/skills-runtime`](examples/skills-runtime) | Discover/load skills in an agent loop |
+| [`examples/semantic-check`](examples/semantic-check) | Deterministic semantic review (layers 0–2b; no API keys) |
+| [`examples/semantic-pragmatic`](examples/semantic-pragmatic) | Optional layer 3 LLM review on gated slices |
+| [`examples/semantic-summary`](examples/semantic-summary) | Markdown digest of a semantic report |
 
 ### Experimental
 
@@ -122,6 +125,7 @@ Live E2E for both is in `cabal test` (`hello` always; `coding/fix` with
 - [docs/spec.md](docs/spec.md) — normative specification
 - [docs/workflow-refs.md](docs/workflow-refs.md) — `ToolRef` / `WorkflowRef` patterns
 - [docs/caching-and-resume.md](docs/caching-and-resume.md) — resume semantics for authors
+- [docs/semantic-check-design.md](docs/semantic-check-design.md) — semantic review builtins and workflows
 - [CHANGELOG.md](CHANGELOG.md) — release history
 - [docs/TASKS.md](docs/TASKS.md) — active backlog
 - [docs/STATUS.md](docs/STATUS.md) — current focus

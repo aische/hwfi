@@ -2784,7 +2784,7 @@ available, the source location of the step block.
 ## 10. Dependencies and tooling
 
 - GHC2021.
-- Cabal project. `llm-simple` `^>=0.1.0.1` from Hackage (`build-depends` in
+- Cabal project. `llm-simple` `^>=0.1.0.2` from Hackage (`build-depends` in
   `hwfi.cabal`).
 - Test framework: `hspec`.
 - Markdown parser: `commonmark-hs`.
@@ -3125,7 +3125,7 @@ without a `builtin/semantic-check` policy builtin.
 |------|---------|--------|
 | 1 | `check-project`, `parse-markdown` | done |
 | 2 | `text-metrics`, `text-similarity`, `text-search-corpus` | done |
-| 3 | `resolve-qnames-in-text`, `list-concat`, `split-text`, `read-json` | done |
+| 3 | `resolve-qnames-in-text`, `list-concat`, `split-text`, `read-json`, `text-grep`, `list-unique-by`, `json-get-string` | done |
 | 3 | `graph-reachability`, `graph-cycles`, `graph-topo-sort` | planned (E4) |
 | 4 | `diff-text`, `json-validate` | planned |
 

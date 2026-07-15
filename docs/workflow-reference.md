@@ -401,13 +401,56 @@ See [Agent steps](#agent-steps).
 | Builtin | Inputs → outputs |
 |---------|------------------|
 | `json-get` | `{ json, path }` → `{ ok, value, error }` — dot-path lookup (`"tasks.0.title"`) |
+| `json-get-string` | `{ json, path }` → `{ ok, text, error }` — path lookup as `String` |
 | `json-values` | `{ json, path }` → `{ ok, values, error }` — object/array → `List<Json>` |
 | `concat` | `{ parts }` → `{ text }` |
+| `list-concat` | `{ lists }` → `{ items }` — flatten `List<List<Json>>` |
+| `list-unique-by` | `{ items, fields, limit }` → `{ items }` — dedupe records by field paths |
 | `log` | `{ message, fields }` → `{ logged }` — `workflow-log` trace event (non-cacheable) |
 
-`json-get` and `json-values` return `ok = false` instead of aborting when the path
-is missing or invalid. Branch on `ok` in scripted steps; agents see the full
-record as a tool result.
+`json-get`, `json-get-string`, and `json-values` return `ok = false` instead of
+aborting when the path is missing or invalid. Branch on `ok` in scripted steps;
+agents see the full record as a tool result.
+
+### Semantic review (§13.1.8)
+
+General-purpose primitives for review workflows such as
+[`examples/semantic-check`](../examples/semantic-check). Policy (thresholds,
+categories, prompts) lives in the workflow — not the engine. See
+[semantic-check-design.md](semantic-check-design.md).
+
+| Builtin | Inputs → outputs |
+|---------|------------------|
+| `check-project` | `{ path }` → `{ ok, errors, warnings, declarations, call_graph, error }` |
+| `parse-markdown` | `{ path, sections, frontmatter, fences }` → `{ ok, frontmatter, sections, fences, error }` |
+| `text-metrics` | `{ text, tokenize }` → `{ chars, tokens, lines, paragraphs, shannon_entropy, compression_ratio }` |
+| `text-similarity` | `{ left, right, method, ngram }` → `{ score, method, left_tokens, right_tokens }` |
+| `text-search-corpus` | `{ documents, method, threshold, ngram }` → `{ clusters }` |
+| `split-text` | `{ text, max_chars, overlap, split_on }` → `{ chunks }` |
+| `text-grep` | `{ text, pattern }` or `{ text, patterns, location }` → `{ matches, tags }` |
+| `resolve-qnames-in-text` | `{ text, catalog, include_builtins, unresolved_only, exclude_step_fences }` → `{ mentions }` |
+
+- **`check-project`** — same pure checker as `hwfi check`; returns declaration
+  metadata and a call graph for scripted review. `ok = false` on parse/type
+  failure; `declarations` may be partial. Cacheable.
+- **`parse-markdown`** — frontmatter, heading sections (`slug`, `body`), and
+  fenced blocks. Cacheable.
+- **`text-metrics`** / **`text-similarity`** / **`text-search-corpus`** —
+  deterministic corpus signals (entropy, compression ratio, n-gram overlap).
+  Cacheable.
+- **`split-text`** — chunk prose by `paragraph`, `sentence`, or `char` with
+  optional overlap. Cacheable.
+- **`text-grep`** — RE2 line match (`pattern`) or tagged sentence scan
+  (`patterns` + optional `location`). Cacheable.
+- **`resolve-qnames-in-text`** — classify qname-like mentions against a catalog.
+  Cacheable.
+
+**Example workflows:** `semantic-check` (layers 0–2b, deterministic),
+`semantic-pragmatic` (optional layer 3 LLM), `semantic-summary` (markdown digest).
+Convenience script: `scripts/semantic-review.sh`.
+
+**Planned (E4+):** `graph-reachability`, `graph-cycles`, `graph-topo-sort`,
+`diff-text`, `json-validate`.
 
 ### Skills runtime
 
@@ -1090,10 +1133,8 @@ See spec §13 and [TASKS.md](TASKS.md) for the open v1.1 backlog:
 - Step-keys (static classification) do not include workspace file contents
 - No arbitrary HTTP builtin (only LLM provider calls + allowlisted `exec`)
 
-**Planned (semantic review primitives, §13.1.8):** `check-project`,
-`parse-markdown`, `text-metrics`, `text-similarity`, `text-search-corpus`,
-`graph-reachability`, `graph-cycles`, `graph-topo-sort`,
-`resolve-qnames-in-text`, `diff-text`, `json-validate`, `split-text` — see
+**Planned (semantic review, §13.1.8):** `graph-reachability`, `graph-cycles`,
+`graph-topo-sort`, `diff-text`, `json-validate` — see
 [semantic-check-design.md](semantic-check-design.md).
 
 **Shipped in v1.1:** `try`/`catch`, `par(on_error = "collect")`, record
@@ -1109,7 +1150,8 @@ merge/filter/map, `range(n)`, inline `while` bodies,
 | [tutorials/README.md](tutorials/README.md) | Hands-on learning path |
 | [spec.md](spec.md) | Full normative specification |
 | [caching-and-resume.md](caching-and-resume.md) | Cache and resume semantics |
-| [semantic-check-design.md](semantic-check-design.md) | Planned semantic review builtins |
+| [semantic-check-design.md](semantic-check-design.md) | Semantic review builtins and example workflows |
+| [examples/semantic-check/README.md](../examples/semantic-check/README.md) | Deterministic semantic review (layers 0–2b) |
 | [tool-use.md](tool-use.md) | Agent tool-loop design rationale (incl. `submit`) |
 | [examples/hello/README.md](../examples/hello/README.md) | Minimal file pipeline (no LLM) |
 | [examples/summarise/README.md](../examples/summarise/README.md) | LLM pipeline |

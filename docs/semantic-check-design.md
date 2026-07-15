@@ -114,6 +114,9 @@ cabal run hwfi -- run examples/semantic-summary \
   --workspace /path/to/target-project \
   --input source_run=<run-id> \
   --input mode=mechanical
+
+# Full pipeline (check → pragmatic → summary)
+scripts/semantic-review.sh /path/to/target-project workflows/main mechanical
 ```
 
 Layers 0–2b run without API keys. Layer 3 (`semantic-pragmatic`) requires a
@@ -275,11 +278,11 @@ Emit via `write-file` into the active run directory (e.g.
 
 Keep v0 fields unchanged for backward compatibility within the checker project.
 
-## Planned builtins
+## Builtin reference
 
-Signatures follow §6 naming. **Implemented:** Tier 1, Tier 2,
-`resolve-qnames-in-text`, `list-concat`. **Remaining:** graph Tier 3,
-Tier 4 convenience (`split-text` prioritized for E3).
+Signatures follow §6 naming. **Implemented:** Tier 1–2, `resolve-qnames-in-text`,
+`list-concat`, `split-text`, `text-grep`, `list-unique-by`, `read-json`,
+`json-get-string`. **Remaining (E4+):** `graph-*`, `diff-text`, `json-validate`.
 
 ### Tier 1 — project and markdown structure
 
@@ -471,6 +474,45 @@ Classify qname-like mentions in arbitrary text against a project catalog.
   with configurable rules (implementation detail).
 - **Cacheable.**
 
+#### `builtin/text-grep`
+
+RE2 pattern match over in-memory text (not a file path).
+
+```
+{ text: String,
+  pattern: String } ->
+{ matches: List<String>,
+  tags: List<Json> }
+```
+
+Tagged mode (speech-act scanning):
+
+```
+{ text: String,
+  patterns: List<Record<{ name: String, pattern: String, force: String }>>,
+  location: Record<{ file: String, section: String }> } ->
+{ matches: List<String>,
+  tags: List<Record<{ force: String, sentence: String, patterns: List<String>, location: Json }>> }
+```
+
+- Single-pattern mode returns line matches in `matches`.
+- Tagged mode returns per-sentence hits in `tags` (empty `matches`).
+- **Cacheable.**
+
+#### `builtin/list-unique-by`
+
+Dedupe a list of records by one or more field paths.
+
+```
+{ items: List<Record>,
+  fields: List<String>,
+  limit: Int } ->
+{ items: List<Record> }
+```
+
+- `limit` ≥ 0; `0` means no cap.
+- **Cacheable.**
+
 ### Tier 4 — convenience
 
 #### `builtin/diff-text`
@@ -530,11 +572,11 @@ Chunk long prose for bounded LLM context windows.
 | **P1 — Tier 1** | `check-project`, `parse-markdown` | done |
 | **P2 — Example v0** | `examples/semantic-check` layers 0–1 | done |
 | **P3 — Tier 2** | `text-metrics`, `text-similarity`, `text-search-corpus` | done |
-| **P4 partial** | `resolve-qnames-in-text`, `list-concat` | done |
+| **P4** | `resolve-qnames-in-text`, `list-concat`, `split-text`, `text-grep`, `list-unique-by`, `json-get-string` | done |
 | **E1 — Layer 2 wiring** | `corpus-profile`, `corpus-clusters`, `corpus-hints`; report v1 | done |
 | **E2 — Speech acts** | `speech-act-scan`, `speech-act-align`; `speech_act_hints` | done |
 | **E3 — Gated LLM** | `review-gate`, `pragmatic-review`, `split-text`; `pragmatic_findings` | done |
-| **Summary** | `examples/semantic-summary`, `builtin/read-json`, `source_run` CLI | done |
+| **Summary** | `examples/semantic-summary`, `builtin/read-json`, `source_run` CLI, `scripts/semantic-review.sh` | done |
 | **AC — Architecture cleanup** | Split check / pragmatic / summary; always emit `review_gate` | done |
 
 ### Active

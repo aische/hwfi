@@ -41,6 +41,8 @@ Recent milestones; earlier items in [log/archive/tasks-2026-07.md](log/archive/t
 
 - **Architecture cleanup (2026-07-15):** check always strict; always `review_gate`;
   `semantic-pragmatic` workflow; pipeline docs.
+- **Doc sync (2026-07-15):** `workflow-reference` semantic builtins; `llm-simple`
+  0.1.0.2; model catalog defaults; `scripts/semantic-review.sh` documented.
 - **semantic-summary CLI (2026-07-15):** `source_run` input; `builtin/read-json`.
 - **semantic-summary workflow (2026-07-15):** mechanical rollup + optional narrative.
 - **Layer 3 gate noise mitigation (2026-07-15):** high-signal gates; post-filter.

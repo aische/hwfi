@@ -18,7 +18,7 @@ Findings may vary between runs — document in report metadata when summarizing.
 
 - A completed `semantic-check` run with a non-empty `review_gate` (optional but
   typical for meaningful output).
-- `model-catalog.json` + provider (default: local Ollama `llama3.2:latest` as
+- `model-catalog.json` + provider (default: local Ollama `nemotron-3-nano:4b` as
   catalog entry `fast`).
 - Pass `--input schema=@examples/semantic-pragmatic/pragmatic-schema.json`.
 

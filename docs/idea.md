@@ -24,7 +24,7 @@ There will be no GUI
 
 ## Constraints
 
-- for calling LLMs, we will use the [llm-simple](https://hackage.haskell.org/package/llm-simple-0.1.0.1) library from Hackage (`^>=0.1.0.1`)
+- for calling LLMs, we will use the [llm-simple](https://hackage.haskell.org/package/llm-simple-0.1.0.2) library from Hackage (`^>=0.1.0.2`)
 - GHC2021 language
 
 ## Open questions

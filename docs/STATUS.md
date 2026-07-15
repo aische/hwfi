@@ -18,6 +18,7 @@ checklist: [TASKS.md](TASKS.md).
 - **Semantic review track (E1–E3 + summary)** — layers 0–3 split across check
   and pragmatic; `semantic-summary` with `source_run` input.
 - **Per-run reports** — `.hwfi/runs/<run-id>/semantic-report.json`.
+- **`scripts/semantic-review.sh`** — convenience wrapper for check → pragmatic → summary.
 
 ## Blockers
 

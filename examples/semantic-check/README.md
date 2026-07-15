@@ -79,7 +79,10 @@ On success the workflow prints
 Optional pragmatic LLM pass and markdown summary:
 
 ```bash
-# After check — requires model catalog (see semantic-pragmatic README)
+# Full pipeline (check → pragmatic → summary)
+scripts/semantic-review.sh examples/hello workflows/main mechanical
+
+# Or step by step:
 cabal run hwfi -- run examples/semantic-pragmatic \
   --workspace examples/hello \
   --input source_run=<run-id> \
