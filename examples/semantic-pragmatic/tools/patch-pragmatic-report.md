@@ -8,19 +8,19 @@ outputs:
 imports:
   - builtin/concat
   - builtin/json-get
-  - tools/json-get-text
 ---
 
 ## flow
 
 Re-serialize a `semantic-report.json` value with updated `pragmatic_findings`.
+Embed `json-get` values directly — they already render as valid JSON literals.
 
 ```step
-entry <- tools/json-get-text(json = ${inputs.report}, path = "entry") @entry
-mode <- tools/json-get-text(json = ${inputs.report}, path = "mode") @mode
-check_error <- tools/json-get-text(json = ${inputs.report}, path = "check_error") @err
-
+schema <- builtin/json-get(json = ${inputs.report}, path = "schema") @schema
+mode <- builtin/json-get(json = ${inputs.report}, path = "mode") @mode
+entry <- builtin/json-get(json = ${inputs.report}, path = "entry") @entry
 ok <- builtin/json-get(json = ${inputs.report}, path = "ok") @ok
+check_error <- builtin/json-get(json = ${inputs.report}, path = "check_error") @err
 review_gate <- builtin/json-get(json = ${inputs.report}, path = "review_gate") @gate
 structural_errors <- builtin/json-get(json = ${inputs.report}, path = "structural_errors") @se
 structural_warnings <- builtin/json-get(json = ${inputs.report}, path = "structural_warnings") @sw
@@ -33,11 +33,11 @@ speech_act_hints <- builtin/json-get(json = ${inputs.report}, path = "speech_act
 
 report_text <- builtin/concat(parts = [
   "{\n",
-  "  \"schema\": \"semantic-report/v1\",\n",
-  "  \"mode\": \"", ${mode.text}, "\",\n",
-  "  \"entry\": \"", ${entry.text}, "\",\n",
+  "  \"schema\": ", "${schema.value}", ",\n",
+  "  \"mode\": ", "${mode.value}", ",\n",
+  "  \"entry\": ", "${entry.value}", ",\n",
   "  \"ok\": ", "${ok.value}", ",\n",
-  "  \"check_error\": \"", ${check_error.text}, "\",\n",
+  "  \"check_error\": ", "${check_error.value}", ",\n",
   "  \"review_gate\": ", "${review_gate.value}", ",\n",
   "  \"structural_errors\": ", "${structural_errors.value}", ",\n",
   "  \"structural_warnings\": ", "${structural_warnings.value}", ",\n",

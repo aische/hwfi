@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hwfi.Ast.Name (Ident, QName, qnameFromText)
-import Hwfi.Check.Builtins (jsonGetQName, jsonValuesQName, listUniqueByQName, recordFilterQName, recordMapQName, recordMergeQName)
+import Hwfi.Check.Builtins (jsonGetQName, jsonGetStringQName, jsonValuesQName, listUniqueByQName, recordFilterQName, recordMapQName, recordMergeQName)
 import Hwfi.Project.Manifest (defaultSkillPolicy)
 import Hwfi.Runtime.Builtins (BuiltinEnv (..), runBuiltin)
 import Hwfi.Runtime.Error (StepRef (..), renderRuntimeError)
@@ -96,6 +96,19 @@ spec = describe "data plumbing builtins (§13.1.2)" $ do
         let root = object ["user" .= object ["name" .= String "Ada"]]
         result <- run root "user.name"
         result `shouldBe` Right (VBool True, VJson (String "Ada"), "")
+
+  describe "builtin/json-get-string" $ do
+    it "returns a JSON string field as plain text" $
+      withJsonGetString $ \run -> do
+        let root = object ["mode" .= String "deterministic"]
+        result <- run root "mode"
+        result `shouldBe` Right (VBool True, VString "deterministic", "")
+
+    it "returns ok=false when the target is not a string" $
+      withJsonGetString $ \run -> do
+        result <- run (object ["ok" .= Bool True]) "ok"
+        result
+          `shouldBe` Right (VBool False, VString "", "expected a JSON string")
 
   describe "record builtins" $ do
     it "record-merge overlays fields with overlay winning on duplicates" $
@@ -229,11 +242,16 @@ type JsonValuesResult = (RValue, RValue, Text)
 
 type JsonGetResult = (RValue, RValue, Text)
 
+type JsonGetStringResult = (RValue, RValue, Text)
+
 withJsonValues :: ((Value -> Text -> IO (Either Text JsonValuesResult)) -> IO a) -> IO a
 withJsonValues = withPlumbingHarness jsonValuesQName extractValues
 
 withJsonGet :: ((Value -> Text -> IO (Either Text JsonGetResult)) -> IO a) -> IO a
 withJsonGet = withPlumbingHarness jsonGetQName extractValue
+
+withJsonGetString :: ((Value -> Text -> IO (Either Text JsonGetStringResult)) -> IO a) -> IO a
+withJsonGetString = withPlumbingHarness jsonGetStringQName extractString
 
 extractValues :: Map.Map Ident RValue -> Either Text JsonValuesResult
 extractValues m =
@@ -246,6 +264,12 @@ extractValue m =
   case (Map.lookup "ok" m, Map.lookup "value" m, Map.lookup "error" m) of
     (Just ok, Just value, Just (VString err)) -> Right (ok, value, err)
     _ -> Left "unexpected json-get result shape"
+
+extractString :: Map.Map Ident RValue -> Either Text JsonGetStringResult
+extractString m =
+  case (Map.lookup "ok" m, Map.lookup "text" m, Map.lookup "error" m) of
+    (Just ok, Just text, Just (VString err)) -> Right (ok, text, err)
+    _ -> Left "unexpected json-get-string result shape"
 
 withPlumbingHarness ::
   QName ->

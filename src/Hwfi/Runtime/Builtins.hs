@@ -123,6 +123,7 @@ runBuiltin env q args = case renderQName q of
   "builtin/read-run-trace" -> readRunTraceTool env args
   "builtin/trace-slice" -> traceSliceTool env args
   "builtin/json-get" -> jsonGetTool args
+  "builtin/json-get-string" -> jsonGetStringTool args
   "builtin/json-values" -> jsonValuesTool args
   "builtin/concat" -> concatTool args
   "builtin/record-merge" -> recordMergeTool args
@@ -670,29 +671,55 @@ traceSliceTool env args =
 -- Data plumbing (§13.1.2) ------------------------------------------------------
 
 jsonGetTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
-jsonGetTool args =
+jsonGetTool args = pure (jsonGetResult args)
+
+jsonGetStringTool :: Map Ident RValue -> IO (Either RuntimeError RValue)
+jsonGetStringTool args =
   pure $
-    case (Map.lookup "json" args, argText args "path") of
-      (Just (VJson root), Right pathText) ->
-        case jsonGetPath root (T.splitOn "." pathText) of
-          Right value ->
-            Right
-              ( record
-                  [ ("ok", VBool True),
-                    ("value", VJson value),
-                    ("error", VString "")
-                  ]
-              )
-          Left err ->
+    case jsonGetResult args of
+      Left err -> Left err
+      Right (VRecord m) ->
+        case (Map.lookup "ok" m, Map.lookup "value" m, Map.lookup "error" m) of
+          (Just (VBool True), Just (VJson (String t)), Just (VString "")) ->
+            Right (record [("ok", VBool True), ("text", VString t), ("error", VString "")])
+          (Just (VBool True), Just (VJson _), Just (VString "")) ->
             Right
               ( record
                   [ ("ok", VBool False),
-                    ("value", VJson Null),
-                    ("error", VString err)
+                    ("text", VString ""),
+                    ("error", VString "expected a JSON string")
                   ]
               )
-      _ ->
-        Left (evalError "builtin/json-get requires json: Json and path: String")
+          (Just (VBool False), _, Just (VString err)) ->
+            Right (record [("ok", VBool False), ("text", VString ""), ("error", VString err)])
+          _ ->
+            Left (evalError "unexpected json-get-string result")
+      Right _ ->
+        Left (evalError "unexpected json-get-string result")
+
+jsonGetResult :: Map Ident RValue -> Either RuntimeError RValue
+jsonGetResult args =
+  case (Map.lookup "json" args, argText args "path") of
+    (Just (VJson root), Right pathText) ->
+      case jsonGetPath root (T.splitOn "." pathText) of
+        Right value ->
+          Right
+            ( record
+                [ ("ok", VBool True),
+                  ("value", VJson value),
+                  ("error", VString "")
+                ]
+            )
+        Left err ->
+          Right
+            ( record
+                [ ("ok", VBool False),
+                  ("value", VJson Null),
+                  ("error", VString err)
+                ]
+            )
+    _ ->
+      Left (evalError "builtin/json-get requires json: Json and path: String")
 
 jsonGetPath :: Value -> [Text] -> Either Text Value
 jsonGetPath v [] = Right v

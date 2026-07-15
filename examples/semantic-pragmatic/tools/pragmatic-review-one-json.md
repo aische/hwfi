@@ -7,10 +7,11 @@ outputs:
   findings: List<types/finding>
 imports:
   - builtin/concat
+  - builtin/json-get-string
   - builtin/llm-gen-object
   - builtin/text-grep
   - tools/empty-findings
-  - tools/json-get-text
+  - tools/json-get-location
   - tools/pragmatic-filter-findings
   - tools/pragmatic-llm-to-findings
 ---
@@ -34,13 +35,12 @@ Rules:
 Run `llm-gen-object` on one gated slice loaded from a prior check report.
 
 ```step
-file <- tools/json-get-text(json = ${inputs.item}, path = "location.file") @file
-section <- tools/json-get-text(json = ${inputs.item}, path = "location.section") @section
+location <- tools/json-get-location(json = ${inputs.item}, path = "location") @loc
 
-body <- tools/json-get-text(json = ${inputs.item}, path = "body") @body
-peer_body <- tools/json-get-text(json = ${inputs.item}, path = "peer_body") @peer_body
-review_task <- tools/json-get-text(json = ${inputs.item}, path = "review_task") @task
-context <- tools/json-get-text(json = ${inputs.item}, path = "context") @context
+body <- builtin/json-get-string(json = ${inputs.item}, path = "body") @body
+peer_body <- builtin/json-get-string(json = ${inputs.item}, path = "peer_body") @peer_body
+review_task <- builtin/json-get-string(json = ${inputs.item}, path = "review_task") @task
+context <- builtin/json-get-string(json = ${inputs.item}, path = "context") @context
 
 peer_block <- try {
   _ <- builtin/text-grep(
@@ -48,15 +48,14 @@ peer_block <- try {
     pattern = ".+"
   ) @peer_hit
 
-  peer_file <- tools/json-get-text(json = ${inputs.item}, path = "peer_location.file") @peer_file
-  peer_section <- tools/json-get-text(json = ${inputs.item}, path = "peer_location.section") @peer_section
+  peer_loc <- tools/json-get-location(json = ${inputs.item}, path = "peer_location") @peer_loc
 
   block <- builtin/concat(
     parts = [
       "\n\n## Peer slice\nLocation: ",
-      ${peer_file.text},
+      ${peer_loc.location.file},
       "#",
-      ${peer_section.text},
+      ${peer_loc.location.section},
       "\n\n",
       ${peer_body.text}
     ]
@@ -70,9 +69,9 @@ peer_block <- try {
 prompt <- builtin/concat(
   parts = [
     "## Slice under review\nLocation: ",
-    ${file.text},
+    ${location.location.file},
     "#",
-    ${section.text},
+    ${location.location.section},
     "\n\n",
     ${body.text},
     ${peer_block.text},
@@ -93,10 +92,7 @@ pack <- try {
 
   converted <- tools/pragmatic-llm-to-findings(
     value = ${obj.value},
-    location = {
-      file = ${file.text},
-      section = ${section.text}
-    }
+    location = ${location.location}
   ) @findings
 
   filtered <- tools/pragmatic-filter-findings(
