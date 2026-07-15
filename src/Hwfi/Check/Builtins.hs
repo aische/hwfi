@@ -274,6 +274,7 @@ builtinCallees :: Map QName Callee
 builtinCallees =
   Map.fromList
     [ builtin "builtin/read-file" [("path", TyFileRef)] [("text", TyString)],
+      builtin "builtin/read-json" [("path", TyFileRef)] [("value", TyJson)],
       builtin "builtin/write-file" [("path", TyFileRef), ("text", TyString)] [],
       builtin "builtin/list-dir" [("path", TyFileRef)] [("entries", TyList TyString)],
       -- Read/navigation builtins (§6.2).

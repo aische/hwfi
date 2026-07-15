@@ -43,6 +43,8 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **semantic-summary CLI (2026-07-15):** `source_run` input derives report/summary
+  paths; `builtin/read-json` loads workspace JSON files.
 - **semantic-summary workflow (2026-07-15):** `examples/semantic-summary` digests
   `semantic-report.json` to markdown; mechanical rollup + optional narrative LLM.
 - **Layer 3 gate noise mitigation (2026-07-15):** high-signal review gates

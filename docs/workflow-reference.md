@@ -320,6 +320,7 @@ Engine-provided callees at `builtin/<name>`. Import them in `imports:`.
 | Builtin | Inputs → outputs |
 |---------|------------------|
 | `read-file` | `{ path }` → `{ text }` |
+| `read-json` | `{ path }` → `{ value }` — parse a workspace JSON file |
 | `read-file-slice` | `{ path, offset, limit }` → `{ text, next_offset, eof }` |
 | `list-dir` | `{ path }` → `{ entries }` |
 | `find-files` | `{ path, glob }` → `{ paths }` |

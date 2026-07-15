@@ -4,17 +4,16 @@ Last updated: 2026-07-15
 
 ## Current focus
 
-**Semantic review** — `examples/semantic-summary` added (mechanical + optional
-narrative digest). Next engine track: **E4** graph layer (`graph-*`,
-`graph-findings`). Plan: [semantic-check-design.md](semantic-check-design.md);
-checklist: [TASKS.md](TASKS.md).
+**Semantic review** — `semantic-summary` now takes `source_run` only (paths derived
+from run id). Next engine track: **E4** graph layer (`graph-*`, `graph-findings`).
+Plan: [semantic-check-design.md](semantic-check-design.md); checklist: [TASKS.md](TASKS.md).
 
 **v2 runtime** — M6 done. **M5** (DB/server) deferred.
 
 ## Done recently
 
-- **`semantic-summary` workflow** — rolls up `semantic-report.json` to markdown;
-  `mode=mechanical` (no keys) or `mode=narrative` (LLM synthesis).
+- **`semantic-summary` CLI** — `--input source_run=<run-id>`; added `builtin/read-json`.
+- **`semantic-summary` workflow** — mechanical + optional narrative digest.
 - **Layer 3 noise mitigation** — high-signal review gates; pragmatic post-filter.
 - **Semantic report per run** — `.hwfi/runs/<run-id>/semantic-report.json`.
 

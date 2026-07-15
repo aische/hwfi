@@ -15,7 +15,7 @@ module Hwfi.Runtime.Builtins
 where
 
 import Control.Monad (void)
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), decodeStrict)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Functor ((<&>))
@@ -24,6 +24,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
+import Data.Text.Encoding qualified as TE
 import Data.Text qualified as T
 import Data.Text.Read (decimal)
 import Data.Vector qualified as V
@@ -100,6 +101,7 @@ data BuiltinEnv = BuiltinEnv
 runBuiltin :: BuiltinEnv -> QName -> Map Ident RValue -> IO (Either RuntimeError RValue)
 runBuiltin env q args = case renderQName q of
   "builtin/read-file" -> readFileTool env args
+  "builtin/read-json" -> readJsonTool env args
   "builtin/write-file" -> writeFileTool env args
   "builtin/list-dir" -> listDirTool env args
   "builtin/read-file-slice" -> readFileSliceTool env args
@@ -151,6 +153,18 @@ readFileTool env args = orFail (argText args "path") $ \path -> do
     Right (text, bytes) -> do
       emitFileIo env OpRead path bytes
       pure (Right (record [("text", VString text)]))
+
+readJsonTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
+readJsonTool env args = orFail (argText args "path") $ \path -> do
+  result <- readTextFile (beWorkspace env) path
+  case result of
+    Left e -> pure (Left e)
+    Right (text, bytes) -> do
+      emitFileIo env OpRead path bytes
+      case decodeJsonText text of
+        Nothing ->
+          pure (Left (evalError ("could not parse JSON from " <> path)))
+        Just v -> pure (Right (record [("value", VJson v)]))
 
 writeFileTool :: BuiltinEnv -> Map Ident RValue -> IO (Either RuntimeError RValue)
 writeFileTool env args =
@@ -846,3 +860,6 @@ loadSkillTool env args =
     fieldText_ m name = case Map.lookup name m of
       Just (VString t) -> t
       _ -> ""
+
+decodeJsonText :: Text -> Maybe Value
+decodeJsonText t = decodeStrict (TE.encodeUtf8 t)

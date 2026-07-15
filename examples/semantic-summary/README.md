@@ -30,17 +30,19 @@ cabal run hwfi -- check examples/semantic-summary
 # Mechanical (no LLM)
 cabal run hwfi -- run examples/semantic-summary \
   --workspace examples/ship \
-  --input report=@.hwfi/runs/<run-id>/semantic-report.json \
-  --input mode=mechanical \
-  --input out=.hwfi/runs/<run-id>/semantic-summary.md
+  --input source_run=<run-id> \
+  --input mode=mechanical
 
 # Narrative (LLM synthesis)
 cabal run hwfi -- run examples/semantic-summary \
   --workspace examples/ship \
-  --input report=@.hwfi/runs/<run-id>/semantic-report.json \
-  --input mode=narrative \
-  --input out=.hwfi/runs/<run-id>/semantic-summary.md
+  --input source_run=<run-id> \
+  --input mode=narrative
 ```
+
+`source_run` is the run id from `semantic-check` (the directory under
+`.hwfi/runs/` that contains `semantic-report.json`). The summary is written to
+`.hwfi/runs/<source_run>/semantic-summary.md` alongside the report.
 
 Output JSON includes `summary_path` and `summary_text`.
 
