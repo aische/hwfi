@@ -11,14 +11,10 @@ Deferred until v2 cutover is complete; may not ship.
 ## Now — semantic review (experimental track)
 
 Design: [semantic-check-design.md](semantic-check-design.md) (§Experimental track).
-Policy stays in `examples/semantic-check`; engine exposes general-purpose
-primitives only. Entropy and speech-act heuristics are **signals, not verdicts**.
+Policy stays in `examples/semantic-check` and `examples/semantic-summary`; engine
+exposes general-purpose primitives only.
 
-**Done foundation:** layers 0–2b + gated layer 3; Tier 1–2 builtins +
-`resolve-qnames-in-text`, `list-concat`, `list-unique-by`; extended
-`record-filter` / `text-grep`.
-
-### E4 — Graph layer *(parallel with E2/E3)*
+### E4 — Graph layer
 
 Structural graph analysis on `check-project` output.
 
@@ -47,6 +43,8 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
+- **semantic-summary workflow (2026-07-15):** `examples/semantic-summary` digests
+  `semantic-report.json` to markdown; mechanical rollup + optional narrative LLM.
 - **Layer 3 gate noise mitigation (2026-07-15):** high-signal review gates
   (redundancy, divergence, coverage_gap, dead_reference); structured
   `review-gate-item`; pragmatic prompt rewrite + felicity post-filter; removed

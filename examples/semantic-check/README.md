@@ -117,5 +117,6 @@ their result (`inner <- foreach …`), not appear as bare statements — see
 
 ## Related
 
+- [semantic-summary](../semantic-summary/README.md) — markdown digest of a report
 - [semantic-check-design.md](../../docs/semantic-check-design.md)
 - [workflow-reference.md](../../docs/workflow-reference.md) §13.1.8 builtins
