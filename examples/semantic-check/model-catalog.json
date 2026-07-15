@@ -1,14 +1,1 @@
-[
-  {
-    "modelConfigName": "fast",
-    "providerName": "ollama",
-    "modelName": "llama3.2:latest",
-    "pricing": { "pricePerMillionInput": 0.0, "pricePerMillionOutput": 0.0 },
-    "maxTokens": 1024,
-    "temperature": 0.2,
-    "requestTimeout": 60000,
-    "throttleDelay": 0,
-    "retryCount": 2,
-    "jitterBackoff": 1000
-  }
-]
+[]
