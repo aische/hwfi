@@ -1,9 +1,10 @@
 # Semantic review — design notes
 
-Companion to spec §13.1.8. Tier 1–2 builtins and layers 0–1 of the example
-workflow are **implemented**; the experimental track (entropy + speech-act
-heuristics, gated LLM pragmatics) is the active backlog. See
-[Implementation phases](#implementation-phases) and [Experimental
+Companion to spec §13.1.8. Tier 1–2 builtins, `examples/semantic-check` layers
+0–3, and `examples/semantic-summary` are **implemented**. **Architecture
+cleanup** (split check from optional LLM) is the active backlog; **E4** graph
+layer follows. See [Architecture cleanup](#architecture-cleanup),
+[Implementation phases](#implementation-phases), and [Experimental
 track](#experimental-track).
 
 ## Problem
@@ -63,14 +64,18 @@ flowchart TB
     S["skills/*.md"]
   end
 
-  subgraph passes [Review passes]
+  subgraph passes [Review passes — semantic-check]
     L0["Layer 0: check-project"]
     L1["Layer 1: referential scan"]
     L2["Layer 2: corpus metrics + clusters"]
     L2b["Layer 2b: speech-act tagger"]
-    GATE["Gate: outliers + mismatches"]
-    L3["Layer 3: llm-gen-object on slices"]
-    L4["Layer 4: graph analysis"]
+    GATE["review_gate builder"]
+    L4["Layer 4: graph analysis (E4)"]
+  end
+
+  subgraph optional [Optional follow-up workflows]
+    L3["Layer 3: llm-gen-object on gated slices"]
+    SUM["semantic-summary: markdown digest"]
   end
 
   WF --> L0
@@ -80,25 +85,38 @@ flowchart TB
   L0 --> L4
   L2 --> GATE
   L2b --> GATE
-  GATE --> L3
-  L2 --> OUT[".hwfi/runs/<run-id>/semantic-report.json"]
+  GATE --> OUT[".hwfi/runs/<run-id>/semantic-report.json"]
+  L2 --> OUT
   L2b --> OUT
-  L3 --> OUT
   L4 --> OUT
+  OUT --> L3
+  OUT --> SUM
+  L3 --> OUT
   target --> passes
 ```
 
-**Invocation:**
+**Invocation (today):**
 
 ```bash
+# Deterministic check (+ optional layer 3 when mode=exploratory)
 cabal run hwfi -- run examples/semantic-check \
   --workspace /path/to/target-project \
   --input path=. \
   --input entry=workflows/main
+
+# Markdown digest of a prior check run
+cabal run hwfi -- run examples/semantic-summary \
+  --workspace /path/to/target-project \
+  --input source_run=<run-id> \
+  --input mode=mechanical
 ```
 
-Layers 0–1 run today without API keys. Future `mode=exploratory` enables gated
-layer 3 LLM (E3).
+**Target invocation (after architecture cleanup):** check is always strict and
+always emits `review_gate`; layer 3 runs only via a separate pragmatic workflow.
+See [Architecture cleanup](#architecture-cleanup).
+
+Layers 0–2b run without API keys. Layer 3 (today: `mode=exploratory` on check;
+target: separate workflow) requires a model catalog.
 
 ## Analysis layers
 
@@ -189,12 +207,53 @@ Suggested LLM output fields (workflow schema, not engine):
 }
 ```
 
-Map to `types/finding` (`contradiction`, `ambiguity`, `policy`). Workflow input
-`mode`: `strict` (skip layer 3) vs `exploratory` (run LLM). Low temperature;
-findings may vary between runs — document in report metadata.
+Map to `types/finding` (`contradiction`, `ambiguity`, `policy`). Today layer 3
+is toggled by `mode=exploratory` on `semantic-check`; after architecture cleanup
+it runs only in a separate pragmatic workflow. Low temperature; findings may
+vary between runs — document in report metadata.
 
 Workflow tools: `review-gate`, `pragmatic-review`. Depends on `split-text` for
 sentence-level tagging when paragraph split is too coarse.
+
+## Architecture cleanup
+
+**Status:** next ([TASKS.md](TASKS.md)).
+
+Today `semantic-check` couples deterministic review with optional layer 3 via
+`mode=strict|exploratory`. Strict mode skips `review_gate` computation entirely,
+so the report does not list which slices *would* be reviewed. Layer 3 and the
+markdown summary are separate concerns but both depend on the same run directory.
+
+**Problems:**
+
+| Issue | Today | Target |
+|-------|-------|--------|
+| Gate visibility | `review_gate` only when `mode=exploratory` | Always emitted on check |
+| LLM coupling | Layer 3 inside `semantic-check` | Separate optional workflow |
+| Mode confusion | `strict` / `exploratory` / typo `explanatory` | Check always deterministic; LLM is explicit second step |
+| Summary scope | `semantic-summary` digests existing report | Unchanged; runs after check (and optional pragmatic) |
+
+**Target pipeline:**
+
+```text
+semantic-check          → semantic-report.json (+ review_gate always)
+  ↓ optional
+semantic-pragmatic      → merges pragmatic_findings into same run dir
+  ↓ optional
+semantic-summary        → semantic-summary.md (mechanical or narrative)
+```
+
+**Planned changes:**
+
+1. **`semantic-check`** — layers 0–2b only; drop `mode` input; always compute
+   and emit `review_gate`; report `mode` reflects deterministic check only.
+2. **`semantic-pragmatic`** (new example project) — `--input source_run=<run-id>`;
+   load report, run bounded `llm-gen-object` on `review_gate` items, write back
+   `pragmatic_findings` (reuse existing gate/review tools).
+3. **`semantic-summary`** — unchanged contract; document pipeline order in
+   READMEs.
+
+E4 graph findings remain after this cleanup; graph analysis stays in check.
 
 ## Findings schema (workflow-defined)
 
@@ -221,7 +280,7 @@ Emit via `write-file` into the active run directory (e.g.
 `structural_errors`, `structural_warnings`, `entry_findings`, `prose_hints`,
 `step_referential`.
 
-**v1 (target after E1–E2)** — adds corpus and speech-act signals:
+**v1 (current)** — adds corpus and speech-act signals:
 
 | Field | Layer | Content |
 |-------|-------|---------|
@@ -489,23 +548,23 @@ Chunk long prose for bounded LLM context windows.
 | **P2 — Example v0** | `examples/semantic-check` layers 0–1 | done |
 | **P3 — Tier 2** | `text-metrics`, `text-similarity`, `text-search-corpus` | done |
 | **P4 partial** | `resolve-qnames-in-text`, `list-concat` | done |
+| **E1 — Layer 2 wiring** | `corpus-profile`, `corpus-clusters`, `corpus-hints`; report v1 | done |
+| **E2 — Speech acts** | `speech-act-scan`, `speech-act-align`; `speech_act_hints` | done |
+| **E3 — Gated LLM** | `review-gate`, `pragmatic-review`, `split-text`; `pragmatic_findings` | done |
+| **Summary** | `examples/semantic-summary`, `builtin/read-json`, `source_run` CLI | done |
 
-### Active — experimental track
-
-Priority order ([TASKS.md](TASKS.md)):
+### Active
 
 | Phase | Deliverable | Depends on |
 |-------|-------------|------------|
-| **E1 — Layer 2 wiring** | `corpus-profile`, `corpus-clusters`, `corpus-hints`; report v1 | P2, P3 |
-| **E2 — Speech acts** | `speech-act-scan`, `speech-act-align`; `speech_act_hints` | P2, E1 (shared slice extraction) |
-| **E3 — Gated LLM** | `review-gate`, `pragmatic-review`, `split-text`; `pragmatic_findings` | E1, E2 |
+| **AC — Architecture cleanup** | Split check / pragmatic / summary; always emit `review_gate` | E3, Summary |
 | **E4 — Graph layer** | `graph-*` builtins, `graph-findings` | P1, P2 |
 
-E4 may proceed in parallel after E1 (no dependency on speech acts or LLM).
-Defer `diff-text` and `json-validate` until a concrete workflow needs them.
+AC is independently shippable; E4 may proceed after AC (no dependency on LLM
+split). Defer `diff-text` and `json-validate` until a concrete workflow needs them.
 
-Each phase is independently shippable; strict mode (E1+E2+E4, no LLM) remains
-usable without API keys.
+After AC, deterministic check (layers 0–2b + `review_gate` + E4) remains usable
+without API keys.
 
 ## Non-goals
 

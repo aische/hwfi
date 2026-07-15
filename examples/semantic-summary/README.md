@@ -22,7 +22,9 @@ provides `json-get`, `json-values`, `concat`, and optional `llm-generate`.
 
 ## Running
 
-Run `semantic-check` first, then summarize using the same workspace and run id:
+Run `semantic-check` first. Optionally run a pragmatic pass (today: use
+`mode=exploratory` on check; after architecture cleanup: separate
+`semantic-pragmatic` workflow). Then summarize:
 
 ```bash
 cabal run hwfi -- check examples/semantic-summary
@@ -43,6 +45,9 @@ cabal run hwfi -- run examples/semantic-summary \
 `source_run` is the run id from `semantic-check` (the directory under
 `.hwfi/runs/` that contains `semantic-report.json`). The summary is written to
 `.hwfi/runs/<source_run>/semantic-summary.md` alongside the report.
+
+**Tip:** for a human-readable digest without pragmatic noise, summarize a strict
+check run. Exploratory runs include `pragmatic_findings` in the rollup.
 
 Output JSON includes `summary_path` and `summary_text`.
 

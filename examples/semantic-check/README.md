@@ -32,14 +32,20 @@ model catalog and provider (see below).
 
 ## Roadmap (experimental track)
 
-See [TASKS.md](../../docs/TASKS.md) and design doc §Experimental track.
+See [TASKS.md](../../docs/TASKS.md) and design doc §Architecture cleanup.
 
-| Phase | Adds |
-|-------|------|
-| **E1** | Layer 2 corpus profile, clusters, hints *(done)* |
-| **E2** | Speech-act pattern tagger + step↔agent alignment *(done)* |
-| **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) *(done)* |
-| **E4** | Graph findings (cycles, orphans, reachability) |
+| Phase | Adds | Status |
+|-------|------|--------|
+| **E1** | Layer 2 corpus profile, clusters, hints | done |
+| **E2** | Speech-act pattern tagger + step↔agent alignment | done |
+| **E3** | Gated `llm-gen-object` pragmatics (`mode=exploratory`) | done |
+| **Summary** | `semantic-summary` markdown digest (`source_run` CLI) | done |
+| **AC** | Split check / pragmatic / summary; always emit `review_gate` | **next** |
+| **E4** | Graph findings (cycles, orphans, reachability) | after AC |
+
+**Pipeline (target after AC):** `semantic-check` → optional `semantic-pragmatic`
+→ optional `semantic-summary`. Today layer 3 still runs inside check when
+`mode=exploratory`.
 
 ## Prerequisites
 

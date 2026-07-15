@@ -8,15 +8,29 @@ Deferred until v2 cutover is complete; may not ship.
 
 - [ ] **M5** `ProjectStore` + `RunStore` typeclasses; DB backend; server API
 
-## Now — semantic review (experimental track)
+## Now — architecture cleanup
 
-Design: [semantic-check-design.md](semantic-check-design.md) (§Experimental track).
-Policy stays in `examples/semantic-check` and `examples/semantic-summary`; engine
-exposes general-purpose primitives only.
+Design: [semantic-check-design.md](semantic-check-design.md) §Architecture cleanup.
 
-### E4 — Graph layer
+Decouple deterministic review from optional LLM. Policy stays in example workflows;
+no new review-specific engine builtins.
 
-Structural graph analysis on `check-project` output.
+- [ ] **`semantic-check` always strict** — layers 0–2b only; remove `mode` input
+  and in-workflow layer 3 (`pragmatic-review`)
+- [ ] **Always emit `review_gate`** — compute high-signal gate items on every check
+  run (not only when LLM is enabled)
+- [ ] **Optional pragmatic workflow** — new project (e.g. `semantic-pragmatic`):
+  `--input source_run=<run-id>` loads report + `review_gate`, runs bounded
+  `llm-gen-object`, writes `pragmatic_findings` back into the run directory
+- [ ] **Pipeline docs** — document order: check → optional pragmatic → summary;
+  update example READMEs and report `mode` field semantics
+- [ ] **Retire `mode=exploratory` on check** — avoid strict/exploratory coupling;
+  exploratory becomes an explicit second step
+
+## Next — semantic review E4 (graph layer)
+
+Deferred until architecture cleanup ships. Design:
+[semantic-check-design.md](semantic-check-design.md) §Experimental track.
 
 - [ ] `builtin/graph-reachability`
 - [ ] `builtin/graph-cycles`
@@ -43,36 +57,11 @@ Deferred from v1; spec §13 and [code-issues.md](code-issues.md).
 
 ## Done
 
-- **semantic-summary CLI (2026-07-15):** `source_run` input derives report/summary
-  paths; `builtin/read-json` loads workspace JSON files.
-- **semantic-summary workflow (2026-07-15):** `examples/semantic-summary` digests
-  `semantic-report.json` to markdown; mechanical rollup + optional narrative LLM.
-- **Layer 3 gate noise mitigation (2026-07-15):** high-signal review gates
-  (redundancy, divergence, coverage_gap, dead_reference); structured
-  `review-gate-item`; pragmatic prompt rewrite + felicity post-filter; removed
-  entropy-outlier gating.
-- **Semantic-check workflow perf (2026-07-15):** engine builtins (`list-unique-by`,
-  extended `record-filter` / `text-grep`) plus workflow rewrite: merged review-gate
-  rows, single-step `is-builtin`, record-filter replaces `strings-equal` loops.
-- **E3 layer 3 gated LLM (2026-07-14):** `tools/review-gate`, `tools/pragmatic-review`,
-  `types/review-gate-item`, `pragmatic-schema.json`; workflow inputs `mode` +
-  `schema`; report `mode`, `review_gate`, `pragmatic_findings`.
-- **E2 speech-act heuristics (2026-07-14):** `types/speech-act-tag`,
-  `types/speech-act-hint`; `tools/speech-act-scan`, `tools/speech-act-align`
-  (+ pattern/align helpers); report `speech_act_hints`; engine
-  `builtin/split-text`, `builtin/text-grep`.
-- **E1 layer 2 corpus wiring (2026-07-14):** `types/corpus-profile`, `types/corpus-slice`,
-  `tools/corpus-profile`, `tools/corpus-clusters`, `tools/corpus-hints`; report
-  `semantic-report/v1` with `corpus_profile` + `corpus_hints`.
-- **Semantic review engine primitives (2026-07-14):** Tier 1 (`check-project`,
-  `parse-markdown`), Tier 2 (`text-metrics`, `text-similarity`,
-  `text-search-corpus`), `resolve-qnames-in-text`, `list-concat`.
-- **`resolve-qnames-in-text` prose layer (2026-07-14):** `prose_hints` 142 → 2
-  on ship; section scan via `parse-markdown`.
-- **`examples/semantic-check` layers 0–1 (2026-07-14):** structural + referential
-  review; `semantic-report/v0`.
-- **Eval errors in `try`/`catch` (2026-07-14):** catchable eval failures in StepDriver.
-- **`return` in control-flow blocks (2026-07-14):** nested loop/branch tail return.
-- **M6 runtime (2026-07-13–14):** v2 cursor/frames, `--step`, cache removal.
+Recent milestones; earlier items in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).
 
-Earlier milestones archived in [log/archive/tasks-2026-07.md](log/archive/tasks-2026-07.md).
+- **semantic-summary CLI (2026-07-15):** `source_run` input; `builtin/read-json`.
+- **semantic-summary workflow (2026-07-15):** mechanical rollup + optional narrative.
+- **Layer 3 gate noise mitigation (2026-07-15):** high-signal gates; post-filter.
+- **E1–E3 experimental track (2026-07-14–15):** corpus, speech acts, gated LLM.
+- **Semantic review primitives + layers 0–1 (2026-07-14):** check-project stack.
+- **M6 runtime (2026-07-13–14):** v2 cursor/frames, `--step`, cache removal.
